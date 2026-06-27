@@ -1,4 +1,4 @@
-use crate::prelude::{ContentNodeIdModel, RefContent};
+use crate::prelude::{NodeId, RefContent};
 
 pub struct ContentLeafs<'a, Cx, Content: RefContent<Cx>> {
     content: &'a Content,

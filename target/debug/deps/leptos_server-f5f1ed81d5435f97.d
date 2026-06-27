@@ -1,0 +1,11 @@
+/home/gpabois/dev/redacap/target/debug/deps/leptos_server-f5f1ed81d5435f97.d: /home/gpabois/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/leptos_server-0.8.7/src/lib.rs /home/gpabois/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/leptos_server-0.8.7/src/action.rs /home/gpabois/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/leptos_server-0.8.7/src/local_resource.rs /home/gpabois/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/leptos_server-0.8.7/src/multi_action.rs /home/gpabois/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/leptos_server-0.8.7/src/once_resource.rs /home/gpabois/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/leptos_server-0.8.7/src/resource.rs /home/gpabois/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/leptos_server-0.8.7/src/shared.rs
+
+/home/gpabois/dev/redacap/target/debug/deps/libleptos_server-f5f1ed81d5435f97.rmeta: /home/gpabois/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/leptos_server-0.8.7/src/lib.rs /home/gpabois/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/leptos_server-0.8.7/src/action.rs /home/gpabois/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/leptos_server-0.8.7/src/local_resource.rs /home/gpabois/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/leptos_server-0.8.7/src/multi_action.rs /home/gpabois/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/leptos_server-0.8.7/src/once_resource.rs /home/gpabois/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/leptos_server-0.8.7/src/resource.rs /home/gpabois/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/leptos_server-0.8.7/src/shared.rs
+
+/home/gpabois/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/leptos_server-0.8.7/src/lib.rs:
+/home/gpabois/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/leptos_server-0.8.7/src/action.rs:
+/home/gpabois/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/leptos_server-0.8.7/src/local_resource.rs:
+/home/gpabois/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/leptos_server-0.8.7/src/multi_action.rs:
+/home/gpabois/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/leptos_server-0.8.7/src/once_resource.rs:
+/home/gpabois/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/leptos_server-0.8.7/src/resource.rs:
+/home/gpabois/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/leptos_server-0.8.7/src/shared.rs:

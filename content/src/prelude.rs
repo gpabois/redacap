@@ -3,9 +3,11 @@ use yrs::{ReadTxn, Transaction};
 use crate::iter::ContentLeafs;
 
 pub trait ContentDef: Sized {
-    type NodeId: ContentNodeIdModel;
+    type NodeId: NodeId;
+    type InitialNode;
     type Node: AsRef<str>;
 }
+
 pub trait RefContent<Cx>: ContentDef {
     fn root(&self) -> Self::NodeId;
     
@@ -26,12 +28,10 @@ pub trait RefContent<Cx>: ContentDef {
 }
 
 pub trait MutContent<Cx>: ContentDef {
-    fn borrow_mut<'content>(&'content self, cx: &mut Cx, id: Self::NodeId) -> &'content Self::Node;
-    fn add_child(&mut self, cx: &mut Cx, parent: Self::Node, child: Self::NodeId, slot: ChildSlot<Self>);
-    fn create_node<N>(&mut self, cx: &mut Cx, data: N) -> Self::NodeId where Self::Node: From<N>;
+    fn borrow_mut<'content>(&'content self, cx: Cx, id: Self::NodeId) -> &'content Self::Node;
+    fn add_child(&mut self, cx: Cx, parent: Self::Node, child: Self::NodeId, slot: ChildSlot<Self>);
+    fn create_node<N>(&mut self, cx: Cx, data: N) -> Self::NodeId where Self::InitialNode: From<N>;
 }
-
-
 
 pub enum ChildSlot<Content: ContentDef> {
     Head,
@@ -42,7 +42,7 @@ pub enum ChildSlot<Content: ContentDef> {
     BeforeSibling(Content::NodeId)
 }
 
-pub trait ContentNodeIdModel: Copy {
+pub trait NodeId: Copy {
     fn parent<Cx, Content>(self, cx: &Cx, content: &Content) -> Option<Self> 
         where Content: RefContent<Cx, NodeId = Self>
     {

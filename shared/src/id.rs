@@ -29,11 +29,12 @@ impl FromStr for ID {
     }
 }
 
-impl IdGenerator {
+impl Default for IdGenerator {
     /// Initialise le générateur avec une seed unique par session (via getrandom)
-    pub fn new() -> Self {
+    fn default() -> Self {
         // 1. On génère une seed aléatoire sécurisée pour cette session
         let mut seed = [0u8; 32];
+        
         if let Err(_) = getrandom::getrandom(&mut seed) {
             // Fallback dégradé au cas où, mais js/getrandom gère ça sur le web
             seed = [42; 32]; 
@@ -50,7 +51,9 @@ impl IdGenerator {
             session_prefix,
         }
     }
+}
 
+impl IdGenerator {
     /// Génère un identifiant unique sous forme de chaîne (ex: "id-session-séquence")
     pub fn next_id_str(&self) -> String {
         let mut rng = self.rng.lock().unwrap();
@@ -64,4 +67,8 @@ impl IdGenerator {
         let local_id = rng.next_u64();
         ID(self.session_prefix, local_id)
     }
+}
+
+pub fn generate_id() -> ID {
+    IdGenerator::default().next_id()
 }

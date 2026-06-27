@@ -1,7 +1,10 @@
 use std::str::FromStr;
 
 
-use crate::prelude::{ContentNodeIdModel};
+use shared::id;
+use strum_macros::{AsRefStr, FromRepr};
+
+use crate::prelude::{NodeId};
 
 pub mod prelude;
 pub mod editor;
@@ -11,7 +14,13 @@ pub mod crdt;
 #[derive(Debug, Hash, Clone, Copy, PartialEq, Eq)]
 pub struct ContentId(shared::id::ID);
 
-impl ContentNodeIdModel for ContentId {}
+impl ContentId {
+    pub fn new() -> Self {
+        ContentId(id::generate_id())
+    }
+}
+
+impl NodeId for ContentId {}
 
 impl FromStr for ContentId {
     type Err = <shared::id::ID as FromStr>::Err;
@@ -21,17 +30,17 @@ impl FromStr for ContentId {
     }
 }
 
-pub struct ContentNode {
+pub struct Node {
     id: String,
     parent: Option<ContentId>,
     next_sibling: Option<ContentId>,
     prev_sibling: Option<ContentId>,
-    spec: ContentNodeSpec
+    spec: NodeSpec
 }
 
 
 #[derive(Hash, Debug, Clone, strum_macros::EnumDiscriminants)]
-#[strum_discriminants(derive(strum_macros::AsRefStr), name(ContentNodeKind))]pub enum ContentNodeSpec {
+#[strum_discriminants(derive(strum_macros::AsRefStr), name(NodeKind))]pub enum NodeSpec {
     Root,
     Paragraph(Paragraph),
     Plain(String),
@@ -45,56 +54,80 @@ pub struct ContentNode {
 }
 
 
-impl From<Paragraph> for ContentNodeSpec {
+impl From<Paragraph> for NodeSpec {
     fn from(value: Paragraph) -> Self {
-        ContentNodeSpec::Paragraph(value)
+        NodeSpec::Paragraph(value)
     }
 }
 
-impl From<List> for ContentNodeSpec {
+impl From<List> for NodeSpec {
     fn from(value: List) -> Self {
-        ContentNodeSpec::List(value)
+        NodeSpec::List(value)
     }
 }
 
-impl From<ListItem> for ContentNodeSpec {
+impl From<ListItem> for NodeSpec {
     fn from(value: ListItem) -> Self {
-        ContentNodeSpec::ListItem(value)
+        NodeSpec::ListItem(value)
     }
 }
 
-impl From<Span> for ContentNodeSpec {
+impl From<Span> for NodeSpec {
     fn from(value: Span) -> Self {
-        ContentNodeSpec::Span(value)
+        NodeSpec::Span(value)
     }
 }
 
-impl From<Table> for ContentNodeSpec {
+impl From<Table> for NodeSpec {
     fn from(value: Table) -> Self {
-        ContentNodeSpec::Table(value)
+        NodeSpec::Table(value)
     }
 }
 
-impl From<Row> for ContentNodeSpec {
+impl From<Row> for NodeSpec {
     fn from(value: Row) -> Self {
-        ContentNodeSpec::Row(value)
+        NodeSpec::Row(value)
     }
 }
 
-impl From<Cell> for ContentNodeSpec {
+impl From<Cell> for NodeSpec {
     fn from(value: Cell) -> Self {
-        ContentNodeSpec::Cell(value)
+        NodeSpec::Cell(value)
     }
 }
 
 #[derive(Hash, Debug, Clone, Default)]
-pub struct Span;
+pub struct Span {
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub strikeout: bool
+}
 
 #[derive(Hash, Debug, Clone, Default)]
 pub struct ListItem;
 
 #[derive(Hash, Debug, Clone, Default)]
-pub struct List;
+pub struct List {
+    marker: ListMarker,
+    start: Option<u32>,
+}
+
+#[derive(Hash, Debug, Clone, Default)]
+pub enum ListMarker {
+    #[default]
+    Disc,
+    Circle,
+    Square,
+    Decimal,      // 1, 2, 3
+    LowerAlpha,   // a, b, c
+    UpperAlpha,   // A, B, C
+    LowerRoman,   // i, ii, iii
+    UpperRoman,   // I, II, III
+}
+
+#[derive(Hash, Debug, Clone, Default)]
+pub struct ListKind;
 
 #[derive(Hash, Debug, Clone, Default)]
 pub struct Paragraph;
