@@ -1,47 +1,76 @@
-use std::str::FromStr;
-
-
 use shared::id;
-use strum_macros::{AsRefStr, FromRepr};
+use strum_macros::{EnumString, IntoStaticStr};
 
-use crate::prelude::{NodeId};
+use crate::{prelude::{NodeId, ReadableNodeSpecDef}, traits::WritableNodeSpecDef};
 
 pub mod prelude;
 pub mod editor;
 pub mod iter;
 pub mod crdt;
+pub mod traits;
 
 #[derive(Debug, Hash, Clone, Copy, PartialEq, Eq)]
 pub struct ContentId(shared::id::ID);
+
+impl<'a> TryFrom<&'a [u8]> for ContentId {
+    type Error = <shared::id::ID as TryFrom<&'a [u8]>>::Error;
+
+    fn try_from(value: &'a [u8]) -> Result<Self, Self::Error> {
+        value.try_into().map(Self)
+    }
+}
 
 impl ContentId {
     pub fn new() -> Self {
         ContentId(id::generate_id())
     }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
 }
 
 impl NodeId for ContentId {}
 
-impl FromStr for ContentId {
-    type Err = <shared::id::ID as FromStr>::Err;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        s.parse().map(Self)
-    }
-}
-
-pub struct Node {
-    id: String,
-    parent: Option<ContentId>,
-    next_sibling: Option<ContentId>,
-    prev_sibling: Option<ContentId>,
-    spec: NodeSpec
-}
-
-
-#[derive(Hash, Debug, Clone, strum_macros::EnumDiscriminants)]
-#[strum_discriminants(derive(strum_macros::AsRefStr), name(NodeKind))]pub enum NodeSpec {
+#[derive(strum_macros::EnumString, strum_macros::IntoStaticStr)]
+pub enum NodeKind {
     Root,
+    Paragraph,
+    Plain,
+    Span,
+    List,
+    ListItem,
+    Table,
+    Row,
+    Cell
+}
+
+pub enum RefNodeSpec<'a, C: ReadableNodeSpecDef<'a>> {
+    Root(C::RefRoot),
+    Paragraph(C::RefParagraph),
+    Plain(C::RefPlain),
+    Span(C::RefSpan),
+    List(C::RefList),
+    ListItem(C::RefListItem),
+    Table(C::RefTable),
+    Row(C::RefRow),
+    Cell(C::RefCell)
+}
+
+pub enum MutNodeSpec<'a, C: WritableNodeSpecDef<'a>> {
+    Root(C::MutRoot),
+    Paragraph(C::MutParagraph),
+    Plain(C::MutPlain),
+    Span(C::MutSpan),
+    List(C::MutList),
+    ListItem(C::MutListItem),
+    Table(C::MutTable),
+    Row(C::MutRow),
+    Cell(C::MutCell)
+}
+
+pub enum NodeSpec {
+    Root(Root),
     Paragraph(Paragraph),
     Plain(String),
     Span(Span),
@@ -53,6 +82,33 @@ pub struct Node {
     Cell(Cell)
 }
 
+impl From<&NodeSpec> for NodeKind {
+    fn from(value: &NodeSpec) -> Self {
+        value.kind()
+    }
+}
+
+impl NodeSpec {
+    pub fn kind(&self) -> NodeKind {
+        match self {
+            NodeSpec::Root(root) => NodeKind::Root,
+            NodeSpec::Paragraph(paragraph) => NodeKind::Paragraph,
+            NodeSpec::Plain(_) => NodeKind::Plain,
+            NodeSpec::Span(span) => NodeKind::Span,
+            NodeSpec::List(list) => NodeKind::List,
+            NodeSpec::ListItem(list_item) => NodeKind::ListItem,
+            NodeSpec::Table(table) => NodeKind::Table,
+            NodeSpec::Row(row) => NodeKind::Row,
+            NodeSpec::Cell(cell) => NodeKind::Cell,
+        }
+    }
+}
+
+impl From<Root> for NodeSpec {
+    fn from(value: Root) -> Self {
+        NodeSpec::Root(value)
+    }
+}
 
 impl From<Paragraph> for NodeSpec {
     fn from(value: Paragraph) -> Self {
@@ -97,6 +153,9 @@ impl From<Cell> for NodeSpec {
 }
 
 #[derive(Hash, Debug, Clone, Default)]
+pub struct Root;
+
+#[derive(Hash, Debug, Clone, Default)]
 pub struct Span {
     pub bold: bool,
     pub italic: bool,
@@ -113,7 +172,7 @@ pub struct List {
     start: Option<u32>,
 }
 
-#[derive(Hash, Debug, Clone, Default)]
+#[derive(Hash, Debug, Clone, Default, EnumString, IntoStaticStr)]
 pub enum ListMarker {
     #[default]
     Disc,

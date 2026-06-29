@@ -7,3 +7,4 @@ edition = "2024"
 rand_xoshiro.workspace = true
 anyhow.workspace = true
 getrandom.workspace = true
+bytemuck.workspace = true

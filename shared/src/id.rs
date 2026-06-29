@@ -1,4 +1,5 @@
-use anyhow::bail;
+use anyhow::{anyhow, bail};
+use bytemuck::{Pod, Zeroable};
 use rand_xoshiro::{Xoshiro256PlusPlus, rand_core::{Rng as _, SeedableRng as _}};
 use std::{str::FromStr, sync::{Arc, Mutex}};
 
@@ -9,8 +10,32 @@ pub struct IdGenerator {
     session_prefix: u64,
 }
 
-#[derive(Hash, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Hash, Debug, Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
+#[repr(C)]
 pub struct ID(u64, u64);
+
+impl ID {
+    pub fn as_bytes(&self) -> &[u8] {
+        self.as_ref()
+    }
+}
+
+impl TryFrom<&[u8]> for ID {
+    type Error = anyhow::Error;
+
+    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+        bytemuck::try_from_bytes(bytes)
+            .map(|&slice| slice)
+            .map_err(|_| anyhow!("La slice d'octets n'a pas la bonne taille ou un mauvais alignement"))
+    }
+}
+
+impl AsRef<[u8]> for ID {
+    fn as_ref(&self) -> &[u8] {
+        // bytemuck::bytes_of convertit de manière sûre la référence en &[u8]
+        bytemuck::bytes_of(self)
+    }
+}
 
 impl std::fmt::Display for ID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
