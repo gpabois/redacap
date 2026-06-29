@@ -1,0 +1,26 @@
+[package]
+name = "agent"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-trait = { workspace = true, optional = true }
+leptos.workspace = true
+reqwest = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+thiserror = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["sync"] }
+web-sys.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "sync"] }
+
+[features]
+default = ["server"]
+# Boucle agentique, modèle de langage et outils — dépendances réseau
+# (reqwest, tokio), non disponibles en WASM. Le composant `AgentPanel` n'en
+# a pas besoin et reste donc utilisable côté client.
+server = ["dep:async-trait", "dep:reqwest", "dep:thiserror", "dep:tokio"]
+ssr = ["leptos/ssr", "server"]
+hydrate = ["leptos/hydrate"]
