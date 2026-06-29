@@ -56,9 +56,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bimap",
+ "content",
  "getrandom 0.2.17",
  "indextree",
- "js-sys",
  "leptos",
  "leptos_axum",
  "leptos_meta",
@@ -457,9 +457,14 @@ name = "content"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bimap",
+ "indextree",
+ "js-sys",
+ "leptos",
  "shared",
  "strum 0.26.3",
  "strum_macros 0.26.4",
+ "web-sys",
  "yrs",
 ]
 

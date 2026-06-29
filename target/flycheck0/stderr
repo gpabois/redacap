@@ -1,52 +1,26 @@
-   0.560416750s  INFO prepare_target{force=false package_id=content v0.1.0 (/Users/gpabois/Documents/dev/redacap/content) target="content"}: cargo::core::compiler::fingerprint: fingerprint error for content v0.1.0 (/Users/gpabois/Documents/dev/redacap/content)/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("content", ["lib"], "/Users/gpabois/Documents/dev/redacap/content/src/lib.rs", Edition2024) }
-   0.560888750s  INFO prepare_target{force=false package_id=content v0.1.0 (/Users/gpabois/Documents/dev/redacap/content) target="content"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/gpabois/Documents/dev/redacap/target/debug/.fingerprint/content-4e34d326d0f45733/lib-content`
-
-Caused by:
-    No such file or directory (os error 2)
-
-Stack backtrace:
-   0: <std::backtrace::Backtrace>::create
-   1: cargo_util::paths::read_bytes
-   2: cargo_util::paths::read
-   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
-   4: cargo::core::compiler::fingerprint::prepare_target
-   5: cargo::core::compiler::compile
-   6: <cargo::core::compiler::build_runner::BuildRunner>::compile
-   7: cargo::ops::cargo_compile::compile_ws
-   8: cargo::ops::cargo_compile::compile_with_exec
-   9: cargo::ops::cargo_compile::compile
-  10: cargo::commands::check::exec
-  11: <cargo::cli::Exec>::exec
-  12: cargo::main
-  13: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
-  14: std::rt::lang_start::<()>::{closure#0}
-  15: std::rt::lang_start_internal
-  16: _main
-   0.588972375s  INFO prepare_target{force=false package_id=content v0.1.0 (/Users/gpabois/Documents/dev/redacap/content) target="content"}: cargo::core::compiler::fingerprint: fingerprint error for content v0.1.0 (/Users/gpabois/Documents/dev/redacap/content)/Check { test: true }/TargetInner { name_inferred: true, ..: lib_target("content", ["lib"], "/Users/gpabois/Documents/dev/redacap/content/src/lib.rs", Edition2024) }
-   0.588982292s  INFO prepare_target{force=false package_id=content v0.1.0 (/Users/gpabois/Documents/dev/redacap/content) target="content"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/gpabois/Documents/dev/redacap/target/debug/.fingerprint/content-56385051a16ad8b0/test-lib-content`
-
-Caused by:
-    No such file or directory (os error 2)
-
-Stack backtrace:
-   0: <std::backtrace::Backtrace>::create
-   1: cargo_util::paths::read_bytes
-   2: cargo_util::paths::read
-   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
-   4: cargo::core::compiler::fingerprint::prepare_target
-   5: cargo::core::compiler::compile
-   6: <cargo::core::compiler::build_runner::BuildRunner>::compile
-   7: cargo::ops::cargo_compile::compile_ws
-   8: cargo::ops::cargo_compile::compile_with_exec
-   9: cargo::ops::cargo_compile::compile
-  10: cargo::commands::check::exec
-  11: <cargo::cli::Exec>::exec
-  12: cargo::main
-  13: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
-  14: std::rt::lang_start::<()>::{closure#0}
-  15: std::rt::lang_start_internal
-  16: _main
+   0.321866833s  INFO prepare_target{force=false package_id=app v0.1.0 (/Users/gpabois/Documents/dev/redacap/app) target="app"}: cargo::core::compiler::fingerprint: stale: changed "/Users/gpabois/Documents/dev/redacap/content/src/editor/mod.rs"
+   0.321879083s  INFO prepare_target{force=false package_id=app v0.1.0 (/Users/gpabois/Documents/dev/redacap/app) target="app"}: cargo::core::compiler::fingerprint:           (vs) "/Users/gpabois/Documents/dev/redacap/target/debug/.fingerprint/content-25d136cbe56f4d4e/dep-lib-content"
+   0.321881958s  INFO prepare_target{force=false package_id=app v0.1.0 (/Users/gpabois/Documents/dev/redacap/app) target="app"}: cargo::core::compiler::fingerprint:                FileTime { seconds: 1782771228, nanos: 330888191 } < FileTime { seconds: 1782771749, nanos: 23265392 }
+   0.333872167s  INFO prepare_target{force=false package_id=app v0.1.0 (/Users/gpabois/Documents/dev/redacap/app) target="app"}: cargo::core::compiler::fingerprint: fingerprint dirty for app v0.1.0 (/Users/gpabois/Documents/dev/redacap/app)/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("app", ["lib"], "/Users/gpabois/Documents/dev/redacap/app/src/lib.rs", Edition2024) }
+   0.334050292s  INFO prepare_target{force=false package_id=app v0.1.0 (/Users/gpabois/Documents/dev/redacap/app) target="app"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(56) })
+   0.335692583s  INFO prepare_target{force=false package_id=content v0.1.0 (/Users/gpabois/Documents/dev/redacap/content) target="content"}: cargo::core::compiler::fingerprint: fingerprint dirty for content v0.1.0 (/Users/gpabois/Documents/dev/redacap/content)/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("content", ["lib"], "/Users/gpabois/Documents/dev/redacap/content/src/lib.rs", Edition2024) }
+   0.335698083s  INFO prepare_target{force=false package_id=content v0.1.0 (/Users/gpabois/Documents/dev/redacap/content) target="content"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleItem(ChangedFile { reference: "/Users/gpabois/Documents/dev/redacap/target/debug/.fingerprint/content-25d136cbe56f4d4e/dep-lib-content", reference_mtime: FileTime { seconds: 1782771228, nanos: 330888191 }, stale: "/Users/gpabois/Documents/dev/redacap/content/src/editor/mod.rs", stale_mtime: FileTime { seconds: 1782771749, nanos: 23265392 } }))
+   0.425921583s  INFO prepare_target{force=false package_id=app v0.1.0 (/Users/gpabois/Documents/dev/redacap/app) target="app"}: cargo::core::compiler::fingerprint: fingerprint dirty for app v0.1.0 (/Users/gpabois/Documents/dev/redacap/app)/Check { test: true }/TargetInner { name_inferred: true, ..: lib_target("app", ["lib"], "/Users/gpabois/Documents/dev/redacap/app/src/lib.rs", Edition2024) }
+   0.425932750s  INFO prepare_target{force=false package_id=app v0.1.0 (/Users/gpabois/Documents/dev/redacap/app) target="app"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(56) })
+   0.427089542s  INFO prepare_target{force=false package_id=content v0.1.0 (/Users/gpabois/Documents/dev/redacap/content) target="content"}: cargo::core::compiler::fingerprint: stale: changed "/Users/gpabois/Documents/dev/redacap/content/src/crdt.rs"
+   0.427093667s  INFO prepare_target{force=false package_id=content v0.1.0 (/Users/gpabois/Documents/dev/redacap/content) target="content"}: cargo::core::compiler::fingerprint:           (vs) "/Users/gpabois/Documents/dev/redacap/target/debug/.fingerprint/content-40915d3fa2050874/dep-test-lib-content"
+   0.427095250s  INFO prepare_target{force=false package_id=content v0.1.0 (/Users/gpabois/Documents/dev/redacap/content) target="content"}: cargo::core::compiler::fingerprint:                FileTime { seconds: 1782769778, nanos: 613805413 } < FileTime { seconds: 1782771166, nanos: 633600878 }
+   0.427380583s  INFO prepare_target{force=false package_id=content v0.1.0 (/Users/gpabois/Documents/dev/redacap/content) target="content"}: cargo::core::compiler::fingerprint: fingerprint dirty for content v0.1.0 (/Users/gpabois/Documents/dev/redacap/content)/Check { test: true }/TargetInner { name_inferred: true, ..: lib_target("content", ["lib"], "/Users/gpabois/Documents/dev/redacap/content/src/lib.rs", Edition2024) }
+   0.427385375s  INFO prepare_target{force=false package_id=content v0.1.0 (/Users/gpabois/Documents/dev/redacap/content) target="content"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleItem(ChangedFile { reference: "/Users/gpabois/Documents/dev/redacap/target/debug/.fingerprint/content-40915d3fa2050874/dep-test-lib-content", reference_mtime: FileTime { seconds: 1782769778, nanos: 613805413 }, stale: "/Users/gpabois/Documents/dev/redacap/content/src/crdt.rs", stale_mtime: FileTime { seconds: 1782771166, nanos: 633600878 } }))
+   0.429196042s  INFO prepare_target{force=false package_id=frontend v0.1.0 (/Users/gpabois/Documents/dev/redacap/frontend) target="frontend"}: cargo::core::compiler::fingerprint: fingerprint dirty for frontend v0.1.0 (/Users/gpabois/Documents/dev/redacap/frontend)/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("frontend", ["cdylib", "rlib"], "/Users/gpabois/Documents/dev/redacap/frontend/src/lib.rs", Edition2024) }
+   0.429201375s  INFO prepare_target{force=false package_id=frontend v0.1.0 (/Users/gpabois/Documents/dev/redacap/frontend) target="frontend"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(9) })
+   0.430297833s  INFO prepare_target{force=false package_id=frontend v0.1.0 (/Users/gpabois/Documents/dev/redacap/frontend) target="frontend"}: cargo::core::compiler::fingerprint: fingerprint dirty for frontend v0.1.0 (/Users/gpabois/Documents/dev/redacap/frontend)/Check { test: true }/TargetInner { name_inferred: true, ..: lib_target("frontend", ["cdylib", "rlib"], "/Users/gpabois/Documents/dev/redacap/frontend/src/lib.rs", Edition2024) }
+   0.430302333s  INFO prepare_target{force=false package_id=frontend v0.1.0 (/Users/gpabois/Documents/dev/redacap/frontend) target="frontend"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(9) })
+   0.434511917s  INFO prepare_target{force=false package_id=server v0.1.0 (/Users/gpabois/Documents/dev/redacap/server) target="server"}: cargo::core::compiler::fingerprint: fingerprint dirty for server v0.1.0 (/Users/gpabois/Documents/dev/redacap/server)/Check { test: false }/TargetInner { name: "server", doc: true, ..: with_path("/Users/gpabois/Documents/dev/redacap/server/src/main.rs", Edition2024) }
+   0.434516208s  INFO prepare_target{force=false package_id=server v0.1.0 (/Users/gpabois/Documents/dev/redacap/server) target="server"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(9) })
+   0.438251958s  INFO prepare_target{force=false package_id=server v0.1.0 (/Users/gpabois/Documents/dev/redacap/server) target="server"}: cargo::core::compiler::fingerprint: fingerprint dirty for server v0.1.0 (/Users/gpabois/Documents/dev/redacap/server)/Check { test: true }/TargetInner { name: "server", doc: true, ..: with_path("/Users/gpabois/Documents/dev/redacap/server/src/main.rs", Edition2024) }
+   0.438255875s  INFO prepare_target{force=false package_id=server v0.1.0 (/Users/gpabois/Documents/dev/redacap/server) target="server"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(9) })
     Checking content v0.1.0 (/Users/gpabois/Documents/dev/redacap/content)
-error: could not compile `content` (lib test) due to 14 previous errors
+error: could not compile `content` (lib) due to 1 previous error; 1 warning emitted
 warning: build failed, waiting for other jobs to finish...
-error: could not compile `content` (lib) due to 14 previous errors
+error: could not compile `content` (lib test) due to 1 previous error; 1 warning emitted

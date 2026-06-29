@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+content = { path = "../content", default-features = false }
 leptos.workspace = true
 leptos_meta.workspace = true
 leptos_router.workspace = true
@@ -15,9 +16,8 @@ strum_macros.workspace = true
 bimap.workspace = true
 indextree.workspace = true
 getrandom.workspace = true
-js-sys.workspace = true
 
 [features]
 default = []
-hydrate = ["leptos/hydrate"]
-ssr = ["leptos/ssr", "leptos_meta/ssr", "leptos_router/ssr", "dep:leptos_axum"]
+hydrate = ["leptos/hydrate", "content/hydrate"]
+ssr = ["leptos/ssr", "leptos_meta/ssr", "leptos_router/ssr", "dep:leptos_axum", "content/ssr"]
