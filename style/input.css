@@ -1,9 +1,32 @@
 @source "../src/**/*.rs";
 @source "../index.html";
+@source "../app/src/**/*.rs";
+@source "../content/src/**/*.rs";
+@source "../frontend/src/**/*.rs";
+@source "../gui/src/**/*.rs";
+@source "../server/src/**/*.rs";
 
 @import "tailwindcss";
 
 @theme {
+  /* Palette DSFR (Système de Design de l'État) */
+  --color-blue-france: #000091;
+  --color-blue-france-hover: #1212ff;
+  --color-blue-france-active: #2323ff;
+  --color-blue-france-925: #e3e3fd;
+  --color-blue-france-975: #f5f5fe;
+  --color-red-marianne: #e1000f;
+  --color-red-marianne-hover: #c9191e;
+  --color-red-marianne-950: #fee9e9;
+  --color-info: #0063cb;
+  --color-info-bg: #e8edff;
+  --color-success: #18753c;
+  --color-success-bg: #dffee6;
+  --color-warning: #b34000;
+  --color-warning-bg: #fff4e2;
+  --color-error: #ce0500;
+  --color-error-bg: #fee9e9;
+
   --animate-y-opening: ease-in-out 0.300s;
   @keyframes blink {
     0%,{

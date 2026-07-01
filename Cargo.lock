@@ -68,11 +68,13 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 name = "app"
 version = "0.1.0"
 dependencies = [
+ "agent",
  "anyhow",
  "bimap",
  "content",
  "getrandom 0.2.17",
  "indextree",
+ "legal_act",
  "leptos",
  "leptos_axum",
  "leptos_meta",
@@ -612,6 +614,14 @@ name = "drain_filter_polyfill"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "669a445ee724c5c69b1b06fe0b63e70a1c84bc9bb7d9696cd4f4e3ec45050408"
+
+[[package]]
+name = "dsfr"
+version = "0.1.0"
+dependencies = [
+ "leptos",
+ "web-sys",
+]
 
 [[package]]
 name = "either"
@@ -1267,6 +1277,24 @@ name = "konst_macro_rules"
 version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4933f3f57a8e9d9da04db23fb153356ecaf00cbd14aee46279c33dc80925c37"
+
+[[package]]
+name = "legal_act"
+version = "0.1.0"
+dependencies = [
+ "agent",
+ "anyhow",
+ "bimap",
+ "content",
+ "dsfr",
+ "indextree",
+ "leptos",
+ "shared",
+ "strum 0.26.3",
+ "strum_macros 0.26.4",
+ "web-sys",
+ "yrs",
+]
 
 [[package]]
 name = "leptos"

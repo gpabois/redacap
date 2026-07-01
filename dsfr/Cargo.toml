@@ -1,0 +1,13 @@
+[package]
+name = "dsfr"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+leptos.workspace = true
+web-sys.workspace = true
+
+[features]
+default = []
+hydrate = ["leptos/hydrate"]
+ssr = ["leptos/ssr"]

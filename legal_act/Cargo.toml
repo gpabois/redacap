@@ -1,0 +1,24 @@
+[package]
+name = "legal_act"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+agent = {path = "../agent", default-features = false}
+shared = {path = "../shared" }
+content = {path = "../content" }
+dsfr = {path = "../dsfr" }
+yrs.workspace = true
+strum.workspace = true
+strum_macros.workspace = true
+anyhow.workspace = true
+indextree.workspace = true
+bimap.workspace = true
+leptos.workspace = true
+web-sys.workspace = true
+
+
+[features]
+default = []
+hydrate = ["leptos/hydrate", "agent/hydrate"]
+ssr = ["leptos/ssr", "agent/ssr"]

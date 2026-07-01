@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::{
     error::ToolError,
-    ports::{DocumentRequestPort, UserInteractionPort},
+    ports::{DocumentRequestPort, Question, UserInteractionPort},
     tool::{Tool, ToolOutput},
 };
 
@@ -59,6 +59,100 @@ impl Tool for AskUserTool {
 
         let answer = self.user_interaction.ask(&args.question).await?;
         Ok(ToolOutput::new(answer))
+    }
+}
+
+#[derive(Deserialize)]
+struct QuestionSpec {
+    id: String,
+    label: String,
+    #[serde(default)]
+    options: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+struct AskQuestionsArguments {
+    prompt: String,
+    questions: Vec<QuestionSpec>,
+}
+
+/// Outil `ask_questions` : présente un formulaire structuré à l'utilisateur
+/// et renvoie ses réponses, en indiquant éventuellement lesquelles ne sont pas
+/// satisfaisantes.
+pub struct AskQuestionsTool {
+    user_interaction: Arc<dyn UserInteractionPort>,
+}
+
+impl AskQuestionsTool {
+    #[must_use]
+    pub fn new(user_interaction: Arc<dyn UserInteractionPort>) -> Self {
+        Self { user_interaction }
+    }
+}
+
+#[async_trait]
+impl Tool for AskQuestionsTool {
+    fn name(&self) -> &str {
+        "ask_questions"
+    }
+
+    fn description(&self) -> &str {
+        "Présente un formulaire structuré à l'inspecteur et renvoie ses réponses. \
+         Chaque réponse peut être marquée comme non satisfaisante avec une raison."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "Contexte ou consignes affichés avant le formulaire"
+                },
+                "questions": {
+                    "type": "array",
+                    "description": "Liste des questions du formulaire",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": { "type": "string", "description": "Identifiant unique de la question" },
+                            "label": { "type": "string", "description": "Libellé affiché à l'utilisateur" },
+                            "options": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "Si présent, l'utilisateur doit choisir parmi ces options ; sinon réponse libre"
+                            }
+                        },
+                        "required": ["id", "label"]
+                    }
+                }
+            },
+            "required": ["prompt", "questions"]
+        })
+    }
+
+    async fn call(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
+        let args: AskQuestionsArguments =
+            serde_json::from_value(arguments).map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
+
+        let questions: Vec<Question> = args
+            .questions
+            .into_iter()
+            .map(|q| Question { id: q.id, label: q.label, options: q.options })
+            .collect();
+
+        let answers = self.user_interaction.ask_questions(&args.prompt, &questions).await?;
+
+        let output = serde_json::to_string(&answers.iter().map(|a| {
+            serde_json::json!({
+                "question_id": a.question_id,
+                "value": a.value,
+                "unsatisfactory_reason": a.unsatisfactory_reason
+            })
+        }).collect::<Vec<_>>())
+        .map_err(|error| ToolError::Other(format!("échec de sérialisation des réponses : {error}")))?;
+
+        Ok(ToolOutput::new(output))
     }
 }
 

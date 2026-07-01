@@ -4,7 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+agent = { path = "../agent", default-features = false }
 content = { path = "../content", default-features = false }
+legal_act = { path = "../legal_act", default-features = false }
 leptos.workspace = true
 leptos_meta.workspace = true
 leptos_router.workspace = true
@@ -19,5 +21,5 @@ getrandom.workspace = true
 
 [features]
 default = []
-hydrate = ["leptos/hydrate", "content/hydrate"]
-ssr = ["leptos/ssr", "leptos_meta/ssr", "leptos_router/ssr", "dep:leptos_axum", "content/ssr"]
+hydrate = ["leptos/hydrate", "content/hydrate", "legal_act/hydrate", "agent/hydrate"]
+ssr = ["leptos/ssr", "leptos_meta/ssr", "leptos_router/ssr", "dep:leptos_axum", "content/ssr", "legal_act/ssr", "agent/ssr"]

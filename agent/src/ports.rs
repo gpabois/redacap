@@ -11,6 +11,25 @@ use serde_json::Value;
 
 use crate::error::ToolError;
 
+/// Une question posée à l'utilisateur dans le cadre d'un formulaire structuré.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Question {
+    pub id: String,
+    pub label: String,
+    /// Si `Some`, l'utilisateur doit choisir parmi ces options ;
+    /// si `None`, il peut répondre librement par du texte.
+    pub options: Option<Vec<String>>,
+}
+
+/// Réponse de l'utilisateur à une question du formulaire.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuestionAnswer {
+    pub question_id: String,
+    pub value: String,
+    /// Raison fournie par l'utilisateur si sa réponse n'est pas satisfaisante.
+    pub unsatisfactory_reason: Option<String>,
+}
+
 /// Point d'intégration avec l'utilisateur courant (l'inspecteur), pour
 /// l'outil `ask_user` et pour la confirmation des actions irréversibles.
 #[async_trait]
@@ -20,6 +39,11 @@ pub trait UserInteractionPort: Send + Sync {
 
     /// Demande une confirmation oui/non avant une action irréversible.
     async fn confirm(&self, message: &str) -> Result<bool, ToolError>;
+
+    /// Présente un formulaire structuré à l'utilisateur et renvoie ses réponses.
+    /// Chaque réponse peut indiquer qu'elle n'est pas satisfaisante via
+    /// [`QuestionAnswer::unsatisfactory_reason`].
+    async fn ask_questions(&self, prompt: &str, questions: &[Question]) -> Result<Vec<QuestionAnswer>, ToolError>;
 }
 
 /// Référence vers un document fourni par l'utilisateur en réponse à

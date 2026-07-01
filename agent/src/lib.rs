@@ -40,7 +40,10 @@ pub use error::{AgentError, ModelError, ToolError};
 pub use model::{
     ChatMessage, LanguageModel, OpenAiCompatibleModel, OpenAiCompatibleModelConfig, Role, ToolCall, ToolDefinition,
 };
-pub use panel::{AgentPanel, PanelMessage, PanelRole};
+pub use panel::{
+    AgentPanel, InteractionRequest, InteractionResponse, PanelMessage, PanelQuestion,
+    PanelQuestionAnswer, PanelRole,
+};
 #[cfg(feature = "server")]
 pub use react::{Agent, AgentConfig};
 #[cfg(feature = "server")]
