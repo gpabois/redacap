@@ -7,6 +7,7 @@
 
 use leptos::*;
 use leptos::prelude::*;
+use dsfr::{Badge, Severity};
 use pulldown_cmark::{Event, Options, Parser};
 use web_sys::KeyboardEvent;
 
@@ -167,7 +168,10 @@ pub fn AgentPanel(
 
             // En-tête
             <div class="px-3 py-2 border-b border-blue-france-925 bg-blue-france-975 flex-shrink-0">
-                <p class="text-sm font-bold text-blue-france">"Agent IA"</p>
+                <p class="text-sm font-bold text-blue-france flex items-baseline">
+                    <span class="flex-1 uppercase">Marie</span>
+                    <Badge severity=Severity::Info>IA</Badge>
+                </p>
                 {move || {
                     match (auto_accept, on_toggle_auto_accept) {
                         (Some(auto_accept), Some(on_toggle)) => Some(view! {

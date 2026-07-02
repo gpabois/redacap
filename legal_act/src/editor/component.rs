@@ -1,7 +1,7 @@
 use leptos::prelude::*;
 
 use agent::{AgentPanel, InteractionRequest, InteractionResponse, PanelMessage};
-use dsfr::BlocMarianneInline;
+use dsfr::{BlocMarianneInline, Tabs, TabPanel};
 
 use crate::{Body, BodyNodeId, NodeKind, NodeSpec};
 use crate::traits::node::{BodyRead, BodyWrite};
@@ -98,6 +98,8 @@ pub fn LegalActEditor(
         }
     });
 
+    let selected_tab = RwSignal::new(0);
+    
     view! {
         <div class="legal-act-editor flex flex-col min-h-screen max-h-screen text-base leading-relaxed">
             <div class="no-print">
@@ -126,20 +128,23 @@ pub fn LegalActEditor(
                                 min_width=AGENT_PANEL_MIN_WIDTH
                                 max_width=AGENT_PANEL_MAX_WIDTH
                             />
-                            <aside
-                                class="shrink-0 overflow-hidden flex flex-col"
-                                style:width=move || format!("{}px", agent_panel_width.get())
-                            >
-                                <AgentTargetIndicator/>
-                                <AgentPanel
-                                    messages=msgs
-                                    pending=pending
-                                    on_send=move |text: String| on_send.run(text)
-                                    interaction=agent_interaction
-                                    on_respond=on_agent_respond
-                                    auto_accept=agent_auto_accept
-                                    on_toggle_auto_accept=on_agent_toggle_auto_accept
-                                />
+                            <aside class="shrink-0 overflow-hidden flex flex-col" style:width=move || format!("{}px", agent_panel_width.get())>
+                                <Tabs titles=vec!["Marie", "Commentaires"] selected=selected_tab></Tabs>
+                                <TabPanel index=0 selected=selected_tab class="flex-1 flex flex-col">
+                                    <AgentTargetIndicator/>
+                                    <AgentPanel
+                                        messages=msgs
+                                        pending=pending
+                                        on_send=move |text: String| on_send.run(text)
+                                        interaction=agent_interaction
+                                        on_respond=on_agent_respond
+                                        auto_accept=agent_auto_accept
+                                        on_toggle_auto_accept=on_agent_toggle_auto_accept
+                                    />
+                                </TabPanel>
+                                <TabPanel index=1 selected=selected_tab class="flex-1 flex flex-col">
+                                    <div></div>
+                                </TabPanel>
                             </aside>
                         </div>
                     }

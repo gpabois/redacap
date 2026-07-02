@@ -47,7 +47,7 @@ pub fn TabPanel(
     view! {
         <div
             role="tabpanel"
-            class=format!("{class} py-4")
+            class=format!("{class}")
             class:hidden=move || selected.get() != index
         >
             {children()}

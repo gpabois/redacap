@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+dsfr = { path = "../dsfr" }
 async-trait = { workspace = true, optional = true }
 leptos.workspace = true
 pulldown-cmark.workspace = true
