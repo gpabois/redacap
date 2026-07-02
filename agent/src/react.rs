@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::{
@@ -33,6 +34,13 @@ pub struct Agent {
     tools: ToolRegistry,
     user_interaction: Arc<dyn UserInteractionPort>,
     config: AgentConfig,
+    /// Partagé avec l'appelant : quand `true`, les outils marqués
+    /// [`crate::Tool::requires_confirmation`] s'exécutent sans passer par
+    /// [`UserInteractionPort::confirm`] (option « accepter toutes les
+    /// modifications » côté utilisateur). Lu à chaque appel d'outil plutôt
+    /// qu'une seule fois à la construction, pour pouvoir être activé ou
+    /// désactivé pendant l'exécution de la boucle.
+    auto_accept: Arc<AtomicBool>,
 }
 
 impl Agent {
@@ -42,8 +50,9 @@ impl Agent {
         tools: ToolRegistry,
         user_interaction: Arc<dyn UserInteractionPort>,
         config: AgentConfig,
+        auto_accept: Arc<AtomicBool>,
     ) -> Self {
-        Self { model, tools, user_interaction, config }
+        Self { model, tools, user_interaction, config, auto_accept }
     }
 
     /// Exécute la boucle agentique jusqu'à obtenir une réponse finale du
@@ -84,7 +93,7 @@ impl Agent {
             return Err(ToolError::Other(format!("outil inconnu : « {} »", call.name)));
         };
 
-        if tool.requires_confirmation() {
+        if tool.requires_confirmation() && !self.auto_accept.load(Ordering::Relaxed) {
             let confirmed = self
                 .user_interaction
                 .confirm(&format!(
@@ -131,6 +140,7 @@ mod tests {
 
     struct CountingTool {
         calls: AtomicUsize,
+        requires_confirmation: bool,
     }
 
     #[async_trait]
@@ -145,6 +155,10 @@ mod tests {
 
         fn parameters_schema(&self) -> Value {
             json!({ "type": "object" })
+        }
+
+        fn requires_confirmation(&self) -> bool {
+            self.requires_confirmation
         }
 
         async fn call(&self, _arguments: Value) -> Result<ToolOutput, ToolError> {
@@ -164,6 +178,35 @@ mod tests {
         async fn confirm(&self, _message: &str) -> Result<bool, ToolError> {
             Ok(true)
         }
+
+        async fn ask_questions(
+            &self,
+            _prompt: &str,
+            _questions: &[crate::ports::Question],
+        ) -> Result<Vec<crate::ports::QuestionAnswer>, ToolError> {
+            Ok(Vec::new())
+        }
+    }
+
+    struct NeverConfirm;
+
+    #[async_trait]
+    impl UserInteractionPort for NeverConfirm {
+        async fn ask(&self, _question: &str) -> Result<String, ToolError> {
+            Ok(String::new())
+        }
+
+        async fn confirm(&self, _message: &str) -> Result<bool, ToolError> {
+            panic!("confirm ne doit pas être appelé quand l'auto-acceptation est active")
+        }
+
+        async fn ask_questions(
+            &self,
+            _prompt: &str,
+            _questions: &[crate::ports::Question],
+        ) -> Result<Vec<crate::ports::QuestionAnswer>, ToolError> {
+            Ok(Vec::new())
+        }
     }
 
     #[tokio::test]
@@ -180,9 +223,43 @@ mod tests {
         };
 
         let mut tools = ToolRegistry::new();
-        tools.register(Box::new(CountingTool { calls: AtomicUsize::new(0) }));
+        tools.register(Box::new(CountingTool { calls: AtomicUsize::new(0), requires_confirmation: false }));
 
-        let agent = Agent::new(Arc::new(model), tools, Arc::new(AlwaysConfirm), AgentConfig::default());
+        let agent = Agent::new(
+            Arc::new(model),
+            tools,
+            Arc::new(AlwaysConfirm),
+            AgentConfig::default(),
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        let answer = agent.run("vérifie l'installation").await.expect("exécution réussie");
+        assert_eq!(answer, "terminé");
+    }
+
+    #[tokio::test]
+    async fn auto_accept_bypasses_confirmation_for_tools_that_require_it() {
+        let model = ScriptedModel {
+            responses: std::sync::Mutex::new(vec![
+                ChatMessage::assistant_tool_calls(vec![ToolCall {
+                    id: "call_1".to_string(),
+                    name: "icpe_query".to_string(),
+                    arguments: json!({}),
+                }]),
+                ChatMessage { role: crate::model::Role::Assistant, content: Some("terminé".to_string()), tool_calls: vec![], tool_call_id: None },
+            ]),
+        };
+
+        let mut tools = ToolRegistry::new();
+        tools.register(Box::new(CountingTool { calls: AtomicUsize::new(0), requires_confirmation: true }));
+
+        let agent = Agent::new(
+            Arc::new(model),
+            tools,
+            Arc::new(NeverConfirm),
+            AgentConfig::default(),
+            Arc::new(AtomicBool::new(true)),
+        );
 
         let answer = agent.run("vérifie l'installation").await.expect("exécution réussie");
         assert_eq!(answer, "terminé");
@@ -203,10 +280,11 @@ mod tests {
         };
 
         let mut tools = ToolRegistry::new();
-        tools.register(Box::new(CountingTool { calls: AtomicUsize::new(0) }));
+        tools.register(Box::new(CountingTool { calls: AtomicUsize::new(0), requires_confirmation: false }));
 
         let config = AgentConfig { max_steps: 2, ..AgentConfig::default() };
-        let agent = Agent::new(Arc::new(model), tools, Arc::new(AlwaysConfirm), config);
+        let agent =
+            Agent::new(Arc::new(model), tools, Arc::new(AlwaysConfirm), config, Arc::new(AtomicBool::new(false)));
 
         let result = agent.run("tâche").await;
         assert!(matches!(result, Err(AgentError::MaxStepsExceeded(2))));

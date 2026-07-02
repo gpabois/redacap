@@ -85,16 +85,41 @@ impl ValidationReport {
 }
 
 /// Accès à la structure de l'acte en cours d'édition, pour les outils
-/// `fill_section`, `generate_numbering` et `validate_structure`.
+/// `read_structure`, `fill_section`, `insert_node`, `remove_node`,
+/// `generate_numbering` et `validate_structure`.
 #[async_trait]
 pub trait LegalActEditorPort: Send + Sync {
+    /// Lit l'arbre complet de l'acte : chaque noeud est représenté par un
+    /// objet `{ id, kind, number?, text?, children? }` (`number` pour les
+    /// noeuds numérotés, `text` pour les noeuds `Plain`, `children` pour les
+    /// noeuds non-feuilles). Permet à l'agent de connaître le contenu
+    /// existant sans jamais avoir à le demander à l'inspecteur.
+    async fn read_structure(&self) -> Result<Value, ToolError>;
+
     /// Remplit ou complète le noeud identifié par `section_id` (article,
     /// considérant, visa...) avec `content`.
     async fn fill_section(&self, section_id: &str, content: &str) -> Result<(), ToolError>;
+
+    /// Crée un nouveau noeud du type `kind` (ex. "Article", "Section",
+    /// "Titre"...) sous le noeud `parent_id`, avec un contenu textuel
+    /// initial optionnel, et renvoie l'identifiant du noeud créé.
+    async fn insert_node(&self, parent_id: &str, kind: &str, content: Option<&str>) -> Result<String, ToolError>;
+
+    /// Supprime le noeud `node_id` ainsi que tout son sous-arbre.
+    async fn remove_node(&self, node_id: &str) -> Result<(), ToolError>;
 
     /// Recalcule la numérotation de l'ensemble de l'acte.
     async fn generate_numbering(&self) -> Result<(), ToolError>;
 
     /// Vérifie les invariants structurels de l'acte.
     async fn validate_structure(&self) -> Result<ValidationReport, ToolError>;
+
+    /// Lit le titre de l'acte en cours d'édition (ex. « Arrêté préfectoral
+    /// portant autorisation d'exploiter... »), distinct des noeuds `Titre`
+    /// du corps (subdivisions numérotées « Titre I », « Titre II »...).
+    /// Chaîne vide tant qu'aucun titre n'a été renseigné.
+    async fn read_title(&self) -> Result<String, ToolError>;
+
+    /// Définit ou remplace le titre de l'acte en cours d'édition.
+    async fn set_title(&self, title: &str) -> Result<(), ToolError>;
 }

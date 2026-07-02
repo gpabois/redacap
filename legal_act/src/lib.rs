@@ -3,6 +3,11 @@
 //! ou en mode Yrs (CRDT collaboratif), via les traits [`BodyRead`] /
 //! [`BodyWrite`] et les backends [`DirectBody`] / [`YrsBody`].
 
+// Les vues Leptos imbriquées de l'éditeur (voir `editor::component`) génèrent
+// des types de composants profondément imbriqués ; la limite par défaut du
+// vérificateur de types est dépassée (voir aussi `server/src/main.rs`).
+#![recursion_limit = "256"]
+
 mod body;
 mod crdt;
 mod cursor;

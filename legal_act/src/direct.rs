@@ -12,6 +12,7 @@ pub struct DirectBody {
     index: BiHashMap<BodyNodeId, indextree::NodeId>,
     idgen: IdGenerator,
     root: BodyNodeId,
+    title: String,
 }
 
 impl DirectBody {
@@ -22,7 +23,7 @@ impl DirectBody {
         let root = BodyNodeId::from_raw(idgen.next_id());
         let mut index = BiHashMap::new();
         index.insert(root, arena_id);
-        Self { arena, index, idgen, root }
+        Self { arena, index, idgen, root, title: String::new() }
     }
 
     fn arena_id_of(&self, id: BodyNodeId) -> indextree::NodeId {
@@ -79,6 +80,10 @@ impl BodyRead for DirectBody {
 
     fn spec_of(&self, id: BodyNodeId) -> NodeSpec {
         self.node_of(id).clone()
+    }
+
+    fn title(&self) -> String {
+        self.title.clone()
     }
 }
 
@@ -154,6 +159,10 @@ impl BodyWrite for DirectBody {
         *self.node_of_mut(id) = spec;
         Ok(())
     }
+
+    fn set_title(&mut self, title: &str) {
+        self.title = title.to_string();
+    }
 }
 
 #[cfg(test)]
@@ -163,6 +172,14 @@ mod tests {
     use crate::kind::{Article, Chapitre, Titre};
 
     use super::*;
+
+    #[test]
+    fn test_title_defaults_to_empty_and_is_settable() {
+        let mut body = DirectBody::new();
+        assert_eq!(body.title(), "");
+        body.set_title("Arrêté préfectoral portant autorisation d'exploiter");
+        assert_eq!(body.title(), "Arrêté préfectoral portant autorisation d'exploiter");
+    }
 
     fn new_body_with_article() -> (DirectBody, BodyNodeId) {
         let mut body = DirectBody::new();
@@ -175,11 +192,16 @@ mod tests {
     #[test]
     fn test_append_node_creates_label_and_plain() {
         let (body, article) = new_body_with_article();
-        // L'article doit avoir un LibelleArticle créé par append_node + ensure_only_plain_leafs
+        // L'article doit avoir un LibelleArticle et un ArticleBody créés par
+        // append_node + ensure_only_plain_leafs
         let children = body.children_of(article);
         assert!(
             children.iter().any(|&c| body.kind_of(c) == NodeKind::LibelleArticle),
             "LibelleArticle manquant"
+        );
+        assert!(
+            children.iter().any(|&c| body.kind_of(c) == NodeKind::ArticleBody),
+            "ArticleBody manquant"
         );
     }
 
@@ -276,9 +298,14 @@ mod tests {
     #[test]
     fn test_split_plain() {
         let (mut body, article) = new_body_with_article();
-        // Naviguer jusqu'au Paragraphe > Plain de l'article
-        let paragraphe = body
+        // Naviguer jusqu'au Paragraphe > Plain de l'ArticleBody de l'article
+        let article_body = body
             .children_of(article)
+            .into_iter()
+            .find(|&c| body.kind_of(c) == NodeKind::ArticleBody)
+            .unwrap();
+        let paragraphe = body
+            .children_of(article_body)
             .into_iter()
             .find(|&c| body.kind_of(c) == NodeKind::Paragraphe)
             .unwrap();
@@ -295,8 +322,13 @@ mod tests {
     #[test]
     fn test_leaf_navigation() {
         let (mut body, article) = new_body_with_article();
-        let paragraphe = body
+        let article_body = body
             .children_of(article)
+            .into_iter()
+            .find(|&c| body.kind_of(c) == NodeKind::ArticleBody)
+            .unwrap();
+        let paragraphe = body
+            .children_of(article_body)
             .into_iter()
             .find(|&c| body.kind_of(c) == NodeKind::Paragraphe)
             .unwrap();

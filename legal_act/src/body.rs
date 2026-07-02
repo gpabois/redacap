@@ -64,6 +64,13 @@ impl BodyRead for Body {
             Body::Yrs(b) => b.spec_of(id),
         }
     }
+
+    fn title(&self) -> String {
+        match self {
+            Body::Direct(b) => b.title(),
+            Body::Yrs(b) => b.title(),
+        }
+    }
 }
 
 impl BodyWrite for Body {
@@ -118,6 +125,13 @@ impl BodyWrite for Body {
         match self {
             Body::Direct(b) => b.set_spec_unchecked(id, spec),
             Body::Yrs(b) => b.set_spec_unchecked(id, spec),
+        }
+    }
+
+    fn set_title(&mut self, title: &str) {
+        match self {
+            Body::Direct(b) => b.set_title(title),
+            Body::Yrs(b) => b.set_title(title),
         }
     }
 }

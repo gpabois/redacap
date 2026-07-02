@@ -28,7 +28,7 @@ impl ButtonVariant {
                 "bg-transparent text-blue-france shadow-[inset_0_0_0_1px] shadow-gray-300 hover:bg-blue-france-975"
             }
             ButtonVariant::TertiaryNoOutline => {
-                "bg-transparent text-blue-france hover:bg-blue-france-975"
+                "bg-transparent text-blue-france hover:bg-gray-200"
             }
         }
     }
@@ -36,7 +36,7 @@ impl ButtonVariant {
 
 fn size_class(size: Size) -> &'static str {
     match size {
-        Size::Sm => "text-sm px-3 py-1.5",
+        Size::Sm => "text-sm px-3 py-1.5 short:py-0.5",
         Size::Md => "text-base px-4 py-2",
         Size::Lg => "text-lg px-5 py-2.5",
     }
@@ -57,7 +57,7 @@ pub fn Button(
         <button
             type=r#type
             class=format!(
-                "{} {} {class} inline-flex items-center justify-center gap-2 font-bold rounded-sm cursor-pointer transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+                "{} {} {class} inline-flex items-center justify-center font-bold cursor-pointer transition-colors disabled:cursor-not-allowed disabled:opacity-40",
                 variant.class(),
                 size_class(size),
             )
@@ -73,7 +73,7 @@ pub fn Button(
 #[component]
 pub fn ButtonGroup(#[prop(optional)] class: &'static str, children: Children) -> impl IntoView {
     view! {
-        <div class=format!("{class} inline-flex gap-2 flex-wrap")>
+        <div class=format!("{class} inline-flex flex-wrap")>
             {children()}
         </div>
     }

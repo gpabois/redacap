@@ -10,6 +10,9 @@ mod metadata;
 
 pub use georisques::{GeorisquesClient, GeorisquesConfig, GeorisquesQueryTool, IcpeQueryTool};
 pub use interaction::{AskQuestionsTool, AskUserTool, RequestDocumentTool};
-pub use legal_act_editor::{FillSectionTool, GenerateNumberingTool, ValidateStructureTool};
+pub use legal_act_editor::{
+    FillSectionTool, GenerateNumberingTool, InsertNodeTool, ReadStructureTool, ReadTitleTool, RemoveNodeTool,
+    SetTitleTool, ValidateStructureTool,
+};
 pub use legifrance::{LegifranceClient, LegifranceConfig, LegifranceFetchTool, LegifranceSearchTool};
 pub use metadata::{ReadMetadataTool, WriteMetadataTool};

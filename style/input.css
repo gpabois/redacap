@@ -8,6 +8,11 @@
 
 @import "tailwindcss";
 
+/* Variante appliquée quand la hauteur du viewport est réduite (fenêtre
+   basse, écran en mode paysage court…) : sert à compacter la bannière de
+   l'éditeur pour laisser un maximum de place à l'arrêté édité. */
+@custom-variant short (@media (max-height: 700px));
+
 @theme {
   /* Palette DSFR (Système de Design de l'État) */
   --color-blue-france: #000091;
@@ -138,6 +143,160 @@
     body {
         font-family: 'Marianne';
     }
+}
+
+/*
+ * Mise en page « feuille A4 » de l'éditeur d'acte légal : largeur et marges
+ * fixes façon papier, avec un repère visuel (trait fin) tous les 297mm pour
+ * indiquer où tombera chaque saut de page à l'impression. On ne scinde pas
+ * le contenu en plusieurs blocs de page distincts à l'écran (cela
+ * demanderait de mesurer le DOM rendu et casserait le focus des champs en
+ * cours d'édition) : la pagination réelle en plusieurs pages n'intervient
+ * qu'à l'impression/export PDF, via `@media print` ci-dessous.
+ */
+.legal-act-page {
+    width: 210mm;
+    max-width: 100%;
+    min-height: 297mm;
+    padding: 25mm 20mm;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15), 0 1px 12px rgba(0, 0, 0, 0.1);
+    background-image: repeating-linear-gradient(
+        to bottom,
+        transparent 0,
+        transparent calc(297mm - 1px),
+        var(--color-blue-france-925) calc(297mm - 1px),
+        var(--color-blue-france-925) 297mm
+    );
+    background-size: 100% 297mm;
+}
+
+@media print {
+    @page {
+        size: A4;
+        margin: 20mm;
+    }
+
+    .no-print {
+        display: none !important;
+    }
+
+    .legal-act-editor {
+        min-height: 0;
+        max-height: none;
+        display: block;
+    }
+
+    .legal-act-page {
+        width: auto;
+        max-width: none;
+        min-height: 0;
+        margin: 0;
+        padding: 0;
+        box-shadow: none;
+        background-image: none;
+    }
+
+    /* Les conteneurs des nœuds éditables (Visa/Considérant/Sur/Titre/
+       Chapitre/Section/Article/Annexe) portent tous la classe `group`
+       (utilisée par ailleurs pour révéler les boutons au survol) : on s'en
+       sert ici pour éviter qu'un saut de page ne tombe au milieu de l'un
+       d'eux. */
+    .legal-act-page .group {
+        break-inside: avoid;
+    }
+}
+
+/* Rendu du Markdown renvoyé par l'agent IA dans le panneau de discussion. */
+.markdown-content > :first-child {
+    margin-top: 0;
+}
+
+.markdown-content > :last-child {
+    margin-bottom: 0;
+}
+
+.markdown-content p {
+    margin: 0.4em 0;
+}
+
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4,
+.markdown-content h5,
+.markdown-content h6 {
+    font-weight: 700;
+    margin: 0.6em 0 0.3em;
+    line-height: 1.25;
+}
+
+.markdown-content h1 { font-size: 1.15em; }
+.markdown-content h2 { font-size: 1.1em; }
+.markdown-content h3 { font-size: 1.05em; }
+.markdown-content h4,
+.markdown-content h5,
+.markdown-content h6 { font-size: 1em; }
+
+.markdown-content ul,
+.markdown-content ol {
+    margin: 0.4em 0;
+    padding-left: 1.4em;
+}
+
+.markdown-content ul { list-style-type: disc; }
+.markdown-content ol { list-style-type: decimal; }
+.markdown-content li { margin: 0.15em 0; }
+.markdown-content li > ul,
+.markdown-content li > ol { margin: 0.15em 0; }
+
+.markdown-content a {
+    color: var(--color-blue-france);
+    text-decoration: underline;
+}
+
+.markdown-content code {
+    background-color: rgba(0, 0, 145, 0.08);
+    border-radius: 0.2em;
+    padding: 0.1em 0.3em;
+    font-size: 0.9em;
+}
+
+.markdown-content pre {
+    background-color: rgba(0, 0, 145, 0.08);
+    border-radius: 0.25em;
+    padding: 0.6em 0.8em;
+    margin: 0.5em 0;
+    overflow-x: auto;
+}
+
+.markdown-content pre code {
+    background-color: transparent;
+    padding: 0;
+}
+
+.markdown-content blockquote {
+    border-left: 3px solid var(--color-blue-france-925);
+    margin: 0.5em 0;
+    padding-left: 0.75em;
+    color: var(--color-gray-600, #555);
+}
+
+.markdown-content table {
+    border-collapse: collapse;
+    margin: 0.5em 0;
+    font-size: 0.95em;
+}
+
+.markdown-content th,
+.markdown-content td {
+    border: 1px solid var(--color-blue-france-925);
+    padding: 0.25em 0.5em;
+}
+
+.markdown-content hr {
+    border: none;
+    border-top: 1px solid var(--color-blue-france-925);
+    margin: 0.6em 0;
 }
 
 .fr-y::before {

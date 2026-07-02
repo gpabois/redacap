@@ -1,3 +1,8 @@
+// La vue Leptos complète (App -> LegalActEditor -> ...) génère des types de
+// composants profondément imbriqués ; la limite par défaut du vérificateur de
+// types est dépassée (voir aussi `legal_act/src/lib.rs`, `server/src/main.rs`).
+#![recursion_limit = "256"]
+
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn hydrate() {
     use app::app::*;

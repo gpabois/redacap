@@ -7,15 +7,24 @@ edition = "2024"
 
 [dependencies]
 app = { path = "../app", default-features = false, features = ["ssr"] }
+agent = { path = "../agent", default-features = false, features = ["server"] }
+legal_act = { path = "../legal_act", default-features = false }
 leptos = { workspace = true, features = [ "ssr" ]}
 leptos_axum.workspace = true
 
-axum.workspace = true
+axum = { workspace = true, features = ["ws"] }
 simple_logger.workspace = true
 tokio.workspace = true
 tower.workspace = true
 tower-http.workspace = true
 log.workspace = true
+yrs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+anyhow.workspace = true
+dotenv.workspace = true
+futures-util = "0.3"
 
 [features]
 default = ["ssr"]

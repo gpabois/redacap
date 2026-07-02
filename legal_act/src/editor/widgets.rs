@@ -3,9 +3,62 @@ use leptos::prelude::*;
 use web_sys::wasm_bindgen::JsCast;
 use web_sys::HtmlDocument;
 
+use super::context::expect_editor_context;
+
 pub(super) const TOOLBAR_BTN_CLASS: &str =
-    "text-xs border border-teal-600 text-teal-600 rounded px-2 py-0.5 \
+    "no-print text-xs border border-teal-600 text-teal-600 rounded px-2 py-0.5 \
      hover:bg-teal-50 cursor-pointer";
+
+/// Poignée de redimensionnement par glissement horizontal (souris) : ajuste
+/// `width` (en pixels) en fonction du déplacement depuis le `mousedown`
+/// initial sur la poignée. Les écouteurs `mousemove`/`mouseup` sont posés
+/// sur `window` (plutôt que sur la poignée elle-même) pour continuer à
+/// suivre la souris même si elle quitte la poignée pendant le glissement —
+/// même idiome que `content::editor::components::EditRoot` pour le suivi de
+/// sélection.
+///
+/// `width` est censé piloter la largeur (en pixels, via `style:width`) du
+/// panneau voisin de cette poignée dans le flux ; un déplacement vers la
+/// droite réduit `width`, vers la gauche l'augmente (poignée à gauche d'un
+/// panneau ancré à droite).
+#[component]
+pub(super) fn ResizeHandle(
+    /// Largeur ajustée par le glissement (en pixels).
+    width: RwSignal<f64>,
+    /// Largeur minimale autorisée (en pixels).
+    #[prop(default = 0.0)]
+    min_width: f64,
+    /// Largeur maximale autorisée (en pixels).
+    #[prop(default = f64::MAX)]
+    max_width: f64,
+) -> impl IntoView {
+    // `Some((abscisse du mousedown, largeur au mousedown))` pendant le
+    // glissement, `None` sinon.
+    let drag_origin = RwSignal::<Option<(f64, f64)>>::new(None);
+
+    window_event_listener(leptos::ev::mousemove, move |ev| {
+        if let Some((origin_x, origin_width)) = drag_origin.get_untracked() {
+            let delta = f64::from(ev.client_x()) - origin_x;
+            width.set((origin_width - delta).clamp(min_width, max_width));
+        }
+    });
+
+    window_event_listener(leptos::ev::mouseup, move |_| {
+        drag_origin.set(None);
+    });
+
+    view! {
+        <div
+            class="w-1 shrink-0 cursor-col-resize select-none bg-gray-300 \
+                   hover:bg-blue-france transition-colors"
+            class:bg-blue-france=move || drag_origin.get().is_some()
+            on:mousedown=move |ev| {
+                ev.prevent_default();
+                drag_origin.set(Some((f64::from(ev.client_x()), width.get_untracked())));
+            }
+        ></div>
+    }
+}
 
 /// `<div contenteditable>` réactif : synchronise le signal → DOM hors focus,
 /// et appelle `on_save` au `blur`.
@@ -75,15 +128,22 @@ fn exec_format_command(cmd: &str) {
     }
 }
 
-/// Barre de formatage inline (G/I/S/B). Les boutons utilisent `mousedown` +
-/// `prevent_default` pour ne pas interrompre le focus du div contenteditable.
+/// Barre de formatage inline (B/G/I), affichée dans le sous-en-tête (voir
+/// [`super::header::EditorHeader`]) tant qu'un [`RichEditableDiv`] a le
+/// focus (voir [`super::context::EditorContext::content_focus`]). Les
+/// boutons utilisent `mousedown` + `prevent_default` pour ne pas interrompre
+/// le focus du div contenteditable (nécessaire pour que `exec_command`
+/// s'applique à la sélection en cours).
 #[component]
-fn ContentFormatToolbar() -> impl IntoView {
+pub(super) fn FormatToolbar() -> impl IntoView {
     let btn = "w-6 h-6 flex items-center justify-center hover:bg-gray-100 \
                rounded cursor-pointer select-none";
     view! {
-        <div class="flex gap-0.5 mb-0.5 px-1 py-0.5 bg-white border border-gray-200 \
-                    rounded shadow-sm text-xs select-none">
+        <div class="flex gap-0.5 text-xs select-none">
+            <button type="button" title="Barré" class=format!("{btn} line-through")
+                on:mousedown=|ev| { ev.prevent_default(); exec_format_command("strikeThrough"); }>
+                "B"
+            </button>
             <button type="button" title="Gras" class=format!("{btn} font-bold")
                 on:mousedown=|ev| { ev.prevent_default(); exec_format_command("bold"); }>
                 "G"
@@ -91,14 +151,6 @@ fn ContentFormatToolbar() -> impl IntoView {
             <button type="button" title="Italique" class=format!("{btn} italic")
                 on:mousedown=|ev| { ev.prevent_default(); exec_format_command("italic"); }>
                 "I"
-            </button>
-            <button type="button" title="Souligné" class=format!("{btn} underline")
-                on:mousedown=|ev| { ev.prevent_default(); exec_format_command("underline"); }>
-                "S"
-            </button>
-            <button type="button" title="Barré" class=format!("{btn} line-through")
-                on:mousedown=|ev| { ev.prevent_default(); exec_format_command("strikeThrough"); }>
-                "B"
             </button>
         </div>
     }
@@ -118,6 +170,7 @@ pub(super) fn RichEditableDiv(
     #[prop(optional)]
     class: &'static str,
 ) -> impl IntoView {
+    let ctx = expect_editor_context();
     let div_ref = NodeRef::<html::Div>::new();
     let is_focused = RwSignal::new(false);
 
@@ -134,26 +187,25 @@ pub(super) fn RichEditableDiv(
     });
 
     view! {
-        <div class="rich-editor-wrapper">
-            <Show when=move || is_focused.get()>
-                <ContentFormatToolbar/>
-            </Show>
-            <div
-                node_ref=div_ref
-                contenteditable="true"
-                class=format!(
-                    "outline-none min-w-[4ch] border-b border-transparent \
-                     focus:border-teal-400 hover:border-gray-300 \
-                     transition-colors cursor-text {class}"
-                )
-                on:focus=move |_| is_focused.set(true)
-                on:blur=move |_| {
-                    is_focused.set(false);
-                    if let Some(el) = div_ref.get() {
-                        on_save(el.inner_html());
-                    }
+        <div
+            node_ref=div_ref
+            contenteditable="true"
+            class=format!(
+                "outline-none min-w-[4ch] border-b border-transparent \
+                 focus:border-teal-400 hover:border-gray-300 \
+                 transition-colors cursor-text {class}"
+            )
+            on:focus=move |_| {
+                is_focused.set(true);
+                ctx.content_focus.set(true);
+            }
+            on:blur=move |_| {
+                is_focused.set(false);
+                ctx.content_focus.set(false);
+                if let Some(el) = div_ref.get() {
+                    on_save(el.inner_html());
                 }
-            />
-        </div>
+            }
+        />
     }
 }

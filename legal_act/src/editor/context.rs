@@ -3,7 +3,7 @@ use std::sync::Arc;
 use dsfr::ButtonVariant;
 use leptos::prelude::*;
 
-use crate::Body;
+use crate::{Body, BodyNodeId};
 use super::state::EditorSelection;
 
 /// Action contextuelle injectée dans la zone portail de l'en-tête.
@@ -43,18 +43,42 @@ impl PortalAction {
 pub struct EditorContext {
     pub body: RwSignal<Body>,
     pub selection: RwSignal<EditorSelection>,
+    /// Nœud actuellement « ciblé » par l'utilisateur pour l'agent IA (bouton
+    /// « Cibler » sur un visa/considérant/nœud structurel), `None` si aucun.
+    /// Contrairement à [`Self::selection`] (curseur de texte fin, par
+    /// caractère), c'est une désignation grossière d'un nœud entier :
+    /// c'est elle qui est transmise au serveur (voir `app::ws::RoomHandle::
+    /// set_selection`) pour que l'agent puisse viser ce nœud via le mot-clé
+    /// `"selection"`, sans jamais exposer d'identifiant technique à
+    /// l'utilisateur. Voir [`Self::toggle_agent_target`].
+    pub agent_target: RwSignal<Option<BodyNodeId>>,
     /// Actions contextuelles affichées dans la zone portail de l'en-tête.
     /// Les composants enfants écrivent ici ; [`super::header::EditorHeader`] lit.
     pub portal_actions: RwSignal<Vec<PortalAction>>,
+    /// Vrai tant qu'un nœud de contenu pouvant contenir un `Span` (Paragraphe,
+    /// élément de liste, cellule de tableau…) est en cours d'édition, c'est-à-
+    /// dire qu'un [`super::widgets::RichEditableDiv`] a le focus. Piloté par
+    /// ce dernier ; lu par [`super::header::EditorHeader`] pour afficher les
+    /// outils de mise en forme (Barré/Gras/Italique) dans le sous-en-tête et
+    /// les masquer dès qu'aucun nœud n'est focus.
+    pub content_focus: RwSignal<bool>,
 }
 
 impl EditorContext {
-    pub fn new(body: Body) -> Self {
+    pub fn new(body: RwSignal<Body>) -> Self {
         Self {
-            body: RwSignal::new(body),
+            body,
             selection: RwSignal::new(EditorSelection::default()),
+            agent_target: RwSignal::new(None),
             portal_actions: RwSignal::new(Vec::new()),
+            content_focus: RwSignal::new(false),
         }
+    }
+
+    /// Cible `node_id` pour l'agent IA, ou retire la cible si `node_id`
+    /// était déjà ciblé (bascule).
+    pub fn toggle_agent_target(&self, node_id: BodyNodeId) {
+        self.agent_target.update(|t| *t = if *t == Some(node_id) { None } else { Some(node_id) });
     }
 
     /// Remplace les actions du portail par la liste fournie.
@@ -68,8 +92,12 @@ impl EditorContext {
     }
 }
 
-pub fn provide_editor_context(body: impl Into<Body>) -> EditorContext {
-    let ctx = EditorContext::new(body.into());
+/// `body` reste possédé par l'appelant (page hôte) : c'est ce qui permet à
+/// un client externe — par exemple le module `app::ws` qui synchronise le
+/// document avec le salon websocket du crate `server` — de continuer à
+/// écrire dans le même signal après le montage de [`super::component::LegalActEditor`].
+pub fn provide_editor_context(body: RwSignal<Body>) -> EditorContext {
+    let ctx = EditorContext::new(body);
     provide_context(ctx);
     ctx
 }

@@ -27,6 +27,10 @@ pub mod tile;
 pub mod toggle;
 pub mod tooltip;
 pub mod bloc_marque;
+pub mod logo;
+
+pub use logo::*;
+pub use bloc_marque::*;
 
 pub use accordion::*;
 pub use alert::*;

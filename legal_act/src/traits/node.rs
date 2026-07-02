@@ -18,6 +18,11 @@ pub trait BodyRead {
     fn children_of(&self, id: BodyNodeId) -> Vec<BodyNodeId>;
     /// Spécification complète du nœud (attributs inclus).
     fn spec_of(&self, id: BodyNodeId) -> NodeSpec;
+    /// Titre de l'acte (ex. « Arrêté préfectoral portant autorisation
+    /// d'exploiter... »), vide tant qu'il n'a pas été renseigné. Propriété du
+    /// document dans son ensemble, distincte des nœuds `Titre` du corps
+    /// (subdivisions numérotées « Titre I », « Titre II »...).
+    fn title(&self) -> String;
 
     fn len_of(&self, id: BodyNodeId) -> usize {
         self.text_of(id).chars().count()
@@ -137,6 +142,9 @@ pub trait BodyWrite: BodyRead {
 
     fn set_spec_unchecked(&mut self, id: BodyNodeId, spec: NodeSpec) -> anyhow::Result<()>;
 
+    /// Définit le titre de l'acte (voir [`BodyRead::title`]).
+    fn set_title(&mut self, title: &str);
+
     // ── Navigation dérivée ──────────────────────────────────────────────
 
     fn append_child_unchecked(
@@ -188,6 +196,20 @@ pub trait BodyWrite: BodyRead {
         let child_kind = spec.kind();
 
         if !parent_kind.can_accept_child(child_kind) {
+            // Redirige vers le conteneur de contenu (ex. Article → ArticleBody)
+            // si `parent` en a un et qu'il accepte `child_kind`, pour que les
+            // appelants puissent continuer à cibler le nœud structurel
+            // directement sans connaître l'existence du conteneur.
+            if let Some(container_kind) = parent_kind.content_container_kind()
+                && container_kind.can_accept_child(child_kind)
+            {
+                let container = self
+                    .children_of(parent)
+                    .into_iter()
+                    .find(|&c| self.kind_of(c) == container_kind)
+                    .ok_or_else(|| anyhow!("{container_kind} manquant sous {parent_kind}"))?;
+                return self.append_node(container, spec);
+            }
             bail!(
                 "le nœud {child_kind} n'est pas autorisé comme enfant de {parent_kind}"
             );
@@ -249,7 +271,8 @@ pub trait BodyWrite: BodyRead {
     /// `Plain`. Le comportement dépend du type du nœud :
     ///
     /// - Nœud avec un `label_child_kind` (Titre, Article, Annexe…) :
-    ///   crée `Libellé → Plain`. Pour `Article`, crée aussi `Paragraphe → Plain`.
+    ///   crée `Libellé → Plain`. Pour `Article`, crée aussi
+    ///   `ArticleBody → Paragraphe → Plain`.
     /// - Nœud acceptant directement `Plain` (Visa, Paragraphe, ListItem…) :
     ///   crée `Plain`.
     /// - Nœuds de contenu sans `Plain` direct (Table, List…) :
@@ -276,10 +299,13 @@ pub trait BodyWrite: BodyRead {
             let plain = self.create_node(NodeSpec::Plain(String::new()));
             self.append_child_unchecked(label, plain)?;
 
-            // Pour Article : crée aussi un Paragraphe → Plain (corps éditables)
+            // Pour Article : crée aussi ArticleBody → Paragraphe → Plain
+            // (corps éditable, distinct du libellé).
             if kind == NodeKind::Article {
+                let article_body = self.create_node(NodeSpec::ArticleBody);
+                self.append_child_unchecked(id, article_body)?;
                 let para = self.create_node(NodeSpec::Paragraphe);
-                self.append_child_unchecked(id, para)?;
+                self.append_child_unchecked(article_body, para)?;
                 let plain2 = self.create_node(NodeSpec::Plain(String::new()));
                 self.append_child_unchecked(para, plain2)?;
             }
@@ -412,8 +438,8 @@ pub trait BodyWrite: BodyRead {
             // Libellé* ou visa/considérant/sur → recréer directement un Plain
             let plain = self.create_node(NodeSpec::Plain(String::new()));
             self.append_child_unchecked(id, plain)?;
-        } else if kind == NodeKind::Article {
-            // Article → recréer un Paragraphe > Plain
+        } else if kind == NodeKind::ArticleBody {
+            // ArticleBody → recréer un Paragraphe > Plain
             let para = self.create_node(NodeSpec::Paragraphe);
             self.append_child_unchecked(id, para)?;
             let plain = self.create_node(NodeSpec::Plain(String::new()));

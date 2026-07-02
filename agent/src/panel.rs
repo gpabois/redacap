@@ -7,7 +7,22 @@
 
 use leptos::*;
 use leptos::prelude::*;
+use pulldown_cmark::{Event, Options, Parser};
 use web_sys::KeyboardEvent;
+
+/// Convertit un texte Markdown (réponse de l'agent) en HTML affichable.
+///
+/// Les balises HTML brutes présentes dans la source sont supprimées : le
+/// texte de l'agent peut refléter du contenu utilisateur, donc on ne peut
+/// pas le faire confiance pour injecter du HTML tel quel (XSS).
+fn render_markdown(source: &str) -> String {
+    let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
+    let parser = Parser::new_ext(source, options)
+        .filter(|event| !matches!(event, Event::Html(_) | Event::InlineHtml(_)));
+    let mut html_output = String::new();
+    pulldown_cmark::html::push_html(&mut html_output, parser);
+    html_output
+}
 
 /// Rôle de l'émetteur d'un message affiché dans le panneau.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,6 +91,16 @@ struct QuestionDraft {
     reason: String,
 }
 
+#[component]
+fn PendingAgent() -> impl IntoView {
+    view! {
+        <p class="self-start max-w-[80%] rounded-sm px-3 py-1.5 text-sm italic \
+                bg-blue-france-975 text-gray-600">
+            "L'agent réfléchit…"
+        </p>
+    }
+}
+
 /// Panneau de discussion avec l'agent IA : historique des échanges, zone de
 /// saisie et indicateur d'attente pendant l'exécution de la boucle
 /// agentique côté serveur.
@@ -99,6 +124,16 @@ pub fn AgentPanel(
     /// Invoqué avec les réponses du formulaire lorsque l'utilisateur valide.
     #[prop(optional)]
     on_respond: Option<Callback<InteractionResponse>>,
+    /// `true` si l'utilisateur a choisi d'accepter automatiquement toutes
+    /// les modifications proposées par l'agent, sans confirmation
+    /// individuelle. Si absent, la case à cocher correspondante n'est pas
+    /// affichée.
+    #[prop(optional, into)]
+    auto_accept: Option<Signal<bool>>,
+    /// Invoqué avec la nouvelle valeur lorsque l'utilisateur bascule la case
+    /// « accepter toutes les modifications ».
+    #[prop(optional)]
+    on_toggle_auto_accept: Option<Callback<bool>>,
 ) -> impl IntoView {
     let (draft, set_draft) = signal(String::new());
     let draft_answers = RwSignal::new(Vec::<QuestionDraft>::new());
@@ -133,6 +168,22 @@ pub fn AgentPanel(
             // En-tête
             <div class="px-3 py-2 border-b border-blue-france-925 bg-blue-france-975 flex-shrink-0">
                 <p class="text-sm font-bold text-blue-france">"Agent IA"</p>
+                {move || {
+                    match (auto_accept, on_toggle_auto_accept) {
+                        (Some(auto_accept), Some(on_toggle)) => Some(view! {
+                            <label class="flex items-center gap-2 mt-1 text-xs text-gray-700 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    class="size-4 accent-blue-france cursor-pointer"
+                                    prop:checked=move || auto_accept.get()
+                                    on:change=move |ev| on_toggle.run(event_target_checked(&ev))
+                                />
+                                "Accepter automatiquement toutes les modifications"
+                            </label>
+                        }.into_any()),
+                        _ => None,
+                    }
+                }}
             </div>
 
             // Historique des messages
@@ -141,31 +192,24 @@ pub fn AgentPanel(
                     each=move || messages.get().into_iter().enumerate()
                     key=|(index, _)| *index
                     children=move |(_, message)| {
-                        let (bubble_class, align_class) = match message.role {
-                            PanelRole::User => (
-                                "bg-blue-france text-white",
-                                "self-end",
-                            ),
-                            PanelRole::Assistant => (
-                                "bg-blue-france-975 text-gray-900",
-                                "self-start",
-                            ),
-                        };
-                        view! {
-                            <p class=format!(
-                                "{align_class} {bubble_class} max-w-[80%] rounded-sm px-3 py-1.5 text-sm"
-                            )>
-                                {message.content.clone()}
-                            </p>
+                        match message.role {
+                            PanelRole::User => view! {
+                                <p class="self-end bg-blue-france text-white \
+                                          max-w-[80%] rounded-sm px-3 py-1.5 text-sm">
+                                    {message.content.clone()}
+                                </p>
+                            }.into_any(),
+                            PanelRole::Assistant => view! {
+                                <div
+                                    class="markdown-content self-start bg-blue-france-975 text-gray-900 \
+                                           max-w-[80%] rounded-sm px-3 py-1.5 text-sm"
+                                    inner_html=render_markdown(&message.content)
+                                ></div>
+                            }.into_any(),
                         }
                     }
                 />
-                {move || pending.get().then(|| view! {
-                    <p class="self-start max-w-[80%] rounded-sm px-3 py-1.5 text-sm italic \
-                               bg-blue-france-975 text-gray-600">
-                        "L'agent réfléchit…"
-                    </p>
-                })}
+                {move || pending.get().then(|| view! { <PendingAgent/> })}
             </div>
 
             // Zone de saisie : formulaire structuré ou saisie texte libre.
@@ -277,8 +321,8 @@ pub fn AgentPanel(
 
                     let on_respond_cb = on_respond.clone();
                     let submit = move |_| {
-                        if let Some(cb) = &on_respond_cb {
-                            if let Some(req) = interaction.get() {
+                        if let Some(cb) = &on_respond_cb
+                            && let Some(req) = interaction.get() {
                                 let answers = draft_answers.with(|ds| {
                                     req.questions.iter().zip(ds.iter()).map(|(q, d)| PanelQuestionAnswer {
                                         question_id: q.id.clone(),
@@ -288,7 +332,6 @@ pub fn AgentPanel(
                                 });
                                 cb.run(InteractionResponse { answers });
                             }
-                        }
                     };
 
                     view! {

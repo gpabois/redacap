@@ -18,6 +18,7 @@ pub enum NodeSpec {
     LibelleChapitre,
     Article(Article),
     LibelleArticle,
+    ArticleBody,
     Annexe(Annexe),
     LibelleAnnexe,
     Paragraphe,
@@ -144,6 +145,7 @@ impl NodeKind {
             LibelleChapitre => NodeSpec::LibelleChapitre,
             Article => NodeSpec::Article(crate::kind::Article::default()),
             LibelleArticle => NodeSpec::LibelleArticle,
+            ArticleBody => NodeSpec::ArticleBody,
             Annexe => NodeSpec::Annexe(crate::kind::Annexe::default()),
             LibelleAnnexe => NodeSpec::LibelleAnnexe,
             Paragraphe => NodeSpec::Paragraphe,
@@ -168,6 +170,19 @@ impl NodeKind {
     pub fn is_numbered(self) -> bool {
         use NodeKind::*;
         matches!(self, Titre | Section | Chapitre | Article | Annexe)
+    }
+
+    /// Nœud conteneur qui porte le contenu (Paragraphe/Table/List…) d'un
+    /// nœud structurel, distinct de son libellé (voir [`label_child_kind`]).
+    /// [`BodyWrite::append_node`](crate::traits::node::BodyWrite::append_node)
+    /// y redirige automatiquement les nœuds de contenu qu'un tel nœud
+    /// n'accepte pas directement.
+    pub fn content_container_kind(self) -> Option<NodeKind> {
+        use NodeKind::*;
+        match self {
+            Article => Some(ArticleBody),
+            _ => None,
+        }
     }
 
     /// Groupe d'ordre dans Root (plus petit = plus tôt).
@@ -213,8 +228,9 @@ impl NodeKind {
             (LibelleSection, &[Plain, Span]),
             (Chapitre, &[LibelleChapitre, Section, Article]),
             (LibelleChapitre, &[Plain, Span]),
-            (Article, &[LibelleArticle, Paragraphe, Table, List]),
+            (Article, &[LibelleArticle, ArticleBody]),
             (LibelleArticle, &[Plain, Span]),
+            (ArticleBody, &[Paragraphe, Table, List]),
             (Annexe, &[LibelleAnnexe, Article]),
             (LibelleAnnexe, &[Plain, Span]),
             (Paragraphe, &[Plain, Span]),
@@ -260,11 +276,14 @@ mod tests {
         assert!(!Root.can_accept_child(Plain));
         assert!(!Root.can_accept_child(Paragraphe));
 
-        assert!(Article.can_accept_child(Paragraphe));
-        assert!(Article.can_accept_child(Table));
-        assert!(Article.can_accept_child(List));
         assert!(Article.can_accept_child(LibelleArticle));
+        assert!(Article.can_accept_child(ArticleBody));
+        assert!(!Article.can_accept_child(Paragraphe));
         assert!(!Article.can_accept_child(Section));
+
+        assert!(ArticleBody.can_accept_child(Paragraphe));
+        assert!(ArticleBody.can_accept_child(Table));
+        assert!(ArticleBody.can_accept_child(List));
 
         assert!(Plain.allowed_children().is_empty());
     }
@@ -288,6 +307,7 @@ mod tests {
         assert!(Table.is_content_node());
         assert!(!Titre.is_content_node());
         assert!(!Article.is_content_node());
+        assert!(!ArticleBody.is_content_node());
         assert!(!Root.is_content_node());
     }
 

@@ -1,28 +1,46 @@
 use leptos::prelude::*;
 
-use agent::{AgentPanel, PanelMessage};
+use agent::{AgentPanel, InteractionRequest, InteractionResponse, PanelMessage};
+use dsfr::BlocMarianneInline;
 
 use crate::{Body, BodyNodeId, NodeKind, NodeSpec};
 use crate::traits::node::{BodyRead, BodyWrite};
 use super::context::{expect_editor_context, provide_editor_context};
 use super::content::ContentSubtree;
 use super::header::EditorHeader;
-use super::widgets::{InlineEditableDiv, TOOLBAR_BTN_CLASS};
+use super::widgets::{InlineEditableDiv, ResizeHandle, TOOLBAR_BTN_CLASS};
+
+/// Largeur initiale du panneau agent IA, en pixels (équivalente à l'ancienne
+/// classe Tailwind fixe `w-80`).
+const AGENT_PANEL_DEFAULT_WIDTH: f64 = 320.0;
+/// Bornes de largeur autorisées lors du redimensionnement par glissement
+/// (voir [`ResizeHandle`]) : assez étroit pour laisser de la place au
+/// contenu principal, assez large pour rester lisible.
+const AGENT_PANEL_MIN_WIDTH: f64 = 240.0;
+const AGENT_PANEL_MAX_WIDTH: f64 = 640.0;
 
 /// Point d'entrée de l'éditeur d'acte légal.
 /// Fournit le [`EditorContext`](super::context::EditorContext) et affiche le corps.
-/// Accepte un [`Body::Direct`] ou un [`Body::Yrs`] (via `.into()`).
+/// Accepte un [`Body::Direct`] ou un [`Body::Yrs`], possédé par la page hôte
+/// (composant contrôlé) : elle peut ainsi continuer à écrire dans `body`
+/// après le montage, par exemple pour y appliquer des mises à jour Yrs
+/// reçues d'un salon de collaboration (voir `app::ws`).
 ///
 /// Le panneau agent IA est affiché en barre latérale droite lorsque les trois
 /// props `agent_messages`, `agent_pending` et `on_agent_send` sont fournis.
 /// La page hôte reste responsable de l'appel réel à l'agent et de la mise à
-/// jour de ces signaux en retour.
+/// jour de ces signaux en retour. `agent_interaction`/`on_agent_respond`
+/// relaient de la même façon le formulaire d'interaction de [`AgentPanel`].
 #[component]
 pub fn LegalActEditor(
-    body: Body,
-    /// Titre de l'arrêté affiché dans l'en-tête DSFR.
+    body: RwSignal<Body>,
+    /// Autorité signataire (ex. « PRÉFET DE LA RÉGION ÎLE-DE-FRANCE »),
+    /// affichée dans le bloc-marque en en-tête de la première page. `None`
+    /// tant que l'acte n'a pas d'autorité résolue (voir
+    /// [`crate::traits::act::LegalActMeta::autorite_id`]) : le bloc-marque
+    /// n'est alors pas affiché plutôt que d'inventer un texte.
     #[prop(optional, into)]
-    title: Option<String>,
+    autorite: Option<String>,
     /// Historique des messages échangés avec l'agent IA.
     #[prop(optional, into)]
     agent_messages: Option<Signal<Vec<PanelMessage>>>,
@@ -32,16 +50,47 @@ pub fn LegalActEditor(
     /// Appelé avec le texte saisi lorsque l'utilisateur envoie un message.
     #[prop(optional)]
     on_agent_send: Option<Callback<String>>,
+    /// Formulaire d'interaction à afficher (voir [`AgentPanel`]'s `interaction`).
+    #[prop(optional, into)]
+    agent_interaction: Option<Signal<Option<InteractionRequest>>>,
+    /// Appelé avec les réponses de l'utilisateur au formulaire d'interaction.
+    #[prop(optional)]
+    on_agent_respond: Option<Callback<InteractionResponse>>,
+    /// `true` si l'utilisateur a choisi d'accepter automatiquement toutes
+    /// les modifications proposées par l'agent (voir [`AgentPanel`]'s
+    /// `auto_accept`).
+    #[prop(optional, into)]
+    agent_auto_accept: Option<Signal<bool>>,
+    /// Appelé avec la nouvelle valeur lorsque l'utilisateur bascule la case
+    /// « accepter toutes les modifications ».
+    #[prop(optional)]
+    on_agent_toggle_auto_accept: Option<Callback<bool>>,
+    /// Appelé à chaque changement du nœud ciblé pour l'agent IA (bouton
+    /// « Cibler », voir [`super::context::EditorContext::agent_target`]),
+    /// pour que la page hôte le transmette au serveur (voir `app::ws::
+    /// RoomHandle::set_selection`). L'agent peut alors viser ce nœud via le
+    /// mot-clé `"selection"`, sans que l'utilisateur ait à en connaître
+    /// l'identifiant technique.
+    #[prop(optional)]
+    on_agent_target: Option<Callback<Option<BodyNodeId>>>,
 ) -> impl IntoView {
-    provide_editor_context(body);
+    let ctx = provide_editor_context(body);
+    if let Some(on_agent_target) = on_agent_target {
+        Effect::new(move |_| on_agent_target.run(ctx.agent_target.get()));
+    }
 
     let agent_cfg = match (agent_messages, agent_pending, on_agent_send) {
         (Some(msgs), Some(pending), Some(on_send)) => Some((msgs, pending, on_send)),
         _ => None,
     };
+    let agent_interaction = agent_interaction.unwrap_or_else(|| Signal::derive(|| None));
+    let on_agent_respond = on_agent_respond.unwrap_or_else(|| Callback::new(|_| {}));
+    let agent_auto_accept = agent_auto_accept.unwrap_or_else(|| Signal::derive(|| false));
+    let on_agent_toggle_auto_accept = on_agent_toggle_auto_accept.unwrap_or_else(|| Callback::new(|_| {}));
 
     let has_agent = agent_cfg.is_some();
     let show_agent = RwSignal::new(true);
+    let agent_panel_width = RwSignal::new(AGENT_PANEL_DEFAULT_WIDTH);
     let agent_panel_open = Signal::from(show_agent.read_only());
     let on_toggle_agent = Callback::new(move |()| {
         if has_agent {
@@ -50,32 +99,76 @@ pub fn LegalActEditor(
     });
 
     view! {
-        <div class="legal-act-editor flex flex-col min-h-screen text-base leading-relaxed">
-            <EditorHeader
-                title=title.unwrap_or_default()
-                has_agent=has_agent
-                agent_panel_open=agent_panel_open
-                on_toggle_agent=on_toggle_agent
-            />
+        <div class="legal-act-editor flex flex-col min-h-screen max-h-screen text-base leading-relaxed">
+            <div class="no-print">
+                <EditorHeader
+                    has_agent=has_agent
+                    agent_panel_open=agent_panel_open
+                    on_toggle_agent=on_toggle_agent
+                />
+            </div>
             <div class="flex flex-1 overflow-hidden">
-                <main class="flex-1 overflow-y-auto">
-                    <div class="max-w-4xl mx-auto py-8 px-6">
+                <main class="flex-1 overflow-y-auto bg-gray-200 print:bg-white print:overflow-visible">
+                    <div class="legal-act-page my-4 mx-auto bg-white">
+                        {autorite.map(|a| view! {
+                            <BlocMarianneInline autorite=a class="mb-8"/>
+                        })}
+                        <EditActTitle/>
                         <EditBody/>
                     </div>
                 </main>
                 {move || (show_agent.get() && has_agent).then(|| {
                     let (msgs, pending, on_send) = agent_cfg.expect("has_agent est vrai");
                     view! {
-                        <aside class="w-80 shrink-0 border-l border-gray-200 overflow-hidden flex flex-col">
-                            <AgentPanel
-                                messages=msgs
-                                pending=pending
-                                on_send=move |text: String| on_send.run(text)
+                        <div class="no-print contents">
+                            <ResizeHandle
+                                width=agent_panel_width
+                                min_width=AGENT_PANEL_MIN_WIDTH
+                                max_width=AGENT_PANEL_MAX_WIDTH
                             />
-                        </aside>
+                            <aside
+                                class="shrink-0 overflow-hidden flex flex-col"
+                                style:width=move || format!("{}px", agent_panel_width.get())
+                            >
+                                <AgentTargetIndicator/>
+                                <AgentPanel
+                                    messages=msgs
+                                    pending=pending
+                                    on_send=move |text: String| on_send.run(text)
+                                    interaction=agent_interaction
+                                    on_respond=on_agent_respond
+                                    auto_accept=agent_auto_accept
+                                    on_toggle_auto_accept=on_agent_toggle_auto_accept
+                                />
+                            </aside>
+                        </div>
                     }
                 })}
             </div>
+        </div>
+    }
+}
+
+// ── Titre de l'acte ──────────────────────────────────────────────────────────
+
+/// Titre de l'acte (ex. « Arrêté préfectoral portant autorisation
+/// d'exploiter... »), édité en place en tête du document. Distinct des
+/// nœuds `Titre` du corps (subdivisions numérotées « Titre I », « Titre
+/// II »...), c'est une propriété du document dans son ensemble portée
+/// directement par [`Body::title`]/[`Body::set_title`] plutôt que par un
+/// nœud (voir [`crate::traits::node::BodyRead::title`]).
+#[component]
+fn EditActTitle() -> impl IntoView {
+    let ctx = expect_editor_context();
+    let title = Signal::derive(move || ctx.body.with(|b| b.title()));
+
+    view! {
+        <div class="text-center font-bold text-lg my-6 uppercase tracking-wide">
+            <InlineEditableDiv
+                text=title
+                on_save=move |s| ctx.body.update(|b| b.set_title(&s))
+                prevent_newlines=true
+            />
         </div>
     }
 }
@@ -168,6 +261,81 @@ fn EditBody() -> impl IntoView {
     }
 }
 
+// ── Ciblage pour l'agent IA ──────────────────────────────────────────────────
+
+/// Bandeau affiché au-dessus du panneau agent quand un nœud est ciblé (voir
+/// [`TargetButton`]) : rappelle à l'utilisateur ce que l'agent visera s'il
+/// utilise « ce considérant »/« cet article »... dans sa demande, en des
+/// termes qu'il comprend (type + numéro), jamais l'identifiant technique.
+#[component]
+fn AgentTargetIndicator() -> impl IntoView {
+    let ctx = expect_editor_context();
+    let label = move || {
+        ctx.agent_target.get().map(|id| {
+            ctx.body.with(|b| {
+                let kind = b.kind_of(id);
+                match b.spec_of(id).number() {
+                    Some(n) => format!("{kind} {n}"),
+                    None => kind.to_string(),
+                }
+            })
+        })
+    };
+
+    view! {
+        {move || label().map(|text| view! {
+            <div class="flex items-center justify-between gap-2 px-3 py-1.5 text-xs \
+                        bg-blue-france-975 text-blue-france border-b border-blue-france-925">
+                <span>"Cible pour l'agent IA : " <strong>{text}</strong></span>
+                <button
+                    type="button"
+                    class="text-blue-france hover:underline cursor-pointer shrink-0"
+                    on:click=move |_| ctx.agent_target.set(None)
+                >"Retirer"</button>
+            </div>
+        })}
+    }
+}
+
+/// Supprime `node_id`, et retire le ciblage agent s'il pointait dessus (voir
+/// [`super::context::EditorContext::agent_target`]) — évite qu'une cible
+/// reste accrochée à un nœud qui n'existe plus.
+fn remove_targetable_node(ctx: super::context::EditorContext, node_id: BodyNodeId) {
+    ctx.body.update(|b| {
+        let _ = b.remove_node(node_id);
+    });
+    if ctx.agent_target.get_untracked() == Some(node_id) {
+        ctx.agent_target.set(None);
+    }
+}
+
+/// Bouton « Cibler » : désigne `node_id` comme la cible de l'agent IA (voir
+/// [`super::context::EditorContext::agent_target`]), pour que l'utilisateur
+/// puisse dire « complète ce considérant » sans jamais avoir à connaître ou
+/// saisir l'identifiant technique du nœud. Un second clic retire le
+/// ciblage.
+#[component]
+fn TargetButton(node_id: BodyNodeId) -> impl IntoView {
+    let ctx = expect_editor_context();
+    let active = move || ctx.agent_target.get() == Some(node_id);
+
+    view! {
+        <button
+            type="button"
+            title="Cibler ce nœud pour l'agent IA"
+            class="no-print text-xs shrink-0 transition-colors"
+            class:opacity-0=move || !active()
+            class:group-hover:opacity-100=move || !active()
+            class:text-blue-france=active
+            class:text-gray-400=move || !active()
+            class:hover:text-blue-france=move || !active()
+            on:click=move |_| ctx.toggle_agent_target(node_id)
+        >
+            {move || if active() { "Ciblé ✓" } else { "Cibler" }}
+        </button>
+    }
+}
+
 // ── Nœuds textuels (Visa / Considérant / Sur) ────────────────────────────────
 
 fn plain_text_signal(node_id: BodyNodeId) -> (Option<BodyNodeId>, Signal<String>) {
@@ -206,9 +374,10 @@ fn EditVisa(node_id: BodyNodeId) -> impl IntoView {
                     on_save=move |s| save_plain_text(plain_id, s)
                 />
             </div>
+            <TargetButton node_id=node_id/>
             <button
-                class="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 text-xs shrink-0"
-                on:click=move |_| { ctx.body.update(|b| { let _ = b.remove_node(node_id); }); }
+                class="no-print opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 text-xs shrink-0"
+                on:click=move |_| remove_targetable_node(ctx, node_id)
             >"×"</button>
         </div>
     }
@@ -228,9 +397,10 @@ fn EditConsiderant(node_id: BodyNodeId) -> impl IntoView {
                     on_save=move |s| save_plain_text(plain_id, s)
                 />
             </div>
+            <TargetButton node_id=node_id/>
             <button
-                class="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 text-xs shrink-0"
-                on:click=move |_| { ctx.body.update(|b| { let _ = b.remove_node(node_id); }); }
+                class="no-print opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 text-xs shrink-0"
+                on:click=move |_| remove_targetable_node(ctx, node_id)
             >"×"</button>
         </div>
     }
@@ -250,9 +420,10 @@ fn EditSur(node_id: BodyNodeId) -> impl IntoView {
                     on_save=move |s| save_plain_text(plain_id, s)
                 />
             </div>
+            <TargetButton node_id=node_id/>
             <button
-                class="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 text-xs shrink-0"
-                on:click=move |_| { ctx.body.update(|b| { let _ = b.remove_node(node_id); }); }
+                class="no-print opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 text-xs shrink-0"
+                on:click=move |_| remove_targetable_node(ctx, node_id)
             >"×"</button>
         </div>
     }
@@ -289,12 +460,11 @@ fn EditTitre(node_id: BodyNodeId) -> impl IntoView {
                 <div class="font-bold text-sm tracking-widest uppercase text-gray-700">
                     {move || format!("Titre {}", number())}
                 </div>
-                {move || label_id().map(|lid| view! {
-                    <EditLabel node_id=lid/>
-                })}
+                {move || label_id().map(|lid| view! { <EditLabel node_id=lid/> })}
+                <TargetButton node_id=node_id/>
                 <button
-                    class="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 text-xs"
-                    on:click=move |_| { ctx.body.update(|b| { let _ = b.remove_node(node_id); }); }
+                    class="no-print opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 text-xs"
+                    on:click=move |_| remove_targetable_node(ctx, node_id)
                 >"×"</button>
             </div>
             <div class="ml-4 space-y-2">
@@ -338,12 +508,11 @@ fn EditChapitre(node_id: BodyNodeId) -> impl IntoView {
                 <div class="font-semibold text-sm tracking-wide uppercase text-gray-700">
                     {move || format!("Chapitre {}", number())}
                 </div>
-                {move || label_id().map(|lid| view! {
-                    <EditLabel node_id=lid/>
-                })}
+                {move || label_id().map(|lid| view! { <EditLabel node_id=lid/> })}
+                <TargetButton node_id=node_id/>
                 <button
-                    class="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 text-xs"
-                    on:click=move |_| { ctx.body.update(|b| { let _ = b.remove_node(node_id); }); }
+                    class="no-print opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 text-xs"
+                    on:click=move |_| remove_targetable_node(ctx, node_id)
                 >"×"</button>
             </div>
             <div class="ml-4 space-y-2">
@@ -384,12 +553,11 @@ fn EditSection(node_id: BodyNodeId) -> impl IntoView {
                 <div class="font-medium text-sm tracking-wide text-gray-700">
                     {move || format!("Section {}", number())}
                 </div>
-                {move || label_id().map(|lid| view! {
-                    <EditLabel node_id=lid/>
-                })}
+                {move || label_id().map(|lid| view! { <EditLabel node_id=lid/> })}
+                <TargetButton node_id=node_id/>
                 <button
-                    class="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 text-xs"
-                    on:click=move |_| { ctx.body.update(|b| { let _ = b.remove_node(node_id); }); }
+                    class="no-print opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 text-xs"
+                    on:click=move |_| remove_targetable_node(ctx, node_id)
                 >"×"</button>
             </div>
 
@@ -419,6 +587,10 @@ fn EditArticle(node_id: BodyNodeId) -> impl IntoView {
         b.children_of(node_id).into_iter()
             .find(|&id| b.kind_of(id) == NodeKind::LibelleArticle)
     });
+    let body_id = move || ctx.body.with(|b| {
+        b.children_of(node_id).into_iter()
+            .find(|&id| b.kind_of(id) == NodeKind::ArticleBody)
+    });
 
     view! {
         <div class="my-4 group border-l-2 border-gray-200 pl-4">
@@ -427,12 +599,13 @@ fn EditArticle(node_id: BodyNodeId) -> impl IntoView {
                     {move || format!("Article {}", number())}
                 </span>
                 {move || label_id().map(|lid| view! { <EditLabel node_id=lid/> })}
+                <TargetButton node_id=node_id/>
                 <button
-                    class="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 text-xs ml-auto shrink-0"
-                    on:click=move |_| { ctx.body.update(|b| { let _ = b.remove_node(node_id); }); }
+                    class="no-print opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 text-xs ml-auto shrink-0"
+                    on:click=move |_| remove_targetable_node(ctx, node_id)
                 >"×"</button>
             </div>
-            <ContentSubtree node_id=node_id/>
+            {move || body_id().map(|bid| view! { <ContentSubtree node_id=bid/> })}
             <div class="flex gap-2 mt-2">
                 <button class=TOOLBAR_BTN_CLASS on:click=move |_| {
                     ctx.body.update(|b| { let _ = b.append_node(node_id, NodeSpec::Paragraphe); });
@@ -465,14 +638,11 @@ fn EditAnnexe(node_id: BodyNodeId) -> impl IntoView {
                 <div class="font-bold text-sm uppercase tracking-widest text-gray-700">
                     {move || format!("Annexe {}", number())}
                 </div>
-                {move || label_id().map(|lid| view! {
-                    <div class="flex-1 text-left font-medium text-sm mb-2 px-2">
-                        <EditLabel node_id=lid/>
-                    </div>
-                })}
+                {move || label_id().map(|lid| view! { <EditLabel node_id=lid/> })}
+                <TargetButton node_id=node_id/>
                 <button
-                    class="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 text-xs"
-                    on:click=move |_| { ctx.body.update(|b| { let _ = b.remove_node(node_id); }); }
+                    class="no-print opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 text-xs"
+                    on:click=move |_| remove_targetable_node(ctx, node_id)
                 >"×"</button>
             </div>
 
@@ -510,7 +680,7 @@ pub fn EditLabel(node_id: BodyNodeId) -> impl IntoView {
 
     view! {
         <InlineEditableDiv
-            class="flex-1 px-2"
+            class="flex-1 mx-4 font-semibold text-sm tracking-wide uppercase"
             text=text
             on_save=move |s| save_plain_text(plain_id, s)
             prevent_newlines=true

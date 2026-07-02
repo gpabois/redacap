@@ -2,8 +2,19 @@ use leptos::{IntoView, component, view};
 use leptos::prelude::*;
 
 #[component]
-pub fn BlocMarianneInline(autorite: String, class: &'static str) -> impl IntoView {
-    let lines = autorite
+pub fn BlocMarianne(children: Children, #[prop(optional)] class: &'static str) -> impl IntoView {
+    view! {
+        <div class={class}>
+            <p class="fr-logo">
+                {children()}
+            </p>
+        </div>
+    }
+}
+
+#[component]
+pub fn BlocMarianneInline<S: ToString>(autorite: S, #[prop(optional)] class: &'static str) -> impl IntoView {
+    let lines = autorite.to_string()
         .split('\n')
         .enumerate()
         .map(|(index, line)| {

@@ -9,18 +9,16 @@
 
 use leptos::prelude::*;
 
-use dsfr::{Button, ButtonGroup, ButtonVariant, Header};
+use dsfr::{Button, ButtonGroup, ButtonVariant, Header, SubHeader};
 
 use crate::{NodeKind, NodeSpec};
 use crate::traits::node::{BodyRead, BodyWrite};
 use super::context::expect_editor_context;
+use super::widgets::FormatToolbar;
 
 /// En-tête de l'éditeur : bloc Marianne + boutons d'action + portail contextuel.
 #[component]
 pub fn EditorHeader(
-    /// Titre de l'arrêté affiché comme accroche dans l'en-tête.
-    #[prop(optional, into)]
-    title: String,
     /// Afficher le bouton de bascule du panneau agent IA.
     #[prop(optional)]
     has_agent: bool,
@@ -42,79 +40,96 @@ pub fn EditorHeader(
 
     let portal_actions = move || ctx.portal_actions.get();
 
-    let tagline = if title.is_empty() {
-        "Éditeur d'arrêté préfectoral".to_string()
-    } else {
-        title
-    };
-
     view! {
-        <Header service_title="Redacap" service_tagline=tagline>
+        <Header service_title="Redac'Ap" service_tagline="Éditeur d'arrêté préfectoral".to_string()>
             // ── Actions racine ────────────────────────────────────────────
-            <ButtonGroup>
-                <Button
-                    variant=ButtonVariant::Secondary
-                    size=dsfr::Size::Sm
-                    on_click=move |_| {
-                        ctx.body.update(|b| { let _ = b.append_node(root, NodeSpec::Visa); });
-                    }
-                >
-                    "+ Visa"
-                </Button>
-                <Button
-                    variant=ButtonVariant::Secondary
-                    size=dsfr::Size::Sm
-                    on_click=move |_| {
-                        ctx.body.update(|b| { let _ = b.append_node(root, NodeSpec::Considerant); });
-                    }
-                >
-                    "+ Considérant"
-                </Button>
-                <Show when=move || !has_sur()>
+            <SubHeader slot>
+                <ButtonGroup class="divide-x">
                     <Button
-                        variant=ButtonVariant::Secondary
+                        variant=ButtonVariant::TertiaryNoOutline
                         size=dsfr::Size::Sm
                         on_click=move |_| {
-                            ctx.body.update(|b| { let _ = b.append_node(root, NodeSpec::Sur); });
+                            ctx.body.update(|b| { let _ = b.append_node(root, NodeSpec::Visa); });
                         }
                     >
-                        "+ Sur"
+                        "+ Visa"
                     </Button>
+                    <Button
+                        variant=ButtonVariant::TertiaryNoOutline
+                        size=dsfr::Size::Sm
+                        on_click=move |_| {
+                            ctx.body.update(|b| { let _ = b.append_node(root, NodeSpec::Considerant); });
+                        }
+                    >
+                        "+ Considérant"
+                    </Button>
+                    <Show when=move || !has_sur()>
+                        <Button
+                            variant=ButtonVariant::TertiaryNoOutline
+                            size=dsfr::Size::Sm
+                            on_click=move |_| {
+                                ctx.body.update(|b| { let _ = b.append_node(root, NodeSpec::Sur); });
+                            }
+                        >
+                            "+ Sur"
+                        </Button>
+                    </Show>
+                    <Button
+                        variant=ButtonVariant::TertiaryNoOutline
+                        size=dsfr::Size::Sm
+                        on_click=move |_| {
+                            ctx.body.update(|b| {
+                                let _ = b.append_node(root, NodeSpec::Article(Default::default()));
+                            });
+                        }
+                    >
+                        "+ Article"
+                    </Button>
+                    <Button
+                        variant=ButtonVariant::TertiaryNoOutline
+                        size=dsfr::Size::Sm
+                        on_click=move |_| {
+                            ctx.body.update(|b| {
+                                let _ = b.append_node(root, NodeSpec::Titre(Default::default()));
+                            });
+                        }
+                    >
+                        "+ Titre"
+                    </Button>
+                    <Button
+                        variant=ButtonVariant::TertiaryNoOutline
+                        size=dsfr::Size::Sm
+                        on_click=move |_| {
+                            ctx.body.update(|b| {
+                                let _ = b.append_node(root, NodeSpec::Annexe(Default::default()));
+                            });
+                        }
+                    >
+                        "+ Annexe"
+                    </Button>
+                    // ── Bascule panneau agent ─────────────────────────────────────
+                    {has_agent.then(|| view! {
+                        <Button
+                            variant=ButtonVariant::TertiaryNoOutline
+                            size=dsfr::Size::Sm
+                            on_click=move |_| on_toggle_agent.run(())
+                        >
+                            {move || if agent_panel_open.get() { "Masquer l'agent" } else { "Agent IA" }}
+                        </Button>
+                    })}
+                </ButtonGroup>
+
+                // ── Outils de mise en forme (nœud contenant un span) ──────
+                <Show when=move || ctx.content_focus.get()>
+                    <span class="inline-flex items-center align-middle gap-2 ml-2">
+                        <span class="w-px h-6 bg-gray-300 inline-block"/>
+                        <FormatToolbar/>
+                    </span>
                 </Show>
-                <Button
-                    variant=ButtonVariant::Secondary
-                    size=dsfr::Size::Sm
-                    on_click=move |_| {
-                        ctx.body.update(|b| {
-                            let _ = b.append_node(root, NodeSpec::Article(Default::default()));
-                        });
-                    }
-                >
-                    "+ Article"
-                </Button>
-                <Button
-                    variant=ButtonVariant::Secondary
-                    size=dsfr::Size::Sm
-                    on_click=move |_| {
-                        ctx.body.update(|b| {
-                            let _ = b.append_node(root, NodeSpec::Titre(Default::default()));
-                        });
-                    }
-                >
-                    "+ Titre"
-                </Button>
-                <Button
-                    variant=ButtonVariant::Secondary
-                    size=dsfr::Size::Sm
-                    on_click=move |_| {
-                        ctx.body.update(|b| {
-                            let _ = b.append_node(root, NodeSpec::Annexe(Default::default()));
-                        });
-                    }
-                >
-                    "+ Annexe"
-                </Button>
-            </ButtonGroup>
+
+            </SubHeader>
+
+
 
             // ── Portail contextuel ────────────────────────────────────────
             <Show when=move || !portal_actions().is_empty()>
@@ -139,17 +154,6 @@ pub fn EditorHeader(
                 </ButtonGroup>
             </Show>
 
-            // ── Bascule panneau agent ─────────────────────────────────────
-            {has_agent.then(|| view! {
-                <div class="w-px h-6 bg-gray-300 shrink-0"/>
-                <Button
-                    variant=ButtonVariant::Secondary
-                    size=dsfr::Size::Sm
-                    on_click=move |_| on_toggle_agent.run(())
-                >
-                    {move || if agent_panel_open.get() { "Masquer l'agent" } else { "Agent IA" }}
-                </Button>
-            })}
         </Header>
     }
 }

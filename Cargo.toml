@@ -5,6 +5,9 @@ members = ["agent","app", "content", "frontend", "dsfr", "legal_act", "server", 
 [workspace.dependencies]
 leptos = { version = "0.8.0" }
 leptos_router = { version = "0.8.0" }
+leptos_ws = { version = "0.9.8" }
+leptos_axum = { version = "0.8.0" }
+leptos_meta = { version = "0.8.0" }
 axum = { version = "0.8.0" }
 console_error_panic_hook = { version = "0.1" }
 console_log = "1.0.0"
@@ -12,8 +15,6 @@ log = "0.4.27"
 simple_logger = "5.0.0"
 tower = { version = "0.5.2", features = ["full"] }
 tower-http = { version = "0.6.4", features = ["full"] }
-leptos_axum = { version = "0.8.0" }
-leptos_meta = { version = "0.8.0" }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 wasm-bindgen = { version = "0.2.106" }
 serde_json = "1.0.150"
@@ -22,7 +23,7 @@ indextree = "4.8.1"
 getrandom = { version = "0.2", features = ["js"] }
 rand      = { version = "0.8", features = ["small_rng"] }
 rand_xoshiro = "0.8.1"
-yrs = "0.27.2"
+yrs = { version = "0.27.2", features = ["sync"] }
 strum = "0.26"
 strum_macros = "0.26"
 anyhow = "1.0.102"
@@ -33,7 +34,8 @@ bytemuck = { version = "1.14", features = ["derive"] }
 async-trait = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 thiserror = "2.0"
-
+dotenv = "0.15.0"
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 [profile.dev]
 opt-level = 0       # Pas d'optimisation pour garder le code fidèle
 debug = true        # Force la génération des symboles de débogage

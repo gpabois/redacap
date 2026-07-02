@@ -12,6 +12,7 @@ use content::ListMarker;
 /// `BodyNodeId` (converti en chaîne) dans la map racine `nodes`.
 pub struct YrsBody {
     doc: Doc,
+    body: yrs::MapRef,
     nodes: yrs::MapRef,
     root: BodyNodeId,
 }
@@ -28,9 +29,10 @@ impl YrsBody {
         let mut txn = doc.transact_mut();
         let nodes = body.insert(&mut txn, "nodes", MapPrelim::default());
         body.insert(&mut txn, "root", root.to_string());
+        body.insert(&mut txn, "title", "");
         nodes.insert(&mut txn, root.to_string(), node_prelim(&NodeSpec::Root, None));
         drop(txn);
-        Self { doc, nodes, root }
+        Self { doc, body, nodes, root }
     }
 
     pub fn open(doc: Doc, body: yrs::MapRef) -> anyhow::Result<Self> {
@@ -43,7 +45,7 @@ impl YrsBody {
             bail!("champ 'nodes' manquant ou invalide dans le nœud body yrs");
         };
         drop(txn);
-        Ok(Self { doc, nodes, root })
+        Ok(Self { doc, body, nodes, root })
     }
 
     pub fn doc(&self) -> &Doc {
@@ -115,6 +117,14 @@ impl BodyRead for YrsBody {
         let txn = self.doc.transact();
         let node = self.node_map(&txn, id).unwrap_or_else(|| panic!("nœud inconnu : {id}"));
         read_spec(&node, &txn)
+    }
+
+    fn title(&self) -> String {
+        let txn = self.doc.transact();
+        match self.body.get(&txn, "title") {
+            Some(Out::Any(Any::String(s))) => s.to_string(),
+            _ => String::new(),
+        }
     }
 }
 
@@ -217,6 +227,11 @@ impl BodyWrite for YrsBody {
         write_spec(&node, &mut txn, &spec);
         Ok(())
     }
+
+    fn set_title(&mut self, title: &str) {
+        let mut txn = self.doc.transact_mut();
+        self.body.insert(&mut txn, "title", title);
+    }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -281,6 +296,7 @@ fn read_spec(node: &yrs::MapRef, txn: &impl ReadTxn) -> NodeSpec {
         LibelleChapitre => NodeSpec::LibelleChapitre,
         Article => NodeSpec::Article(crate::kind::Article { number: read_u32(node, txn, "number") }),
         LibelleArticle => NodeSpec::LibelleArticle,
+        ArticleBody => NodeSpec::ArticleBody,
         Annexe => NodeSpec::Annexe(crate::kind::Annexe { number: read_u32(node, txn, "number") }),
         LibelleAnnexe => NodeSpec::LibelleAnnexe,
         Paragraphe => NodeSpec::Paragraphe,
@@ -395,6 +411,33 @@ mod tests {
         assert_eq!(body.kind_of(article), NodeKind::Article);
         let leaf = body.first_leaf_of(article);
         assert_eq!(body.kind_of(leaf), NodeKind::Plain);
+    }
+
+    #[test]
+    fn test_title_defaults_to_empty_and_is_settable() {
+        let mut body = YrsBody::new();
+        assert_eq!(body.title(), "");
+        body.set_title("Arrêté préfectoral portant autorisation d'exploiter");
+        assert_eq!(body.title(), "Arrêté préfectoral portant autorisation d'exploiter");
+    }
+
+    #[test]
+    fn test_title_syncs_to_remote_doc() {
+        use yrs::updates::decoder::Decode;
+
+        let mut writer = YrsBody::new();
+        writer.set_title("Titre de l'acte");
+
+        let update = writer.doc().transact().encode_diff_v1(&yrs::StateVector::default());
+        let remote_doc = Doc::new();
+        remote_doc
+            .transact_mut()
+            .apply_update(yrs::Update::decode_v1(&update).unwrap())
+            .unwrap();
+
+        let remote_body_map = remote_doc.get_or_insert_map("body");
+        let reader = YrsBody::open(remote_doc, remote_body_map).unwrap();
+        assert_eq!(reader.title(), "Titre de l'acte");
     }
 
     #[test]

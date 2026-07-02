@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120" role="img" aria-label="Arrêtés préfectoraux">
+  <rect x="30" y="16" width="60" height="88" rx="6" fill="#000091"></rect>
+  <rect x="40" y="34" width="40" height="7" rx="3.5" fill="#ffffff"></rect>
+  <rect x="40" y="48" width="40" height="7" rx="3.5" fill="#ffffff"></rect>
+  <circle cx="60" cy="80" r="20" fill="#ffffff"></circle>
+  <text x="60" y="88" text-anchor="middle" font-family="Georgia, &#39;Times New Roman&#39;, serif" font-weight="700" font-size="22" fill="#000091">RF</text>
+</svg>
