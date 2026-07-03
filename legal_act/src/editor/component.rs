@@ -611,19 +611,6 @@ fn EditArticle(node_id: BodyNodeId) -> impl IntoView {
                 >"×"</button>
             </div>
             {move || body_id().map(|bid| view! { <ContentSubtree node_id=bid/> })}
-            <div class="flex gap-2 mt-2">
-                <button class=TOOLBAR_BTN_CLASS on:click=move |_| {
-                    ctx.body.update(|b| { let _ = b.append_node(node_id, NodeSpec::Paragraphe); });
-                }>"+ Paragraphe"</button>
-                <button class=TOOLBAR_BTN_CLASS on:click=move |_| {
-                    ctx.body.update(|b| {
-                        let _ = b.append_node(node_id, NodeSpec::List(Default::default()));
-                    });
-                }>"+ Liste"</button>
-                <button class=TOOLBAR_BTN_CLASS on:click=move |_| {
-                    ctx.body.update(|b| { let _ = b.append_node(node_id, NodeSpec::Table); });
-                }>"+ Tableau"</button>
-            </div>
         </div>
     }
 }

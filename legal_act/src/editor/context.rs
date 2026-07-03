@@ -62,6 +62,15 @@ pub struct EditorContext {
     /// outils de mise en forme (Barré/Gras/Italique) dans le sous-en-tête et
     /// les masquer dès qu'aucun nœud n'est focus.
     pub content_focus: RwSignal<bool>,
+    /// Identifiant du nœud de contenu dont le [`super::widgets::RichEditableDiv`]
+    /// a actuellement le focus clavier. `None` si aucun. Utilisé par
+    /// [`super::header::ContentToolbar`] pour afficher des boutons contextuels.
+    pub content_focus_node: RwSignal<Option<BodyNodeId>>,
+    /// Requête de focus programmatique : `Some((node_id, at_end))` demande au
+    /// [`super::widgets::RichEditableDiv`] dont `focus_node_id == node_id` de
+    /// prendre le focus. Quand `at_end` est vrai, le curseur est placé à la
+    /// fin du contenu (utile après une fusion).
+    pub content_focus_request: RwSignal<Option<(BodyNodeId, bool)>>,
 }
 
 impl EditorContext {
@@ -72,7 +81,15 @@ impl EditorContext {
             agent_target: RwSignal::new(None),
             portal_actions: RwSignal::new(Vec::new()),
             content_focus: RwSignal::new(false),
+            content_focus_node: RwSignal::new(None),
+            content_focus_request: RwSignal::new(None),
         }
+    }
+
+    /// Demande le focus programmatique sur `node_id`.
+    /// Si `at_end` est vrai, le curseur est placé à la fin du contenu.
+    pub fn request_focus(&self, node_id: BodyNodeId, at_end: bool) {
+        self.content_focus_request.set(Some((node_id, at_end)));
     }
 
     /// Cible `node_id` pour l'agent IA, ou retire la cible si `node_id`

@@ -3,6 +3,7 @@ use leptos::prelude::*;
 use web_sys::wasm_bindgen::JsCast;
 use web_sys::HtmlDocument;
 
+use crate::BodyNodeId;
 use super::context::expect_editor_context;
 
 pub(super) const TOOLBAR_BTN_CLASS: &str =
@@ -119,6 +120,63 @@ pub(super) fn InlineEditableDiv(
     }
 }
 
+// ── Utilitaires curseur / sélection ───────────────────────────────────────────
+
+/// Renvoie `true` si le curseur est collapsé tout au début du `div`.
+fn cursor_at_document_start(el: &web_sys::HtmlDivElement) -> bool {
+    let Ok(Some(sel)) = document().get_selection() else { return false };
+    if !sel.is_collapsed() { return false }
+    if sel.range_count() == 0 { return false }
+    let Ok(range) = sel.get_range_at(0) else { return false };
+    if range.start_offset().unwrap_or(1) != 0 { return false }
+    let Ok(container) = range.start_container() else { return false };
+    let el_node: &web_sys::Node = el.unchecked_ref();
+    let mut node = container;
+    loop {
+        if node.is_same_node(Some(el_node)) { return true }
+        if node.previous_sibling().is_some() { return false }
+        match node.parent_node() {
+            Some(p) => node = p,
+            None => return false,
+        }
+    }
+}
+
+/// Renvoie `true` si le curseur est collapsé tout à la fin du `div`.
+fn cursor_at_document_end(el: &web_sys::HtmlDivElement) -> bool {
+    let Ok(Some(sel)) = document().get_selection() else { return false };
+    if !sel.is_collapsed() { return false }
+    if sel.range_count() == 0 { return false }
+    let Ok(range) = sel.get_range_at(0) else { return false };
+    let Ok(container) = range.start_container() else { return false };
+    let offset = range.start_offset().unwrap_or(0) as usize;
+    let text_len = container.text_content().unwrap_or_default().encode_utf16().count();
+    if offset != text_len { return false }
+    let el_node: &web_sys::Node = el.unchecked_ref();
+    let mut node = container;
+    loop {
+        if node.is_same_node(Some(el_node)) { return true }
+        if node.next_sibling().is_some() { return false }
+        match node.parent_node() {
+            Some(p) => node = p,
+            None => return false,
+        }
+    }
+}
+
+/// Place le curseur à la fin de tout le contenu du `div`.
+pub(super) fn set_cursor_to_end(el: &web_sys::HtmlDivElement) {
+    let doc = document();
+    let Ok(range) = doc.create_range() else { return };
+    let el_node: &web_sys::Node = el.unchecked_ref();
+    if range.select_node_contents(el_node).is_err() { return }
+    range.collapse_with_to_start(false);
+    if let Ok(Some(sel)) = doc.get_selection() {
+        let _ = sel.remove_all_ranges();
+        let _ = sel.add_range(&range);
+    }
+}
+
 // ── Barre de formatage ────────────────────────────────────────────────────────
 
 fn exec_format_command(cmd: &str) {
@@ -162,6 +220,19 @@ pub(super) fn FormatToolbar() -> impl IntoView {
 /// `<u>`, `<s>`). Affiche la barre de formatage lorsqu'il est en focus.
 /// Synchronise signal → DOM hors focus ; appelle `on_save` avec l'`innerHTML`
 /// au `blur`.
+///
+/// `focus_node_id` — identifiant du nœud du corps représenté par ce div :
+/// au focus, il est poussé dans [`super::context::EditorContext::content_focus_node`]
+/// pour que la barre de contenu contextuelle puisse l'afficher.
+///
+/// `on_enter` — touche Entrée : sauvegarde le contenu puis déclenche le callback.
+/// `on_backspace_start` — Backspace avec le curseur au tout début du div.
+/// `on_delete_end` — Delete avec le curseur à la toute fin du div.
+///
+/// Le focus programmatique passe par
+/// [`super::context::EditorContext::content_focus_request`] : quand ce signal
+/// contient `Some((focus_node_id, at_end))`, le div se met en focus et, si
+/// `at_end`, place le curseur à la fin.
 #[component]
 pub(super) fn RichEditableDiv(
     #[prop(into)]
@@ -169,19 +240,45 @@ pub(super) fn RichEditableDiv(
     on_save: impl Fn(String) + Clone + Send + Sync + 'static,
     #[prop(optional)]
     class: &'static str,
+    /// Nœud du corps représenté par ce div (pour le suivi du focus contextuel).
+    #[prop(optional)]
+    focus_node_id: Option<BodyNodeId>,
+    /// Callback appelé quand Entrée est pressée (annule l'action navigateur).
+    #[prop(optional)]
+    on_enter: Option<Callback<()>>,
+    /// Callback appelé quand Backspace est pressé et le curseur est au début.
+    #[prop(optional)]
+    on_backspace_start: Option<Callback<()>>,
+    /// Callback appelé quand Delete est pressé et le curseur est à la fin.
+    #[prop(optional)]
+    on_delete_end: Option<Callback<()>>,
 ) -> impl IntoView {
     let ctx = expect_editor_context();
     let div_ref = NodeRef::<html::Div>::new();
     let is_focused = RwSignal::new(false);
 
-    // Synchronise le signal → DOM chaque fois que html change et que l'élément
-    // n'est pas en cours d'édition. Fonctionne aussi au premier montage grâce
-    // au tracking de `div_ref`.
+    let on_save_blur = on_save.clone();
+    let on_save_key = on_save;
+
+    // Synchronise le signal → DOM hors focus.
     Effect::new(move |_| {
         if let Some(el) = div_ref.get() {
             let h = html.get();
             if !is_focused.get_untracked() && el.inner_html() != h {
                 el.set_inner_html(&h);
+            }
+        }
+    });
+
+    // Focus programmatique via content_focus_request.
+    Effect::new(move |_| {
+        if let Some((req_id, at_end)) = ctx.content_focus_request.get() {
+            if Some(req_id) == focus_node_id {
+                if let Some(el) = div_ref.get() {
+                    let _ = el.focus();
+                    if at_end { set_cursor_to_end(&el); }
+                    ctx.content_focus_request.set(None);
+                }
             }
         }
     });
@@ -198,12 +295,54 @@ pub(super) fn RichEditableDiv(
             on:focus=move |_| {
                 is_focused.set(true);
                 ctx.content_focus.set(true);
+                if let Some(id) = focus_node_id {
+                    ctx.content_focus_node.set(Some(id));
+                }
             }
             on:blur=move |_| {
                 is_focused.set(false);
                 ctx.content_focus.set(false);
+                if focus_node_id.map(|id| ctx.content_focus_node.get_untracked() == Some(id)).unwrap_or(false) {
+                    ctx.content_focus_node.set(None);
+                }
                 if let Some(el) = div_ref.get() {
-                    on_save(el.inner_html());
+                    on_save_blur(el.inner_html());
+                }
+            }
+            on:keydown=move |ev| {
+                let Some(el) = div_ref.get() else { return };
+                match ev.key().as_str() {
+                    "Enter" => {
+                        if let Some(cb) = on_enter {
+                            ev.prevent_default();
+                            on_save_key.clone()(el.inner_html());
+                            cb.run(());
+                        }
+                    }
+                    "Backspace" => {
+                        if let Some(cb) = on_backspace_start {
+                            if cursor_at_document_start(&el) {
+                                ev.prevent_default();
+                                on_save_key.clone()(el.inner_html());
+                                cb.run(());
+                            }
+                        }
+                    }
+                    "Delete" => {
+                        if let Some(cb) = on_delete_end {
+                            if cursor_at_document_end(&el) {
+                                ev.prevent_default();
+                                on_save_key.clone()(el.inner_html());
+                                cb.run(());
+                                // Forcer la mise à jour du div (on reste en focus)
+                                let new_html = html.get_untracked();
+                                if el.inner_html() != new_html {
+                                    el.set_inner_html(&new_html);
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
         />

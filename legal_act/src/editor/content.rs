@@ -3,7 +3,7 @@ use leptos::prelude::*;
 use crate::{Body, BodyNodeId, NodeKind, NodeSpec};
 use crate::traits::node::{BodyRead, BodyWrite};
 use super::context::expect_editor_context;
-use super::widgets::{RichEditableDiv, TOOLBAR_BTN_CLASS};
+use super::widgets::RichEditableDiv;
 
 // ─── Sérialisation HTML ───────────────────────────────────────────────────────
 
@@ -200,8 +200,36 @@ pub fn ContentSubtree(node_id: BodyNodeId) -> impl IntoView {
 fn EditParagraph(node_id: BodyNodeId) -> impl IntoView {
     let ctx = expect_editor_context();
 
-    let html = Signal::derive(move || {
-        ctx.body.with(|b| build_inline_html(b, node_id))
+    let html = Signal::derive(move || ctx.body.with(|b| build_inline_html(b, node_id)));
+
+    let on_enter = Callback::new(move |()| {
+        let new_id = ctx.body.try_update(|b| -> Option<BodyNodeId> {
+            let new_para = b.create_node(NodeSpec::Paragraphe);
+            let plain = b.create_node(NodeSpec::Plain(String::new()));
+            b.append_child_unchecked(new_para, plain).ok()?;
+            b.insert_sibling_after(node_id, new_para).ok()?;
+            Some(new_para)
+        }).flatten();
+        if let Some(id) = new_id {
+            ctx.request_focus(id, false);
+        }
+    });
+
+    let on_backspace_start = Callback::new(move |()| {
+        let prev = ctx.body.try_update(|b| -> Option<BodyNodeId> {
+            b.merge_with_prev(node_id).ok()
+        }).flatten();
+        if let Some(id) = prev {
+            ctx.request_focus(id, true);
+        }
+    });
+
+    let on_delete_end = Callback::new(move |()| {
+        ctx.body.update(|b| {
+            if let Some(next) = b.next_sibling_of(node_id) {
+                let _ = b.merge_into(node_id, next);
+            }
+        });
     });
 
     view! {
@@ -211,6 +239,10 @@ fn EditParagraph(node_id: BodyNodeId) -> impl IntoView {
                 on_save=move |h| {
                     ctx.body.update(|b| { let _ = save_rich_content(b, node_id, &h); });
                 }
+                focus_node_id=node_id
+                on_enter=on_enter
+                on_backspace_start=on_backspace_start
+                on_delete_end=on_delete_end
             />
         </p>
     }
@@ -218,30 +250,32 @@ fn EditParagraph(node_id: BodyNodeId) -> impl IntoView {
 
 // ─── Liste ────────────────────────────────────────────────────────────────────
 
+pub(super) fn is_list_ordered(body: &impl BodyRead, node_id: BodyNodeId) -> bool {
+    if let NodeSpec::List(list) = body.spec_of(node_id) {
+        !matches!(
+            list.marker,
+            content::ListMarker::Disc | content::ListMarker::Circle | content::ListMarker::Square
+        )
+    } else {
+        false
+    }
+}
+
 #[component]
 fn EditList(node_id: BodyNodeId) -> impl IntoView {
     let ctx = expect_editor_context();
 
-    let is_ordered = ctx.body.with_untracked(|b| {
-        if let NodeSpec::List(list) = b.spec_of(node_id) {
-            !matches!(
-                list.marker,
-                content::ListMarker::Disc | content::ListMarker::Circle | content::ListMarker::Square
-            )
-        } else {
-            false
-        }
-    });
+    let is_ordered = Signal::derive(move || ctx.body.with(|b| is_list_ordered(b, node_id)));
 
     view! {
-        <div class="group/list my-1 text-sm">
-            {if is_ordered {
+        <div class="my-1 text-sm">
+            {move || if is_ordered.get() {
                 view! {
                     <ol class="list-decimal list-outside pl-5 space-y-0.5">
                         <For
                             each=move || ctx.body.with(|b| b.children_of(node_id))
                             key=|id| *id
-                            children=|id| view! { <EditListItem node_id=id/> }
+                            children=move |id| view! { <EditListItem node_id=id list_id=node_id/> }
                         />
                     </ol>
                 }.into_any()
@@ -251,34 +285,76 @@ fn EditList(node_id: BodyNodeId) -> impl IntoView {
                         <For
                             each=move || ctx.body.with(|b| b.children_of(node_id))
                             key=|id| *id
-                            children=|id| view! { <EditListItem node_id=id/> }
+                            children=move |id| view! { <EditListItem node_id=id list_id=node_id/> }
                         />
                     </ul>
                 }.into_any()
             }}
-            <div class="flex gap-1 mt-1">
-                <button class=TOOLBAR_BTN_CLASS on:click=move |_| {
-                    ctx.body.update(|b| {
-                        let _ = b.append_node(node_id, NodeSpec::ListItem(content::ListItem::default()));
-                    });
-                }>"+ Élément"</button>
-                <button
-                    class="text-xs text-red-500 hover:text-red-700 px-1"
-                    on:click=move |_| {
-                        ctx.body.update(|b| { let _ = b.remove_node(node_id); });
-                    }
-                >"× Liste"</button>
-            </div>
         </div>
     }
 }
 
 #[component]
-fn EditListItem(node_id: BodyNodeId) -> impl IntoView {
+fn EditListItem(node_id: BodyNodeId, list_id: BodyNodeId) -> impl IntoView {
     let ctx = expect_editor_context();
 
-    let html = Signal::derive(move || {
-        ctx.body.with(|b| build_inline_html(b, node_id))
+    let html = Signal::derive(move || ctx.body.with(|b| build_inline_html(b, node_id)));
+
+    let on_enter = Callback::new(move |()| {
+        let new_id = ctx.body.try_update(|b| -> Option<BodyNodeId> {
+            let item = b.create_node(NodeSpec::ListItem(content::ListItem::default()));
+            let plain = b.create_node(NodeSpec::Plain(String::new()));
+            b.append_child_unchecked(item, plain).ok()?;
+            b.insert_sibling_after(node_id, item).ok()?;
+            Some(item)
+        }).flatten();
+        if let Some(id) = new_id {
+            ctx.request_focus(id, false);
+        }
+    });
+
+    let on_backspace_start = Callback::new(move |()| {
+        let is_empty = ctx.body.with_untracked(|b| build_inline_html(b, node_id).is_empty());
+
+        if is_empty {
+            // Élément vide : supprimer et focaliser le précédent/suivant
+            let focus_id = ctx.body.with_untracked(|b| {
+                b.prev_sibling_of(node_id)
+                    .or_else(|| b.next_sibling_of(node_id))
+                    .or_else(|| b.prev_sibling_of(list_id))
+            });
+            ctx.body.update(|b| { let _ = b.remove_node(node_id); });
+            if let Some(id) = focus_id {
+                ctx.request_focus(id, true);
+            }
+        } else {
+            // Élément non vide : fusionner ou convertir en paragraphe
+            let result = ctx.body.try_update(|b| -> Option<BodyNodeId> {
+                if b.prev_sibling_of(node_id).is_some() {
+                    // Il y a un élément précédent : fusionner
+                    b.merge_with_prev(node_id).ok()
+                } else {
+                    // Premier élément : convertir en Paragraphe avant la liste
+                    let parent = b.parent_of(list_id)?;
+                    let siblings = b.children_of(parent);
+                    let list_pos = siblings.iter().position(|&id| id == list_id)?;
+                    let new_para = b.create_node(NodeSpec::Paragraphe);
+                    b.merge_into(new_para, node_id).ok()?;
+                    if b.children_of(new_para).is_empty() {
+                        let plain = b.create_node(NodeSpec::Plain(String::new()));
+                        b.append_child_unchecked(new_para, plain).ok()?;
+                    }
+                    b.insert_child_at_unchecked(parent, list_pos, new_para).ok()?;
+                    if b.children_of(list_id).is_empty() {
+                        let _ = b.remove_node(list_id);
+                    }
+                    Some(new_para)
+                }
+            }).flatten();
+            if let Some(id) = result {
+                ctx.request_focus(id, true);
+            }
+        }
     });
 
     view! {
@@ -290,10 +366,13 @@ fn EditListItem(node_id: BodyNodeId) -> impl IntoView {
                         on_save=move |h| {
                             ctx.body.update(|b| { let _ = save_rich_content(b, node_id, &h); });
                         }
+                        focus_node_id=node_id
+                        on_enter=on_enter
+                        on_backspace_start=on_backspace_start
                     />
                 </div>
                 <button
-                    class="opacity-0 group-hover/item:opacity-100 text-red-400 hover:text-red-600 text-xs"
+                    class="no-print opacity-0 group-hover/item:opacity-100 text-red-400 hover:text-red-600 text-xs"
                     on:click=move |_| {
                         ctx.body.update(|b| { let _ = b.remove_node(node_id); });
                     }
@@ -310,33 +389,22 @@ fn EditTable(node_id: BodyNodeId) -> impl IntoView {
     let ctx = expect_editor_context();
 
     view! {
-        <div class="my-2 group/table overflow-x-auto">
+        <div class="my-2 overflow-x-auto">
             <table class="border-collapse w-full text-sm">
                 <tbody>
                     <For
                         each=move || ctx.body.with(|b| b.children_of(node_id))
                         key=|id| *id
-                        children=|id| view! { <EditTableRow node_id=id/> }
+                        children=move |id| view! { <EditTableRow node_id=id table_id=node_id/> }
                     />
                 </tbody>
             </table>
-            <div class="flex gap-1 mt-1">
-                <button class=TOOLBAR_BTN_CLASS on:click=move |_| {
-                    ctx.body.update(|b| { let _ = b.append_node(node_id, NodeSpec::TableRow); });
-                }>"+ Ligne"</button>
-                <button
-                    class="text-xs text-red-500 hover:text-red-700 px-1"
-                    on:click=move |_| {
-                        ctx.body.update(|b| { let _ = b.remove_node(node_id); });
-                    }
-                >"× Tableau"</button>
-            </div>
         </div>
     }
 }
 
 #[component]
-fn EditTableRow(node_id: BodyNodeId) -> impl IntoView {
+fn EditTableRow(node_id: BodyNodeId, table_id: BodyNodeId) -> impl IntoView {
     let ctx = expect_editor_context();
 
     view! {
@@ -344,20 +412,45 @@ fn EditTableRow(node_id: BodyNodeId) -> impl IntoView {
             <For
                 each=move || ctx.body.with(|b| b.children_of(node_id))
                 key=|id| *id
-                children=|id| view! { <EditTableCell node_id=id/> }
+                children=move |id| view! { <EditTableCell node_id=id row_id=node_id table_id=table_id/> }
             />
-            <td class="w-8 px-1 align-middle border border-gray-200">
+            <td class="w-10 px-1 align-middle border border-gray-200 bg-gray-50">
                 <div class="flex flex-col gap-0.5 items-center">
                     <button
-                        title="Ajouter une cellule"
-                        class="opacity-0 group-hover/row:opacity-100 text-teal-600 hover:text-teal-800 text-xs"
+                        title="Ajouter une cellule à droite"
+                        class="no-print opacity-0 group-hover/row:opacity-100 text-teal-600 hover:text-teal-800 text-xs font-bold leading-none"
                         on:click=move |_| {
                             ctx.body.update(|b| { let _ = b.append_node(node_id, NodeSpec::TableCell); });
                         }
                     >"+"</button>
                     <button
+                        title="Insérer une ligne après"
+                        class="no-print opacity-0 group-hover/row:opacity-100 text-blue-500 hover:text-blue-700 text-xs leading-none"
+                        on:click=move |_| {
+                            let first_cell = ctx.body.try_update(|b| -> Option<BodyNodeId> {
+                                let col_count = b.children_of(node_id).len().max(1);
+                                let new_row = b.create_node(NodeSpec::TableRow);
+                                let mut first = None;
+                                for i in 0..col_count {
+                                    let cell = b.create_node(NodeSpec::TableCell);
+                                    let para = b.create_node(NodeSpec::Paragraphe);
+                                    let plain = b.create_node(NodeSpec::Plain(String::new()));
+                                    let _ = b.append_child_unchecked(para, plain);
+                                    let _ = b.append_child_unchecked(cell, para);
+                                    let _ = b.append_child_unchecked(new_row, cell);
+                                    if i == 0 { first = Some(cell); }
+                                }
+                                let _ = b.insert_sibling_after(node_id, new_row);
+                                first
+                            }).flatten();
+                            if let Some(id) = first_cell {
+                                ctx.request_focus(id, false);
+                            }
+                        }
+                    >"↓"</button>
+                    <button
                         title="Supprimer la ligne"
-                        class="opacity-0 group-hover/row:opacity-100 text-red-400 hover:text-red-600 text-xs"
+                        class="no-print opacity-0 group-hover/row:opacity-100 text-red-400 hover:text-red-600 text-xs leading-none"
                         on:click=move |_| {
                             ctx.body.update(|b| { let _ = b.remove_node(node_id); });
                         }
@@ -369,9 +462,9 @@ fn EditTableRow(node_id: BodyNodeId) -> impl IntoView {
 }
 
 #[component]
-fn EditTableCell(node_id: BodyNodeId) -> impl IntoView {
+fn EditTableCell(node_id: BodyNodeId, row_id: BodyNodeId, table_id: BodyNodeId) -> impl IntoView {
     let ctx = expect_editor_context();
-    // La cellule contient un Paragraphe ; on édite le contenu de ce Paragraphe.
+
     let para_id = ctx.body.with_untracked(|b| b.first_child_of(node_id));
 
     let html = Signal::derive(move || {
@@ -381,7 +474,16 @@ fn EditTableCell(node_id: BodyNodeId) -> impl IntoView {
     });
 
     view! {
-        <td class="border border-gray-200 px-2 py-1 min-w-[5rem] align-top">
+        <td
+            class="border border-gray-200 px-2 py-1 min-w-[5rem] align-top"
+            on:keydown=move |ev| {
+                if ev.key() == "Tab" {
+                    ev.prevent_default();
+                    let forward = !ev.shift_key();
+                    navigate_table_cell(ctx, node_id, row_id, table_id, forward);
+                }
+            }
+        >
             <RichEditableDiv
                 html=html
                 on_save=move |h| {
@@ -391,7 +493,61 @@ fn EditTableCell(node_id: BodyNodeId) -> impl IntoView {
                         }
                     });
                 }
+                focus_node_id=node_id
             />
         </td>
+    }
+}
+
+/// Navigation Tab entre cellules d'un tableau. Avance ou recule dans la liste
+/// plate de toutes les cellules (ligne par ligne). En fin de tableau, Tab
+/// crée automatiquement une nouvelle ligne et focalise sa première cellule.
+fn navigate_table_cell(
+    ctx: super::context::EditorContext,
+    node_id: BodyNodeId,
+    row_id: BodyNodeId,
+    table_id: BodyNodeId,
+    forward: bool,
+) {
+    let next = ctx.body.with_untracked(|b| {
+        let all_cells: Vec<BodyNodeId> = b.children_of(table_id)
+            .into_iter()
+            .flat_map(|r| b.children_of(r))
+            .collect();
+        let pos = all_cells.iter().position(|&id| id == node_id)?;
+        if forward {
+            Some(all_cells.get(pos + 1).copied())
+        } else {
+            Some(pos.checked_sub(1).map(|i| all_cells[i]))
+        }
+    });
+
+    match next {
+        Some(Some(target_id)) => {
+            ctx.request_focus(target_id, false);
+        }
+        Some(None) if forward => {
+            // Tab sur la dernière cellule → ajoute une ligne
+            let first_new_cell = ctx.body.try_update(|b| -> Option<BodyNodeId> {
+                let col_count = b.children_of(row_id).len().max(1);
+                let new_row = b.create_node(NodeSpec::TableRow);
+                let mut first = None;
+                for i in 0..col_count {
+                    let cell = b.create_node(NodeSpec::TableCell);
+                    let para = b.create_node(NodeSpec::Paragraphe);
+                    let plain = b.create_node(NodeSpec::Plain(String::new()));
+                    let _ = b.append_child_unchecked(para, plain);
+                    let _ = b.append_child_unchecked(cell, para);
+                    let _ = b.append_child_unchecked(new_row, cell);
+                    if i == 0 { first = Some(cell); }
+                }
+                let _ = b.append_child_unchecked(table_id, new_row);
+                first
+            }).flatten();
+            if let Some(id) = first_new_cell {
+                ctx.request_focus(id, false);
+            }
+        }
+        _ => {}
     }
 }
