@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["agent","app", "content", "frontend", "dsfr", "legal_act", "server", "shared"]
+members = ["agent","app", "content", "frontend", "dsfr", "legal_act", "server", "shared", "render", "worker"]
 
 [workspace.dependencies]
 leptos = { version = "0.8.0" }
