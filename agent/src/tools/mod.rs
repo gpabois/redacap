@@ -11,8 +11,22 @@ mod metadata;
 pub use georisques::{GeorisquesClient, GeorisquesConfig, GeorisquesQueryTool, IcpeQueryTool};
 pub use interaction::{AskQuestionsTool, AskUserTool, RequestDocumentTool};
 pub use legal_act_editor::{
-    FillSectionTool, GenerateNumberingTool, InsertNodeTool, ReadStructureTool, ReadTitleTool, RemoveNodeTool,
-    SetTitleTool, ValidateStructureTool,
+    FillSectionTool, GenerateNumberingTool, InsertNodeTool, ReadStructureTool, ReadTitleTool,
+    RemoveNodeTool, SetTitleTool, ValidateStructureTool,
 };
-pub use legifrance::{LegifranceClient, LegifranceConfig, LegifranceFetchTool, LegifranceSearchTool};
+pub use legifrance::{
+    LegifranceClient, LegifranceConfig, LegifranceFetchTool, LegifranceSearchTool,
+};
 pub use metadata::{ReadMetadataTool, WriteMetadataTool};
+
+/// Catalogue des outils dont la disponibilité est configurable par domaine
+/// (voir `storage::agent_tool_scope`) : des outils d'accès à des API
+/// externes, par opposition aux outils cœur d'édition/interaction (toujours
+/// disponibles, non listés ici). Chaque paire est `(identifiant technique =
+/// Tool::name(), libellé affiché dans le panneau administrateur)`.
+pub const CONFIGURABLE_TOOLS: &[(&str, &str)] = &[
+    ("legifrance_search", "Recherche Légifrance"),
+    ("legifrance_fetch", "Lecture d'un texte Légifrance"),
+    ("georisques_query", "Interrogation GéoRisques"),
+    ("icpe_query", "Interrogation base ICPE"),
+];

@@ -1,7 +1,13 @@
 use anyhow::bail;
-use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Map, MapPrelim, Out, ReadTxn, Text, TextPrelim, TransactionMut, Transact};
+use yrs::{
+    Any, Array, ArrayPrelim, Doc, GetString, Map, MapPrelim, Out, ReadTxn, Text, TextPrelim,
+    Transact, TransactionMut,
+};
 
-use crate::{Cell, ContentId, ContentKind, ContentRead, ContentWrite, List, ListItem, ListMarker, NodeSpec, Paragraph, Row, Span, Table};
+use crate::{
+    Cell, ContentId, ContentKind, ContentRead, ContentWrite, List, ListItem, ListMarker, NodeSpec,
+    Paragraph, Row, Span, Table,
+};
 
 /// Backend "mode Yrs" : l'arbre de contenu est porté par un [`yrs::Doc`] et
 /// peut donc être synchronisé entre plusieurs pairs via CRDT.
@@ -30,7 +36,11 @@ impl YrsContent {
         let mut txn = doc.transact_mut();
         let nodes = content.insert(&mut txn, "nodes", MapPrelim::default());
         content.insert(&mut txn, "root", root.to_string());
-        nodes.insert(&mut txn, root.to_string(), node_prelim(&NodeSpec::Root, None));
+        nodes.insert(
+            &mut txn,
+            root.to_string(),
+            node_prelim(&NodeSpec::Root, None),
+        );
         drop(txn);
 
         Self { doc, nodes, root }
@@ -96,13 +106,17 @@ impl ContentRead for YrsContent {
 
     fn kind_of(&self, id: ContentId) -> ContentKind {
         let txn = self.doc.transact();
-        let node = self.node_map(&txn, id).unwrap_or_else(|| panic!("noeud de contenu inconnu : {id}"));
+        let node = self
+            .node_map(&txn, id)
+            .unwrap_or_else(|| panic!("noeud de contenu inconnu : {id}"));
         read_kind(&node, &txn)
     }
 
     fn text_of(&self, id: ContentId) -> String {
         let txn = self.doc.transact();
-        let Some(node) = self.node_map(&txn, id) else { return String::new() };
+        let Some(node) = self.node_map(&txn, id) else {
+            return String::new();
+        };
 
         match node.get(&txn, "text") {
             Some(Out::YText(text)) => text.get_string(&txn),
@@ -122,7 +136,9 @@ impl ContentRead for YrsContent {
 
     fn children_of(&self, id: ContentId) -> Vec<ContentId> {
         let txn = self.doc.transact();
-        let Some(children) = self.children_array(&txn, id) else { return vec![] };
+        let Some(children) = self.children_array(&txn, id) else {
+            return vec![];
+        };
 
         children
             .iter(&txn)
@@ -135,7 +151,9 @@ impl ContentRead for YrsContent {
 
     fn spec_of(&self, id: ContentId) -> NodeSpec {
         let txn = self.doc.transact();
-        let node = self.node_map(&txn, id).unwrap_or_else(|| panic!("noeud de contenu inconnu : {id}"));
+        let node = self
+            .node_map(&txn, id)
+            .unwrap_or_else(|| panic!("noeud de contenu inconnu : {id}"));
         read_spec(&node, &txn)
     }
 }
@@ -149,12 +167,18 @@ impl ContentWrite for YrsContent {
         let id = ContentId::new();
 
         let mut txn = self.doc.transact_mut();
-        self.nodes.insert(&mut txn, id.to_string(), node_prelim(&spec, None));
+        self.nodes
+            .insert(&mut txn, id.to_string(), node_prelim(&spec, None));
 
         id
     }
 
-    fn insert_child_at(&mut self, parent: ContentId, index: usize, child: ContentId) -> anyhow::Result<()> {
+    fn insert_child_at(
+        &mut self,
+        parent: ContentId,
+        index: usize,
+        child: ContentId,
+    ) -> anyhow::Result<()> {
         let mut txn = self.doc.transact_mut();
 
         let Some(parent_map) = self.node_map(&txn, parent) else {
@@ -220,8 +244,12 @@ impl ContentWrite for YrsContent {
 
     fn insert_text(&mut self, id: ContentId, char_index: usize, value: &str) {
         let mut txn = self.doc.transact_mut();
-        let Some(node) = self.node_map(&txn, id) else { return };
-        let Some(Out::YText(text)) = node.get(&txn, "text") else { return };
+        let Some(node) = self.node_map(&txn, id) else {
+            return;
+        };
+        let Some(Out::YText(text)) = node.get(&txn, "text") else {
+            return;
+        };
 
         let byte_index = byte_index_of(&text.get_string(&txn), char_index);
         text.insert(&mut txn, byte_index as u32, value);
@@ -229,13 +257,21 @@ impl ContentWrite for YrsContent {
 
     fn remove_text(&mut self, id: ContentId, char_index: usize, char_count: usize) {
         let mut txn = self.doc.transact_mut();
-        let Some(node) = self.node_map(&txn, id) else { return };
-        let Some(Out::YText(text)) = node.get(&txn, "text") else { return };
+        let Some(node) = self.node_map(&txn, id) else {
+            return;
+        };
+        let Some(Out::YText(text)) = node.get(&txn, "text") else {
+            return;
+        };
 
         let current = text.get_string(&txn);
         let mut byte_indices = current.char_indices().map(|(i, _)| i);
-        let Some(start) = byte_indices.nth(char_index) else { return };
-        let end = byte_indices.nth(char_count.saturating_sub(1)).unwrap_or(current.len());
+        let Some(start) = byte_indices.nth(char_index) else {
+            return;
+        };
+        let end = byte_indices
+            .nth(char_count.saturating_sub(1))
+            .unwrap_or(current.len());
 
         text.remove_range(&mut txn, start as u32, (end - start) as u32);
     }
@@ -250,7 +286,9 @@ impl ContentWrite for YrsContent {
         let new_kind = spec.kind();
 
         if new_kind != current_kind {
-            bail!("impossible de remplacer un noeud {current_kind} par un noeud {new_kind} : les genres diffèrent");
+            bail!(
+                "impossible de remplacer un noeud {current_kind} par un noeud {new_kind} : les genres diffèrent"
+            );
         }
 
         write_spec(&node, &mut txn, &spec);
@@ -259,15 +297,27 @@ impl ContentWrite for YrsContent {
 }
 
 fn byte_index_of(text: &str, char_index: usize) -> usize {
-    text.char_indices().nth(char_index).map(|(i, _)| i).unwrap_or(text.len())
+    text.char_indices()
+        .nth(char_index)
+        .map(|(i, _)| i)
+        .unwrap_or(text.len())
 }
 
 /// Collecte `id` et tous ses descendants (parcours préfixe) dans `out`.
-fn collect_subtree(nodes: &yrs::MapRef, txn: &impl ReadTxn, id: ContentId, out: &mut Vec<ContentId>) {
+fn collect_subtree(
+    nodes: &yrs::MapRef,
+    txn: &impl ReadTxn,
+    id: ContentId,
+    out: &mut Vec<ContentId>,
+) {
     out.push(id);
 
-    let Some(Out::YMap(node)) = nodes.get(txn, &id.to_string()) else { return };
-    let Some(Out::YArray(children)) = node.get(txn, "children") else { return };
+    let Some(Out::YMap(node)) = nodes.get(txn, &id.to_string()) else {
+        return;
+    };
+    let Some(Out::YArray(children)) = node.get(txn, "children") else {
+        return;
+    };
 
     let child_ids = children
         .iter(txn)
@@ -287,7 +337,9 @@ fn read_kind(node: &yrs::MapRef, txn: &impl ReadTxn) -> ContentKind {
         panic!("champ 'kind' invalide pour un noeud yrs")
     };
 
-    kind_str.parse().unwrap_or_else(|_| panic!("kind de noeud invalide : {kind_str}"))
+    kind_str
+        .parse()
+        .unwrap_or_else(|_| panic!("kind de noeud invalide : {kind_str}"))
 }
 
 fn read_bool(node: &yrs::MapRef, txn: &impl ReadTxn, key: &str) -> bool {
@@ -330,7 +382,10 @@ fn read_spec(node: &yrs::MapRef, txn: &impl ReadTxn) -> NodeSpec {
             start: read_u32(node, txn, "start"),
         }
         .into(),
-        ContentKind::ListItem => ListItem { marker: read_marker(node, txn, "marker") }.into(),
+        ContentKind::ListItem => ListItem {
+            marker: read_marker(node, txn, "marker"),
+        }
+        .into(),
         ContentKind::Table => Table.into(),
         ContentKind::Row => Row.into(),
         ContentKind::Cell => Cell.into(),
@@ -359,12 +414,22 @@ fn write_spec(node: &yrs::MapRef, txn: &mut TransactionMut, spec: &NodeSpec) {
         }
         NodeSpec::List(list) => {
             node.insert(txn, "marker", list.marker.as_ref());
-            node.insert(txn, "start", list.start.map(yrs::In::from).unwrap_or(yrs::In::Any(Any::Null)));
+            node.insert(
+                txn,
+                "start",
+                list.start
+                    .map(yrs::In::from)
+                    .unwrap_or(yrs::In::Any(Any::Null)),
+            );
         }
         NodeSpec::ListItem(item) => {
             node.insert(txn, "marker", item.marker.as_ref());
         }
-        NodeSpec::Root | NodeSpec::Paragraph(_) | NodeSpec::Table(_) | NodeSpec::Row(_) | NodeSpec::Cell(_) => {}
+        NodeSpec::Root
+        | NodeSpec::Paragraph(_)
+        | NodeSpec::Table(_)
+        | NodeSpec::Row(_)
+        | NodeSpec::Cell(_) => {}
     }
 }
 
@@ -375,13 +440,17 @@ fn node_prelim(spec: &NodeSpec, parent: Option<ContentId>) -> MapPrelim {
         ("kind", yrs::In::from(spec.kind().as_ref())),
         (
             "parent",
-            parent.map(|p| yrs::In::from(p.to_string())).unwrap_or(yrs::In::Any(Any::Null)),
+            parent
+                .map(|p| yrs::In::from(p.to_string()))
+                .unwrap_or(yrs::In::Any(Any::Null)),
         ),
         ("children", yrs::In::from(ArrayPrelim::default())),
     ];
 
     match spec {
-        NodeSpec::Plain(text) => fields.push(("text", yrs::In::from(TextPrelim::new(text.clone())))),
+        NodeSpec::Plain(text) => {
+            fields.push(("text", yrs::In::from(TextPrelim::new(text.clone()))))
+        }
         NodeSpec::Span(span) => {
             fields.push(("bold", yrs::In::from(span.bold)));
             fields.push(("italic", yrs::In::from(span.italic)));
@@ -392,13 +461,19 @@ fn node_prelim(spec: &NodeSpec, parent: Option<ContentId>) -> MapPrelim {
             fields.push(("marker", yrs::In::from(list.marker.as_ref())));
             fields.push((
                 "start",
-                list.start.map(yrs::In::from).unwrap_or(yrs::In::Any(Any::Null)),
+                list.start
+                    .map(yrs::In::from)
+                    .unwrap_or(yrs::In::Any(Any::Null)),
             ));
         }
         NodeSpec::ListItem(item) => {
             fields.push(("marker", yrs::In::from(item.marker.as_ref())));
         }
-        NodeSpec::Root | NodeSpec::Paragraph(_) | NodeSpec::Table(_) | NodeSpec::Row(_) | NodeSpec::Cell(_) => {}
+        NodeSpec::Root
+        | NodeSpec::Paragraph(_)
+        | NodeSpec::Table(_)
+        | NodeSpec::Row(_)
+        | NodeSpec::Cell(_) => {}
     }
 
     MapPrelim::from_iter(fields)
@@ -414,15 +489,29 @@ mod tests {
     fn test_create_compatible_node() {
         let mut body = YrsContent::new();
         let id = body.append_content(body.root(), "").unwrap();
-        let got = body.ancestors_of(id).into_iter().map(|id| body.kind_of(id)).collect::<Vec<_>>();
+        let got = body
+            .ancestors_of(id)
+            .into_iter()
+            .map(|id| body.kind_of(id))
+            .collect::<Vec<_>>();
         assert_eq!(got.as_slice(), &[Kind::Paragraph, Kind::Root]);
 
         let mut body = YrsContent::new();
         let id = body.append_content(body.root(), Cell).unwrap();
-        let got = body.ancestors_of(id).into_iter().map(|id| body.kind_of(id)).collect::<Vec<_>>();
+        let got = body
+            .ancestors_of(id)
+            .into_iter()
+            .map(|id| body.kind_of(id))
+            .collect::<Vec<_>>();
         assert_eq!(got.as_slice(), &[Kind::Row, Kind::Table, Kind::Root]);
 
-        let _ = (List::default(), ListItem::default(), Row, Table, Span::default());
+        let _ = (
+            List::default(),
+            ListItem::default(),
+            Row,
+            Table,
+            Span::default(),
+        );
     }
 
     #[test]
@@ -430,7 +519,11 @@ mod tests {
         let mut body = YrsContent::new();
         body.append_content(body.root(), Span::default()).unwrap();
         let id = body.first_leaf_of(body.root());
-        let got = body.ancestors_of(id).into_iter().map(|id| body.kind_of(id)).collect::<Vec<_>>();
+        let got = body
+            .ancestors_of(id)
+            .into_iter()
+            .map(|id| body.kind_of(id))
+            .collect::<Vec<_>>();
 
         assert_eq!(body.kind_of(id), Kind::Plain);
         assert_eq!(got.as_slice(), &[Kind::Span, Kind::Paragraph, Kind::Root]);
@@ -456,20 +549,37 @@ mod tests {
 
         assert_eq!(body.next_leaf_of(first), Some(second));
         assert_eq!(body.prev_leaf_of(second), Some(first));
-        assert_eq!(body.leaf_order_of(first, second), Some(std::cmp::Ordering::Less));
+        assert_eq!(
+            body.leaf_order_of(first, second),
+            Some(std::cmp::Ordering::Less)
+        );
     }
 
     #[test]
     fn test_spec_of_and_set_spec() {
         let mut body = YrsContent::new();
-        let id = body.create_node(Span { bold: true, ..Span::default() });
+        let id = body.create_node(Span {
+            bold: true,
+            ..Span::default()
+        });
 
-        let NodeSpec::Span(span) = body.spec_of(id) else { panic!("attendu un Span") };
+        let NodeSpec::Span(span) = body.spec_of(id) else {
+            panic!("attendu un Span")
+        };
         assert!(span.bold);
         assert!(!span.italic);
 
-        body.set_spec(id, NodeSpec::Span(Span { italic: true, ..Span::default() })).unwrap();
-        let NodeSpec::Span(span) = body.spec_of(id) else { panic!("attendu un Span") };
+        body.set_spec(
+            id,
+            NodeSpec::Span(Span {
+                italic: true,
+                ..Span::default()
+            }),
+        )
+        .unwrap();
+        let NodeSpec::Span(span) = body.spec_of(id) else {
+            panic!("attendu un Span")
+        };
         assert!(!span.bold);
         assert!(span.italic);
 
@@ -557,7 +667,10 @@ mod tests {
         let new_paragraph = body.split_node(paragraph, 1).unwrap();
         assert_eq!(body.children_of(paragraph), vec![a]);
         assert_eq!(body.children_of(new_paragraph), vec![b, c]);
-        assert_eq!(body.children_of(body.root()), vec![paragraph, new_paragraph]);
+        assert_eq!(
+            body.children_of(body.root()),
+            vec![paragraph, new_paragraph]
+        );
         assert_eq!(body.kind_of(new_paragraph), Kind::Paragraph);
     }
 
@@ -569,7 +682,10 @@ mod tests {
         writer.append_content(writer.root(), "hello").unwrap();
 
         // Simule un pair distant qui rejoint le document après synchronisation.
-        let update = writer.doc().transact().encode_diff_v1(&yrs::StateVector::default());
+        let update = writer
+            .doc()
+            .transact()
+            .encode_diff_v1(&yrs::StateVector::default());
         let remote_doc = Doc::new();
         remote_doc
             .transact_mut()

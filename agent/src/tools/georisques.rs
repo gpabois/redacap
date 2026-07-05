@@ -27,7 +27,10 @@ pub struct GeorisquesConfig {
 
 impl Default for GeorisquesConfig {
     fn default() -> Self {
-        Self { base_url: "https://georisques.gouv.fr/api/v1".to_string(), api_key: None }
+        Self {
+            base_url: "https://georisques.gouv.fr/api/v1".to_string(),
+            api_key: None,
+        }
     }
 }
 
@@ -40,17 +43,28 @@ pub struct GeorisquesClient {
 impl GeorisquesClient {
     #[must_use]
     pub fn new(config: GeorisquesConfig) -> Self {
-        Self { http: reqwest::Client::new(), config }
+        Self {
+            http: reqwest::Client::new(),
+            config,
+        }
     }
 
     async fn get(&self, path: &str, params: &Map<String, Value>) -> Result<Value, ToolError> {
-        let mut request = self.http.get(format!("{}{path}", self.config.base_url)).query(&query_pairs(params));
+        let mut request = self
+            .http
+            .get(format!("{}{path}", self.config.base_url))
+            .query(&query_pairs(params));
 
         if let Some(api_key) = &self.config.api_key {
             request = request.bearer_auth(api_key);
         }
 
-        let response = request.send().await?.error_for_status()?.json::<Value>().await?;
+        let response = request
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<Value>()
+            .await?;
         Ok(response)
     }
 }
@@ -74,7 +88,9 @@ fn scalar_to_string(value: &Value) -> Option<String> {
 fn object_arguments(arguments: Value) -> Result<Map<String, Value>, ToolError> {
     match arguments {
         Value::Object(map) => Ok(map),
-        _ => Err(ToolError::InvalidArguments("les arguments doivent être un objet JSON".to_string())),
+        _ => Err(ToolError::InvalidArguments(
+            "les arguments doivent être un objet JSON".to_string(),
+        )),
     }
 }
 
@@ -117,7 +133,10 @@ impl Tool for GeorisquesQueryTool {
 
     async fn call(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
         let params = object_arguments(arguments)?;
-        let response = self.client.get("/resultats_rapport_risque", &params).await?;
+        let response = self
+            .client
+            .get("/resultats_rapport_risque", &params)
+            .await?;
         Ok(ToolOutput::new(response.to_string()))
     }
 }
@@ -168,5 +187,69 @@ impl Tool for IcpeQueryTool {
         let params = object_arguments(arguments)?;
         let response = self.client.get("/installations_classees", &params).await?;
         Ok(ToolOutput::new(response.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scalar_to_string_accepts_string_number_and_bool() {
+        assert_eq!(
+            scalar_to_string(&Value::String("33".to_string())),
+            Some("33".to_string())
+        );
+        assert_eq!(
+            scalar_to_string(&serde_json::json!(10)),
+            Some("10".to_string())
+        );
+        assert_eq!(
+            scalar_to_string(&Value::Bool(true)),
+            Some("true".to_string())
+        );
+    }
+
+    #[test]
+    fn scalar_to_string_rejects_composite_values() {
+        assert_eq!(scalar_to_string(&Value::Null), None);
+        assert_eq!(scalar_to_string(&serde_json::json!([1, 2])), None);
+        assert_eq!(scalar_to_string(&serde_json::json!({ "a": 1 })), None);
+    }
+
+    #[test]
+    fn query_pairs_filters_out_non_scalar_entries() {
+        let params = serde_json::json!({
+            "code_insee": "33063",
+            "rayon": 500,
+            "ignored": { "nested": true },
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        let mut pairs = query_pairs(&params);
+        pairs.sort();
+
+        assert_eq!(
+            pairs,
+            vec![
+                ("code_insee".to_string(), "33063".to_string()),
+                ("rayon".to_string(), "500".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn object_arguments_accepts_json_object() {
+        let arguments = serde_json::json!({ "code_insee": "33063" });
+        let params = object_arguments(arguments).unwrap();
+        assert_eq!(params.get("code_insee").unwrap(), "33063");
+    }
+
+    #[test]
+    fn object_arguments_rejects_non_object() {
+        let error = object_arguments(Value::String("invalide".to_string())).unwrap_err();
+        assert!(matches!(error, ToolError::InvalidArguments(_)));
     }
 }

@@ -8,15 +8,18 @@
 use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex as StdMutex};
 
-use agent::ports::{LegalActEditorPort, Question, QuestionAnswer, UserInteractionPort, ValidationReport};
 use agent::ToolError;
+use agent::ports::{
+    LegalActEditorPort, Question, QuestionAnswer, UserInteractionPort, ValidationReport,
+};
 use legal_act::{BodyNodeId, BodyRead, BodyWrite, NodeKind, NodeSpec, YrsBody};
 use serde_json::Value;
-use tokio::sync::{mpsc, Mutex as AsyncMutex};
+use shared::id::ID;
+use tokio::sync::{Mutex as AsyncMutex, mpsc};
 use yrs::{ReadTxn, Transact};
 
-use crate::protocol::{InteractionAnswerWire, InteractionQuestionWire, ServerMessage};
-use crate::state::Room;
+use super::protocol::{InteractionAnswerWire, InteractionQuestionWire, ServerMessage};
+use super::state::EditorRoom;
 
 /// Mot-clé accepté à la place d'un identifiant de nœud pour désigner la
 /// racine de l'acte, afin que l'agent (ou l'utilisateur, via une tâche en
@@ -32,18 +35,30 @@ const SELECTION_KEYWORD: &str = "selection";
 /// Implémentation de [`LegalActEditorPort`] qui agit sur le [`YrsBody`]
 /// d'une [`Room`] et diffuse chaque mutation aux pairs connectés.
 pub struct WsLegalActEditor {
-    room: Arc<Room>,
+    room: Arc<EditorRoom>,
     /// Nœud actuellement ciblé par l'utilisateur dans l'éditeur de cette
     /// connexion (voir `ClientMessage::SetSelection` côté `crate::ws`),
     /// résolu par les outils de l'agent lorsqu'ils reçoivent le mot-clé
     /// [`SELECTION_KEYWORD`] plutôt qu'un identifiant explicite.
     selection: Arc<StdMutex<Option<BodyNodeId>>>,
+    /// Utilisateur de la connexion à l'origine de la tâche agent en cours,
+    /// au nom duquel chaque mutation est journalisée (voir
+    /// [`EditorRoom::record_and_broadcast`]).
+    author_id: ID,
 }
 
 impl WsLegalActEditor {
     #[must_use]
-    pub fn new(room: Arc<Room>, selection: Arc<StdMutex<Option<BodyNodeId>>>) -> Self {
-        Self { room, selection }
+    pub fn new(
+        room: Arc<EditorRoom>,
+        selection: Arc<StdMutex<Option<BodyNodeId>>>,
+        author_id: ID,
+    ) -> Self {
+        Self {
+            room,
+            selection,
+            author_id,
+        }
     }
 
     async fn state_vector(&self) -> yrs::StateVector {
@@ -51,15 +66,16 @@ impl WsLegalActEditor {
         body.doc().transact().state_vector()
     }
 
-    /// Diffuse aux pairs la différence entre l'état `before` et l'état
-    /// courant du document — c'est-à-dire la mise à jour Yrs produite par
-    /// la mutation qui vient d'avoir lieu.
+    /// Diffuse aux pairs, et journalise au nom de [`Self::author_id`], la
+    /// différence entre l'état `before` et l'état courant du document —
+    /// c'est-à-dire la mise à jour Yrs produite par la mutation qui vient
+    /// d'avoir lieu.
     async fn broadcast_diff(&self, before: &yrs::StateVector) {
         let diff = {
             let body = self.room.body.lock().await;
             body.doc().transact().encode_diff_v1(before)
         };
-        let _ = self.room.updates.send(diff);
+        self.room.record_and_broadcast(&self.author_id, diff).await;
     }
 
     /// Résout un identifiant de nœud fourni par l'agent : un identifiant
@@ -79,13 +95,14 @@ impl WsLegalActEditor {
                     ToolError::InvalidArguments(
                         "aucun nœud n'est actuellement sélectionné dans l'éditeur : demande à \
                          l'inspecteur de cliquer sur « Cibler » sur le nœud voulu, ou utilise \
-                         « root » pour viser la racine de l'acte".to_string(),
+                         « root » pour viser la racine de l'acte"
+                            .to_string(),
                     )
                 })
             }
-            _ => raw
-                .parse()
-                .map_err(|error| ToolError::InvalidArguments(format!("identifiant de nœud invalide : {error}"))),
+            _ => raw.parse().map_err(|error| {
+                ToolError::InvalidArguments(format!("identifiant de nœud invalide : {error}"))
+            }),
         }
     }
 }
@@ -116,21 +133,32 @@ impl LegalActEditorPort for WsLegalActEditor {
         Ok(())
     }
 
-    async fn insert_node(&self, parent_id: &str, kind: &str, content: Option<&str>) -> Result<String, ToolError> {
+    async fn insert_node(
+        &self,
+        parent_id: &str,
+        kind: &str,
+        content: Option<&str>,
+    ) -> Result<String, ToolError> {
         let parent = self.resolve(parent_id).await?;
-        let node_kind: NodeKind = kind
-            .parse()
-            .map_err(|_| ToolError::InvalidArguments(format!("type de noeud inconnu : « {kind} »")))?;
+        let node_kind: NodeKind = kind.parse().map_err(|_| {
+            ToolError::InvalidArguments(format!("type de noeud inconnu : « {kind} »"))
+        })?;
 
         let before = self.state_vector().await;
         let outcome = {
             let mut body = self.room.body.lock().await;
-            std::panic::catch_unwind(AssertUnwindSafe(|| create_node(&mut body, parent, node_kind, content)))
+            std::panic::catch_unwind(AssertUnwindSafe(|| {
+                create_node(&mut body, parent, node_kind, content)
+            }))
         };
         let id = match outcome {
             Ok(Ok(id)) => id,
             Ok(Err(error)) => return Err(ToolError::Other(error.to_string())),
-            Err(_) => return Err(ToolError::Other(format!("noeud parent introuvable : {parent_id}"))),
+            Err(_) => {
+                return Err(ToolError::Other(format!(
+                    "noeud parent introuvable : {parent_id}"
+                )));
+            }
         };
         self.broadcast_diff(&before).await;
         Ok(id.to_string())
@@ -209,8 +237,12 @@ fn serialize_node(body: &YrsBody, id: BodyNodeId) -> Value {
 
     let children = body.children_of(id);
     if !children.is_empty() {
-        node["children"] =
-            serde_json::json!(children.into_iter().map(|child| serialize_node(body, child)).collect::<Vec<_>>());
+        node["children"] = serde_json::json!(
+            children
+                .into_iter()
+                .map(|child| serialize_node(body, child))
+                .collect::<Vec<_>>()
+        );
     }
     node
 }
@@ -223,7 +255,9 @@ fn content_target(body: &YrsBody, id: BodyNodeId) -> BodyNodeId {
     body.kind_of(id)
         .content_container_kind()
         .and_then(|container_kind| {
-            body.children_of(id).into_iter().find(|&c| body.kind_of(c) == container_kind)
+            body.children_of(id)
+                .into_iter()
+                .find(|&c| body.kind_of(c) == container_kind)
         })
         .unwrap_or(id)
 }
@@ -233,7 +267,11 @@ fn content_target(body: &YrsBody, id: BodyNodeId) -> BodyNodeId {
 /// avec `content`.
 fn fill_leaf(body: &mut YrsBody, id: BodyNodeId, content: &str) -> anyhow::Result<()> {
     let target = content_target(body, id);
-    let leaf = if body.kind_of(target) == NodeKind::Plain { target } else { body.first_leaf_of(target) };
+    let leaf = if body.kind_of(target) == NodeKind::Plain {
+        target
+    } else {
+        body.first_leaf_of(target)
+    };
     if body.kind_of(leaf) != NodeKind::Plain {
         anyhow::bail!("le nœud {id} n'a pas de contenu textuel modifiable");
     }
@@ -285,12 +323,16 @@ fn check_structure(body: &YrsBody, node: BodyNodeId, errors: &mut Vec<String>) {
     for child in children {
         let child_kind = body.kind_of(child);
         if !kind.can_accept_child(child_kind) {
-            errors.push(format!("{child} ({child_kind}) n'est pas un enfant valide de {node} ({kind})"));
+            errors.push(format!(
+                "{child} ({child_kind}) n'est pas un enfant valide de {node} ({kind})"
+            ));
         }
         if kind == NodeKind::Root {
             let group = child_kind.root_order_group().unwrap_or(u8::MAX);
             if group < last_group {
-                errors.push(format!("ordre invalide dans Root : {child_kind} après un groupe supérieur"));
+                errors.push(format!(
+                    "ordre invalide dans Root : {child_kind} après un groupe supérieur"
+                ));
             }
             last_group = group;
         }
@@ -312,7 +354,10 @@ impl WsUserInteraction {
         out: mpsc::UnboundedSender<ServerMessage>,
         answers: mpsc::UnboundedReceiver<serde_json::Value>,
     ) -> Self {
-        Self { out, answers: AsyncMutex::new(answers) }
+        Self {
+            out,
+            answers: AsyncMutex::new(answers),
+        }
     }
 
     async fn recv_answer(&self) -> Result<serde_json::Value, ToolError> {
@@ -329,7 +374,9 @@ impl WsUserInteraction {
 impl UserInteractionPort for WsUserInteraction {
     async fn ask(&self, question: &str) -> Result<String, ToolError> {
         self.out
-            .send(ServerMessage::InteractionAsk { question: question.to_string() })
+            .send(ServerMessage::InteractionAsk {
+                question: question.to_string(),
+            })
             .map_err(|_| ToolError::Other("connexion websocket fermée".to_string()))?;
         let value = self.recv_answer().await?;
         serde_json::from_value(value)
@@ -338,24 +385,40 @@ impl UserInteractionPort for WsUserInteraction {
 
     async fn confirm(&self, message: &str) -> Result<bool, ToolError> {
         self.out
-            .send(ServerMessage::InteractionConfirm { message: message.to_string() })
+            .send(ServerMessage::InteractionConfirm {
+                message: message.to_string(),
+            })
             .map_err(|_| ToolError::Other("connexion websocket fermée".to_string()))?;
         let value = self.recv_answer().await?;
-        serde_json::from_value(value)
-            .map_err(|error| ToolError::Other(format!("réponse invalide à la confirmation : {error}")))
+        serde_json::from_value(value).map_err(|error| {
+            ToolError::Other(format!("réponse invalide à la confirmation : {error}"))
+        })
     }
 
-    async fn ask_questions(&self, prompt: &str, questions: &[Question]) -> Result<Vec<QuestionAnswer>, ToolError> {
+    async fn ask_questions(
+        &self,
+        prompt: &str,
+        questions: &[Question],
+    ) -> Result<Vec<QuestionAnswer>, ToolError> {
         let wire_questions = questions
             .iter()
-            .map(|q| InteractionQuestionWire { id: q.id.clone(), label: q.label.clone(), options: q.options.clone() })
+            .map(|q| InteractionQuestionWire {
+                id: q.id.clone(),
+                label: q.label.clone(),
+                options: q.options.clone(),
+            })
             .collect();
         self.out
-            .send(ServerMessage::InteractionQuestions { prompt: prompt.to_string(), questions: wire_questions })
+            .send(ServerMessage::InteractionQuestions {
+                prompt: prompt.to_string(),
+                questions: wire_questions,
+            })
             .map_err(|_| ToolError::Other("connexion websocket fermée".to_string()))?;
         let value = self.recv_answer().await?;
-        let answers: Vec<InteractionAnswerWire> = serde_json::from_value(value)
-            .map_err(|error| ToolError::Other(format!("réponses invalides au formulaire : {error}")))?;
+        let answers: Vec<InteractionAnswerWire> =
+            serde_json::from_value(value).map_err(|error| {
+                ToolError::Other(format!("réponses invalides au formulaire : {error}"))
+            })?;
         Ok(answers
             .into_iter()
             .map(|a| QuestionAnswer {
@@ -371,18 +434,31 @@ impl UserInteractionPort for WsUserInteraction {
 mod tests {
     use super::*;
 
-    fn room_with_article() -> (Arc<Room>, BodyNodeId) {
+    /// Pool paresseux (aucune connexion réseau) : la salle de test n'a pas
+    /// d'acte légal associé (`legal_act_id: None`), donc `record_and_broadcast`
+    /// ne touche jamais ce pool — seule sa présence en tant que valeur est
+    /// nécessaire pour construire une `EditorRoom`.
+    fn test_pool() -> storage::Pool {
+        storage::connect_lazy("postgres://localhost/unused").expect("pool paresseux valide")
+    }
+
+    fn room_with_article() -> (Arc<EditorRoom>, BodyNodeId) {
         let mut body = YrsBody::new();
         let root = body.root();
-        let article = body.append_node(root, NodeSpec::Article(legal_act::Article::default())).unwrap();
-        let (updates, _) = tokio::sync::broadcast::channel(16);
-        (Arc::new(Room { body: tokio::sync::Mutex::new(body), updates }), article)
+        let article = body
+            .append_node(root, NodeSpec::Article(legal_act::Article::default()))
+            .unwrap();
+        (EditorRoom::new(test_pool(), None, body, 1), article)
     }
 
     /// Construit un éditeur sans nœud sélectionné, pour les tests qui
     /// n'exercent pas la résolution du mot-clé `"selection"`.
-    fn new_editor(room: &Arc<Room>) -> WsLegalActEditor {
-        WsLegalActEditor::new(room.clone(), Arc::new(StdMutex::new(None)))
+    fn new_editor(room: &Arc<EditorRoom>) -> WsLegalActEditor {
+        WsLegalActEditor::new(
+            room.clone(),
+            Arc::new(StdMutex::new(None)),
+            shared::id::generate_id(),
+        )
     }
 
     /// Feuille `Plain` du corps (`ArticleBody`) d'un article, où le contenu
@@ -403,7 +479,8 @@ mod tests {
         {
             let mut body = room.body.lock().await;
             let leaf = body.first_leaf_of(article);
-            body.set_spec_unchecked(leaf, NodeSpec::Plain("Contenu de l'article".to_string())).unwrap();
+            body.set_spec_unchecked(leaf, NodeSpec::Plain("Contenu de l'article".to_string()))
+                .unwrap();
         }
         let editor = new_editor(&room);
 
@@ -418,7 +495,9 @@ mod tests {
         assert_eq!(article_node["kind"], "Article");
         assert_eq!(article_node["number"], 1);
 
-        let leaf_text = article_node["children"][0]["children"][0]["text"].as_str().unwrap();
+        let leaf_text = article_node["children"][0]["children"][0]["text"]
+            .as_str()
+            .unwrap();
         assert_eq!(leaf_text, "Contenu de l'article");
     }
 
@@ -428,9 +507,15 @@ mod tests {
         let mut updates = room.updates.subscribe();
         let editor = new_editor(&room);
 
-        editor.fill_section(&article.to_string(), "Contenu de l'article").await.unwrap();
+        editor
+            .fill_section(&article.to_string(), "Contenu de l'article")
+            .await
+            .unwrap();
 
-        let diff = updates.recv().await.expect("une mise à jour doit être diffusée");
+        let diff = updates
+            .recv()
+            .await
+            .expect("une mise à jour doit être diffusée");
         assert!(!diff.is_empty());
 
         let body = room.body.lock().await;
@@ -443,7 +528,9 @@ mod tests {
         let (room, _) = room_with_article();
         let editor = new_editor(&room);
 
-        let result = editor.fill_section(&BodyNodeId::new().to_string(), "x").await;
+        let result = editor
+            .fill_section(&BodyNodeId::new().to_string(), "x")
+            .await;
         assert!(result.is_err());
     }
 
@@ -454,9 +541,15 @@ mod tests {
         let mut updates = room.updates.subscribe();
         let editor = new_editor(&room);
 
-        let new_id = editor.insert_node(&root.to_string(), "Article", Some("Contenu de l'article")).await.unwrap();
+        let new_id = editor
+            .insert_node(&root.to_string(), "Article", Some("Contenu de l'article"))
+            .await
+            .unwrap();
 
-        let diff = updates.recv().await.expect("une mise à jour doit être diffusée");
+        let diff = updates
+            .recv()
+            .await
+            .expect("une mise à jour doit être diffusée");
         assert!(!diff.is_empty());
 
         let body = room.body.lock().await;
@@ -472,7 +565,9 @@ mod tests {
         let root = { room.body.lock().await.root() };
         let editor = new_editor(&room);
 
-        let result = editor.insert_node(&root.to_string(), "PasUnType", None).await;
+        let result = editor
+            .insert_node(&root.to_string(), "PasUnType", None)
+            .await;
         assert!(result.is_err());
     }
 
@@ -482,7 +577,9 @@ mod tests {
         let editor = new_editor(&room);
 
         // Un Article n'est pas un enfant autorisé d'un Article.
-        let result = editor.insert_node(&article.to_string(), "Article", None).await;
+        let result = editor
+            .insert_node(&article.to_string(), "Article", None)
+            .await;
         assert!(result.is_err());
     }
 
@@ -503,9 +600,12 @@ mod tests {
     async fn fill_section_accepts_selection_keyword() {
         let (room, article) = room_with_article();
         let selection = Arc::new(StdMutex::new(Some(article)));
-        let editor = WsLegalActEditor::new(room.clone(), selection);
+        let editor = WsLegalActEditor::new(room.clone(), selection, shared::id::generate_id());
 
-        editor.fill_section("selection", "Contenu ciblé").await.unwrap();
+        editor
+            .fill_section("selection", "Contenu ciblé")
+            .await
+            .unwrap();
 
         let body = room.body.lock().await;
         let leaf = article_body_leaf(&body, article);
@@ -529,7 +629,10 @@ mod tests {
 
         editor.remove_node(&article.to_string()).await.unwrap();
 
-        let diff = updates.recv().await.expect("une mise à jour doit être diffusée");
+        let diff = updates
+            .recv()
+            .await
+            .expect("une mise à jour doit être diffusée");
         assert!(!diff.is_empty());
 
         let body = room.body.lock().await;
@@ -552,7 +655,8 @@ mod tests {
         {
             let mut body = room.body.lock().await;
             let root = body.root();
-            body.append_node(root, NodeSpec::Article(legal_act::Article::default())).unwrap();
+            body.append_node(root, NodeSpec::Article(legal_act::Article::default()))
+                .unwrap();
         }
         let editor = new_editor(&room);
 
@@ -583,9 +687,15 @@ mod tests {
         let mut updates = room.updates.subscribe();
         let editor = new_editor(&room);
 
-        editor.set_title("Arrêté préfectoral portant autorisation d'exploiter").await.unwrap();
+        editor
+            .set_title("Arrêté préfectoral portant autorisation d'exploiter")
+            .await
+            .unwrap();
 
-        let diff = updates.recv().await.expect("une mise à jour doit être diffusée");
+        let diff = updates
+            .recv()
+            .await
+            .expect("une mise à jour doit être diffusée");
         assert!(!diff.is_empty());
 
         assert_eq!(

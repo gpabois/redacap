@@ -42,7 +42,10 @@ mod tests {
         merge_leaves(&mut body, first, second);
 
         assert_eq!(body.text_of(first), "helloworld");
-        assert_eq!(body.children_of(body.root()), vec![body.parent_of(first).unwrap()]);
+        assert_eq!(
+            body.children_of(body.root()),
+            vec![body.parent_of(first).unwrap()]
+        );
     }
 
     #[test]

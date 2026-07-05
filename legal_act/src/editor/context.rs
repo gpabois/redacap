@@ -3,8 +3,8 @@ use std::sync::Arc;
 use dsfr::ButtonVariant;
 use leptos::prelude::*;
 
-use crate::{Body, BodyNodeId};
 use super::state::EditorSelection;
+use crate::{Body, BodyNodeId};
 
 /// Action contextuelle injectée dans la zone portail de l'en-tête.
 ///
@@ -19,10 +19,7 @@ pub struct PortalAction {
 }
 
 impl PortalAction {
-    pub fn new(
-        label: impl Into<String>,
-        on_click: impl Fn() + Send + Sync + 'static,
-    ) -> Self {
+    pub fn new(label: impl Into<String>, on_click: impl Fn() + Send + Sync + 'static) -> Self {
         Self {
             label: label.into(),
             variant: ButtonVariant::Secondary,
@@ -95,7 +92,13 @@ impl EditorContext {
     /// Cible `node_id` pour l'agent IA, ou retire la cible si `node_id`
     /// était déjà ciblé (bascule).
     pub fn toggle_agent_target(&self, node_id: BodyNodeId) {
-        self.agent_target.update(|t| *t = if *t == Some(node_id) { None } else { Some(node_id) });
+        self.agent_target.update(|t| {
+            *t = if *t == Some(node_id) {
+                None
+            } else {
+                Some(node_id)
+            }
+        });
     }
 
     /// Remplace les actions du portail par la liste fournie.

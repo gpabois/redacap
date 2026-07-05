@@ -42,7 +42,24 @@ pub enum ServerMessage {
     /// L'agent demande une confirmation oui/non avant une action irréversible.
     InteractionConfirm { message: String },
     /// L'agent présente un formulaire structuré (outil `ask_questions`).
-    InteractionQuestions { prompt: String, questions: Vec<InteractionQuestionWire> },
+    InteractionQuestions {
+        prompt: String,
+        questions: Vec<InteractionQuestionWire>,
+    },
+    /// Liste des utilisateurs actuellement connectés à la salle (voir
+    /// `crate::editor::state::EditorRoom`), envoyée à ce client à la
+    /// connexion puis à chaque changement (arrivée/départ d'un pair).
+    Presence { users: Vec<PresenceUser> },
+}
+
+/// Identité d'un utilisateur connecté à la salle, telle qu'affichée par une
+/// pastille de présence côté client (initiale + couleur déterministes, voir
+/// `crate::editor::presence`).
+#[derive(Debug, Clone, Serialize)]
+pub struct PresenceUser {
+    pub user_id: String,
+    pub initial: String,
+    pub color: String,
 }
 
 #[derive(Debug, Serialize)]

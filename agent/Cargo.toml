@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 dsfr = { path = "../dsfr" }
 async-trait = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }
 leptos.workspace = true
 pulldown-cmark.workspace = true
 reqwest = { workspace = true, optional = true }
@@ -23,6 +24,6 @@ default = ["server"]
 # Boucle agentique, modèle de langage et outils — dépendances réseau
 # (reqwest, tokio), non disponibles en WASM. Le composant `AgentPanel` n'en
 # a pas besoin et reste donc utilisable côté client.
-server = ["dep:async-trait", "dep:reqwest", "dep:thiserror", "dep:tokio"]
+server = ["dep:async-trait", "dep:chrono", "dep:reqwest", "dep:thiserror", "dep:tokio"]
 ssr = ["leptos/ssr", "server"]
 hydrate = ["leptos/hydrate"]

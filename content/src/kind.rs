@@ -93,7 +93,11 @@ impl ContentKind {
         (Self::Plain, &[]),
     ];
 
-    pub fn find_ascending_path(self, to: Self, mut visited: Vec<ContentKind>) -> Option<Vec<ContentKind>> {
+    pub fn find_ascending_path(
+        self,
+        to: Self,
+        mut visited: Vec<ContentKind>,
+    ) -> Option<Vec<ContentKind>> {
         visited.push(self);
         if self.parents().any(|par| par == to) {
             return Some(vec![self]);
@@ -111,7 +115,11 @@ impl ContentKind {
 
     #[inline]
     pub fn allowed_children(self) -> &'static [ContentKind] {
-        Self::TABLE.iter().find(|(kind, _)| self == *kind).unwrap().1
+        Self::TABLE
+            .iter()
+            .find(|(kind, _)| self == *kind)
+            .unwrap()
+            .1
     }
 
     /// Vrai si `self` et `other` acceptent exactement les mêmes genres

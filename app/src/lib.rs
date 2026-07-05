@@ -4,8 +4,8 @@
 #![recursion_limit = "256"]
 
 pub mod app;
+pub mod auth;
 pub mod component;
 pub mod pages;
 mod protocol;
-pub mod utils;
 pub mod ws;

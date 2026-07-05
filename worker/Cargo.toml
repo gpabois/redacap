@@ -4,3 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+storage = { path = "../storage" }
+shared = { path = "../shared" }
+tokio = { workspace = true, features = ["signal", "time", "macros"] }
+yrs.workspace = true
+anyhow.workspace = true
+dotenv.workspace = true

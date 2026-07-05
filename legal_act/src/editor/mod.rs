@@ -1,6 +1,6 @@
-pub mod context;
 mod component;
 mod content;
+pub mod context;
 mod events;
 mod header;
 mod review;
@@ -8,9 +8,9 @@ mod state;
 mod widgets;
 
 pub use component::{EditLabel, EditStructuralNode, LegalActEditor};
-pub use context::{EditorContext, PortalAction, expect_editor_context, provide_editor_context};
 pub use content::ContentSubtree;
+pub use context::{EditorContext, PortalAction, expect_editor_context, provide_editor_context};
 pub use events::EditorEvent;
-pub use header::EditorHeader;
+pub use header::{ConnectedUser, EditorHeader};
 pub use review::{CommentThread, ReviewPanel};
 pub use state::{CursorId, EditorCursor, EditorSelection, SelectionState};

@@ -1,14 +1,14 @@
 use leptos::prelude::*;
 
 use agent::{AgentPanel, InteractionRequest, InteractionResponse, PanelMessage};
-use dsfr::{BlocMarianneInline, Tabs, TabPanel};
+use dsfr::{BlocMarianneInline, TabPanel, Tabs};
 
-use crate::{Body, BodyNodeId, NodeKind, NodeSpec};
-use crate::traits::node::{BodyRead, BodyWrite};
-use super::context::{expect_editor_context, provide_editor_context};
 use super::content::ContentSubtree;
-use super::header::EditorHeader;
+use super::context::{expect_editor_context, provide_editor_context};
+use super::header::{ConnectedUser, EditorHeader};
 use super::widgets::{InlineEditableDiv, ResizeHandle, TOOLBAR_BTN_CLASS};
+use crate::traits::node::{BodyRead, BodyWrite};
+use crate::{Body, BodyNodeId, NodeKind, NodeSpec};
 
 /// Largeur initiale du panneau agent IA, en pixels (équivalente à l'ancienne
 /// classe Tailwind fixe `w-80`).
@@ -73,6 +73,19 @@ pub fn LegalActEditor(
     /// l'identifiant technique.
     #[prop(optional)]
     on_agent_target: Option<Callback<Option<BodyNodeId>>>,
+    /// Initiale du nom affiché de l'utilisateur courant, transmise telle
+    /// quelle à [`EditorHeader`] pour la bulle d'avatar menant à `/account`.
+    /// `None` la masque (page hôte non authentifiée).
+    user_initial: Option<String>,
+    /// Transmis tel quel à [`EditorHeader`] : affiche un lien vers `/admin`
+    /// si l'utilisateur courant a accès au panneau administrateur.
+    #[prop(optional)]
+    is_admin: bool,
+    /// Transmis tel quel à [`EditorHeader`] : autres utilisateurs
+    /// actuellement connectés à la salle de collaboration, affichés en
+    /// pastilles à côté de la bulle de l'utilisateur courant.
+    #[prop(optional, into)]
+    connected_users: Option<Signal<Vec<ConnectedUser>>>,
 ) -> impl IntoView {
     let ctx = provide_editor_context(body);
     if let Some(on_agent_target) = on_agent_target {
@@ -84,9 +97,11 @@ pub fn LegalActEditor(
         _ => None,
     };
     let agent_interaction = agent_interaction.unwrap_or_else(|| Signal::derive(|| None));
+    let connected_users = connected_users.unwrap_or_else(|| Signal::derive(Vec::new));
     let on_agent_respond = on_agent_respond.unwrap_or_else(|| Callback::new(|_| {}));
     let agent_auto_accept = agent_auto_accept.unwrap_or_else(|| Signal::derive(|| false));
-    let on_agent_toggle_auto_accept = on_agent_toggle_auto_accept.unwrap_or_else(|| Callback::new(|_| {}));
+    let on_agent_toggle_auto_accept =
+        on_agent_toggle_auto_accept.unwrap_or_else(|| Callback::new(|_| {}));
 
     let has_agent = agent_cfg.is_some();
     let show_agent = RwSignal::new(true);
@@ -99,7 +114,7 @@ pub fn LegalActEditor(
     });
 
     let selected_tab = RwSignal::new(0);
-    
+
     view! {
         <div class="legal-act-editor flex flex-col min-h-screen max-h-screen text-base leading-relaxed">
             <div class="no-print">
@@ -107,6 +122,9 @@ pub fn LegalActEditor(
                     has_agent=has_agent
                     agent_panel_open=agent_panel_open
                     on_toggle_agent=on_toggle_agent
+                    user_initial=user_initial
+                    is_admin=is_admin
+                    connected_users=connected_users
                 />
             </div>
             <div class="flex flex-1 overflow-hidden">
@@ -454,10 +472,13 @@ pub fn EditStructuralNode(node_id: BodyNodeId) -> impl IntoView {
 fn EditTitre(node_id: BodyNodeId) -> impl IntoView {
     let ctx = expect_editor_context();
     let number = move || ctx.body.with(|b| b.spec_of(node_id).number().unwrap_or(1));
-    let label_id = move || ctx.body.with(|b| {
-        b.children_of(node_id).into_iter()
-            .find(|&id| b.kind_of(id) == NodeKind::LibelleTitre)
-    });
+    let label_id = move || {
+        ctx.body.with(|b| {
+            b.children_of(node_id)
+                .into_iter()
+                .find(|&id| b.kind_of(id) == NodeKind::LibelleTitre)
+        })
+    };
 
     view! {
         <div class="my-6 group">
@@ -502,10 +523,13 @@ fn EditTitre(node_id: BodyNodeId) -> impl IntoView {
 fn EditChapitre(node_id: BodyNodeId) -> impl IntoView {
     let ctx = expect_editor_context();
     let number = move || ctx.body.with(|b| b.spec_of(node_id).number().unwrap_or(1));
-    let label_id = move || ctx.body.with(|b| {
-        b.children_of(node_id).into_iter()
-            .find(|&id| b.kind_of(id) == NodeKind::LibelleChapitre)
-    });
+    let label_id = move || {
+        ctx.body.with(|b| {
+            b.children_of(node_id)
+                .into_iter()
+                .find(|&id| b.kind_of(id) == NodeKind::LibelleChapitre)
+        })
+    };
 
     view! {
         <div class="my-5 group">
@@ -547,10 +571,13 @@ fn EditChapitre(node_id: BodyNodeId) -> impl IntoView {
 fn EditSection(node_id: BodyNodeId) -> impl IntoView {
     let ctx = expect_editor_context();
     let number = move || ctx.body.with(|b| b.spec_of(node_id).number().unwrap_or(1));
-    let label_id = move || ctx.body.with(|b| {
-        b.children_of(node_id).into_iter()
-            .find(|&id| b.kind_of(id) == NodeKind::LibelleSection)
-    });
+    let label_id = move || {
+        ctx.body.with(|b| {
+            b.children_of(node_id)
+                .into_iter()
+                .find(|&id| b.kind_of(id) == NodeKind::LibelleSection)
+        })
+    };
 
     view! {
         <div class="my-4 group">
@@ -588,14 +615,20 @@ fn EditSection(node_id: BodyNodeId) -> impl IntoView {
 fn EditArticle(node_id: BodyNodeId) -> impl IntoView {
     let ctx = expect_editor_context();
     let number = move || ctx.body.with(|b| b.spec_of(node_id).number().unwrap_or(1));
-    let label_id = move || ctx.body.with(|b| {
-        b.children_of(node_id).into_iter()
-            .find(|&id| b.kind_of(id) == NodeKind::LibelleArticle)
-    });
-    let body_id = move || ctx.body.with(|b| {
-        b.children_of(node_id).into_iter()
-            .find(|&id| b.kind_of(id) == NodeKind::ArticleBody)
-    });
+    let label_id = move || {
+        ctx.body.with(|b| {
+            b.children_of(node_id)
+                .into_iter()
+                .find(|&id| b.kind_of(id) == NodeKind::LibelleArticle)
+        })
+    };
+    let body_id = move || {
+        ctx.body.with(|b| {
+            b.children_of(node_id)
+                .into_iter()
+                .find(|&id| b.kind_of(id) == NodeKind::ArticleBody)
+        })
+    };
 
     view! {
         <div class="my-4 group border-l-2 border-gray-200 pl-4">
@@ -619,10 +652,13 @@ fn EditArticle(node_id: BodyNodeId) -> impl IntoView {
 fn EditAnnexe(node_id: BodyNodeId) -> impl IntoView {
     let ctx = expect_editor_context();
     let number = move || ctx.body.with(|b| b.spec_of(node_id).number().unwrap_or(1));
-    let label_id = move || ctx.body.with(|b| {
-        b.children_of(node_id).into_iter()
-            .find(|&id| b.kind_of(id) == NodeKind::LibelleAnnexe)
-    });
+    let label_id = move || {
+        ctx.body.with(|b| {
+            b.children_of(node_id)
+                .into_iter()
+                .find(|&id| b.kind_of(id) == NodeKind::LibelleAnnexe)
+        })
+    };
 
     view! {
         <div class="my-6 group border border-gray-200 rounded p-4">

@@ -27,9 +27,7 @@ impl ButtonVariant {
             ButtonVariant::Tertiary => {
                 "bg-transparent text-blue-france shadow-[inset_0_0_0_1px] shadow-gray-300 hover:bg-blue-france-975"
             }
-            ButtonVariant::TertiaryNoOutline => {
-                "bg-transparent text-blue-france hover:bg-gray-200"
-            }
+            ButtonVariant::TertiaryNoOutline => "bg-transparent text-blue-france hover:bg-gray-200",
         }
     }
 }

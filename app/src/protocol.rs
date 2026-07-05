@@ -39,7 +39,24 @@ pub enum ServerMessage {
     /// L'agent demande une confirmation oui/non avant une action irréversible.
     InteractionConfirm { message: String },
     /// L'agent présente un formulaire structuré (outil `ask_questions`).
-    InteractionQuestions { prompt: String, questions: Vec<InteractionQuestionWire> },
+    InteractionQuestions {
+        prompt: String,
+        questions: Vec<InteractionQuestionWire>,
+    },
+    /// Liste des utilisateurs actuellement connectés à la salle, envoyée à
+    /// la connexion puis à chaque changement (arrivée/départ d'un pair).
+    Presence { users: Vec<PresenceUser> },
+}
+
+/// Identité d'un utilisateur connecté à la salle (voir
+/// `server::protocol::PresenceUser`, son pendant côté serveur) : initiale et
+/// couleur déterministes, calculées par le serveur pour que tous les pairs
+/// affichent la même pastille pour un même utilisateur.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PresenceUser {
+    pub user_id: String,
+    pub initial: String,
+    pub color: String,
 }
 
 #[derive(Debug, Deserialize)]

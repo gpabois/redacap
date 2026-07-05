@@ -1,8 +1,11 @@
 use anyhow::bail;
-use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Map, MapPrelim, Out, ReadTxn, Text, TextPrelim, Transact, TransactionMut};
+use yrs::{
+    Any, Array, ArrayPrelim, Doc, GetString, Map, MapPrelim, Out, ReadTxn, Text, TextPrelim,
+    Transact, TransactionMut,
+};
 
-use crate::{BodyNodeId, NodeKind, NodeSpec};
 use crate::traits::node::{BodyRead, BodyWrite};
+use crate::{BodyNodeId, NodeKind, NodeSpec};
 use content::ListMarker;
 
 /// Backend "mode Yrs" : le corps de l'acte légal est porté par un
@@ -30,9 +33,18 @@ impl YrsBody {
         let nodes = body.insert(&mut txn, "nodes", MapPrelim::default());
         body.insert(&mut txn, "root", root.to_string());
         body.insert(&mut txn, "title", "");
-        nodes.insert(&mut txn, root.to_string(), node_prelim(&NodeSpec::Root, None));
+        nodes.insert(
+            &mut txn,
+            root.to_string(),
+            node_prelim(&NodeSpec::Root, None),
+        );
         drop(txn);
-        Self { doc, body, nodes, root }
+        Self {
+            doc,
+            body,
+            nodes,
+            root,
+        }
     }
 
     pub fn open(doc: Doc, body: yrs::MapRef) -> anyhow::Result<Self> {
@@ -45,7 +57,12 @@ impl YrsBody {
             bail!("champ 'nodes' manquant ou invalide dans le nœud body yrs");
         };
         drop(txn);
-        Ok(Self { doc, body, nodes, root })
+        Ok(Self {
+            doc,
+            body,
+            nodes,
+            root,
+        })
     }
 
     pub fn doc(&self) -> &Doc {
@@ -80,13 +97,17 @@ impl BodyRead for YrsBody {
 
     fn kind_of(&self, id: BodyNodeId) -> NodeKind {
         let txn = self.doc.transact();
-        let node = self.node_map(&txn, id).unwrap_or_else(|| panic!("nœud inconnu : {id}"));
+        let node = self
+            .node_map(&txn, id)
+            .unwrap_or_else(|| panic!("nœud inconnu : {id}"));
         read_kind(&node, &txn)
     }
 
     fn text_of(&self, id: BodyNodeId) -> String {
         let txn = self.doc.transact();
-        let Some(node) = self.node_map(&txn, id) else { return String::new() };
+        let Some(node) = self.node_map(&txn, id) else {
+            return String::new();
+        };
         match node.get(&txn, "text") {
             Some(Out::YText(t)) => t.get_string(&txn),
             _ => String::new(),
@@ -104,7 +125,9 @@ impl BodyRead for YrsBody {
 
     fn children_of(&self, id: BodyNodeId) -> Vec<BodyNodeId> {
         let txn = self.doc.transact();
-        let Some(arr) = self.children_array(&txn, id) else { return vec![] };
+        let Some(arr) = self.children_array(&txn, id) else {
+            return vec![];
+        };
         arr.iter(&txn)
             .filter_map(|out| match out {
                 Out::Any(Any::String(s)) => s.parse().ok(),
@@ -115,7 +138,9 @@ impl BodyRead for YrsBody {
 
     fn spec_of(&self, id: BodyNodeId) -> NodeSpec {
         let txn = self.doc.transact();
-        let node = self.node_map(&txn, id).unwrap_or_else(|| panic!("nœud inconnu : {id}"));
+        let node = self
+            .node_map(&txn, id)
+            .unwrap_or_else(|| panic!("nœud inconnu : {id}"));
         read_spec(&node, &txn)
     }
 
@@ -132,7 +157,8 @@ impl BodyWrite for YrsBody {
     fn create_node(&mut self, spec: NodeSpec) -> BodyNodeId {
         let id = BodyNodeId::new();
         let mut txn = self.doc.transact_mut();
-        self.nodes.insert(&mut txn, id.to_string(), node_prelim(&spec, None));
+        self.nodes
+            .insert(&mut txn, id.to_string(), node_prelim(&spec, None));
         id
     }
 
@@ -195,20 +221,32 @@ impl BodyWrite for YrsBody {
 
     fn insert_text_unchecked(&mut self, id: BodyNodeId, char_index: usize, value: &str) {
         let mut txn = self.doc.transact_mut();
-        let Some(node) = self.node_map(&txn, id) else { return };
-        let Some(Out::YText(text)) = node.get(&txn, "text") else { return };
+        let Some(node) = self.node_map(&txn, id) else {
+            return;
+        };
+        let Some(Out::YText(text)) = node.get(&txn, "text") else {
+            return;
+        };
         let byte = byte_index_of(&text.get_string(&txn), char_index);
         text.insert(&mut txn, byte as u32, value);
     }
 
     fn remove_text_unchecked(&mut self, id: BodyNodeId, char_index: usize, char_count: usize) {
         let mut txn = self.doc.transact_mut();
-        let Some(node) = self.node_map(&txn, id) else { return };
-        let Some(Out::YText(text)) = node.get(&txn, "text") else { return };
+        let Some(node) = self.node_map(&txn, id) else {
+            return;
+        };
+        let Some(Out::YText(text)) = node.get(&txn, "text") else {
+            return;
+        };
         let current = text.get_string(&txn);
         let mut indices = current.char_indices().map(|(i, _)| i);
-        let Some(start) = indices.nth(char_index) else { return };
-        let end = indices.nth(char_count.saturating_sub(1)).unwrap_or(current.len());
+        let Some(start) = indices.nth(char_index) else {
+            return;
+        };
+        let end = indices
+            .nth(char_count.saturating_sub(1))
+            .unwrap_or(current.len());
         text.remove_range(&mut txn, start as u32, (end - start) as u32);
     }
 
@@ -220,9 +258,7 @@ impl BodyWrite for YrsBody {
         let current_kind = read_kind(&node, &txn);
         let new_kind = spec.kind();
         if new_kind != current_kind {
-            bail!(
-                "impossible de remplacer {current_kind} par {new_kind} : genres différents"
-            );
+            bail!("impossible de remplacer {current_kind} par {new_kind} : genres différents");
         }
         write_spec(&node, &mut txn, &spec);
         Ok(())
@@ -237,13 +273,25 @@ impl BodyWrite for YrsBody {
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 fn byte_index_of(text: &str, char_index: usize) -> usize {
-    text.char_indices().nth(char_index).map(|(i, _)| i).unwrap_or(text.len())
+    text.char_indices()
+        .nth(char_index)
+        .map(|(i, _)| i)
+        .unwrap_or(text.len())
 }
 
-fn collect_subtree(nodes: &yrs::MapRef, txn: &impl ReadTxn, id: BodyNodeId, out: &mut Vec<BodyNodeId>) {
+fn collect_subtree(
+    nodes: &yrs::MapRef,
+    txn: &impl ReadTxn,
+    id: BodyNodeId,
+    out: &mut Vec<BodyNodeId>,
+) {
     out.push(id);
-    let Some(Out::YMap(node)) = nodes.get(txn, &id.to_string()) else { return };
-    let Some(Out::YArray(children)) = node.get(txn, "children") else { return };
+    let Some(Out::YMap(node)) = nodes.get(txn, &id.to_string()) else {
+        return;
+    };
+    let Some(Out::YArray(children)) = node.get(txn, "children") else {
+        return;
+    };
     let child_ids: Vec<BodyNodeId> = children
         .iter(txn)
         .filter_map(|out| match out {
@@ -288,16 +336,26 @@ fn read_spec(node: &yrs::MapRef, txn: &impl ReadTxn) -> NodeSpec {
         Visa => NodeSpec::Visa,
         Considerant => NodeSpec::Considerant,
         Sur => NodeSpec::Sur,
-        Titre => NodeSpec::Titre(crate::kind::Titre { number: read_u32(node, txn, "number") }),
+        Titre => NodeSpec::Titre(crate::kind::Titre {
+            number: read_u32(node, txn, "number"),
+        }),
         LibelleTitre => NodeSpec::LibelleTitre,
-        Section => NodeSpec::Section(crate::kind::Section { number: read_u32(node, txn, "number") }),
+        Section => NodeSpec::Section(crate::kind::Section {
+            number: read_u32(node, txn, "number"),
+        }),
         LibelleSection => NodeSpec::LibelleSection,
-        Chapitre => NodeSpec::Chapitre(crate::kind::Chapitre { number: read_u32(node, txn, "number") }),
+        Chapitre => NodeSpec::Chapitre(crate::kind::Chapitre {
+            number: read_u32(node, txn, "number"),
+        }),
         LibelleChapitre => NodeSpec::LibelleChapitre,
-        Article => NodeSpec::Article(crate::kind::Article { number: read_u32(node, txn, "number") }),
+        Article => NodeSpec::Article(crate::kind::Article {
+            number: read_u32(node, txn, "number"),
+        }),
         LibelleArticle => NodeSpec::LibelleArticle,
         ArticleBody => NodeSpec::ArticleBody,
-        Annexe => NodeSpec::Annexe(crate::kind::Annexe { number: read_u32(node, txn, "number") }),
+        Annexe => NodeSpec::Annexe(crate::kind::Annexe {
+            number: read_u32(node, txn, "number"),
+        }),
         LibelleAnnexe => NodeSpec::LibelleAnnexe,
         Paragraphe => NodeSpec::Paragraphe,
         Plain => NodeSpec::Plain(match node.get(txn, "text") {
@@ -320,7 +378,9 @@ fn read_spec(node: &yrs::MapRef, txn: &impl ReadTxn) -> NodeSpec {
                 if n == 0 { None } else { Some(n) }
             },
         }),
-        ListItem => NodeSpec::ListItem(content::ListItem { marker: read_marker(node, txn, "marker") }),
+        ListItem => NodeSpec::ListItem(content::ListItem {
+            marker: read_marker(node, txn, "marker"),
+        }),
     }
 }
 
@@ -348,11 +408,21 @@ fn write_spec(node: &yrs::MapRef, txn: &mut TransactionMut, spec: &NodeSpec) {
         NodeSpec::ListItem(item) => {
             node.insert(txn, "marker", item.marker.as_ref());
         }
-        NodeSpec::Titre(t) => { node.insert(txn, "number", t.number as f64); }
-        NodeSpec::Section(s) => { node.insert(txn, "number", s.number as f64); }
-        NodeSpec::Chapitre(c) => { node.insert(txn, "number", c.number as f64); }
-        NodeSpec::Article(a) => { node.insert(txn, "number", a.number as f64); }
-        NodeSpec::Annexe(a) => { node.insert(txn, "number", a.number as f64); }
+        NodeSpec::Titre(t) => {
+            node.insert(txn, "number", t.number as f64);
+        }
+        NodeSpec::Section(s) => {
+            node.insert(txn, "number", s.number as f64);
+        }
+        NodeSpec::Chapitre(c) => {
+            node.insert(txn, "number", c.number as f64);
+        }
+        NodeSpec::Article(a) => {
+            node.insert(txn, "number", a.number as f64);
+        }
+        NodeSpec::Annexe(a) => {
+            node.insert(txn, "number", a.number as f64);
+        }
         _ => {}
     }
 }
@@ -386,11 +456,21 @@ fn node_prelim(spec: &NodeSpec, parent: Option<BodyNodeId>) -> MapPrelim {
         NodeSpec::ListItem(item) => {
             fields.push(("marker", yrs::In::from(item.marker.as_ref())));
         }
-        NodeSpec::Titre(t) => { fields.push(("number", yrs::In::from(t.number as f64))); }
-        NodeSpec::Section(s) => { fields.push(("number", yrs::In::from(s.number as f64))); }
-        NodeSpec::Chapitre(c) => { fields.push(("number", yrs::In::from(c.number as f64))); }
-        NodeSpec::Article(a) => { fields.push(("number", yrs::In::from(a.number as f64))); }
-        NodeSpec::Annexe(a) => { fields.push(("number", yrs::In::from(a.number as f64))); }
+        NodeSpec::Titre(t) => {
+            fields.push(("number", yrs::In::from(t.number as f64)));
+        }
+        NodeSpec::Section(s) => {
+            fields.push(("number", yrs::In::from(s.number as f64)));
+        }
+        NodeSpec::Chapitre(c) => {
+            fields.push(("number", yrs::In::from(c.number as f64)));
+        }
+        NodeSpec::Article(a) => {
+            fields.push(("number", yrs::In::from(a.number as f64)));
+        }
+        NodeSpec::Annexe(a) => {
+            fields.push(("number", yrs::In::from(a.number as f64)));
+        }
         _ => {}
     }
 
@@ -399,8 +479,8 @@ fn node_prelim(spec: &NodeSpec, parent: Option<BodyNodeId>) -> MapPrelim {
 
 #[cfg(test)]
 mod tests {
-    use crate::kind::{Titre, Article};
     use super::*;
+    use crate::kind::{Article, Titre};
 
     #[test]
     fn test_basic_yrs_body() {
@@ -418,7 +498,10 @@ mod tests {
         let mut body = YrsBody::new();
         assert_eq!(body.title(), "");
         body.set_title("Arrêté préfectoral portant autorisation d'exploiter");
-        assert_eq!(body.title(), "Arrêté préfectoral portant autorisation d'exploiter");
+        assert_eq!(
+            body.title(),
+            "Arrêté préfectoral portant autorisation d'exploiter"
+        );
     }
 
     #[test]
@@ -428,7 +511,10 @@ mod tests {
         let mut writer = YrsBody::new();
         writer.set_title("Titre de l'acte");
 
-        let update = writer.doc().transact().encode_diff_v1(&yrs::StateVector::default());
+        let update = writer
+            .doc()
+            .transact()
+            .encode_diff_v1(&yrs::StateVector::default());
         let remote_doc = Doc::new();
         remote_doc
             .transact_mut()
@@ -445,9 +531,14 @@ mod tests {
         use yrs::updates::decoder::Decode;
 
         let mut writer = YrsBody::new();
-        writer.append_node(writer.root(), NodeSpec::Titre(Titre::default())).unwrap();
+        writer
+            .append_node(writer.root(), NodeSpec::Titre(Titre::default()))
+            .unwrap();
 
-        let update = writer.doc().transact().encode_diff_v1(&yrs::StateVector::default());
+        let update = writer
+            .doc()
+            .transact()
+            .encode_diff_v1(&yrs::StateVector::default());
         let remote_doc = Doc::new();
         remote_doc
             .transact_mut()

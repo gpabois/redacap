@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["agent","app", "content", "frontend", "dsfr", "legal_act", "server", "shared", "render", "worker"]
+members = ["agent","app", "content", "frontend", "dsfr", "legal_act", "server", "shared", "render", "worker", "storage", "cli"]
 
 [workspace.dependencies]
 leptos = { version = "0.8.0" }
@@ -9,12 +9,14 @@ leptos_ws = { version = "0.9.8" }
 leptos_axum = { version = "0.8.0" }
 leptos_meta = { version = "0.8.0" }
 axum = { version = "0.8.0" }
+axum-extra = { version = "0.10", features = ["cookie", "cookie-private"] }
+cookie = { version = "0.18", features = ["key-expansion"] }
 console_error_panic_hook = { version = "0.1" }
 console_log = "1.0.0"
 log = "0.4.27"
 simple_logger = "5.0.0"
-tower = { version = "0.5.2", features = ["full"] }
-tower-http = { version = "0.6.4", features = ["full"] }
+tower = { version = "0.5.2" }
+tower-http = { version = "0.6.4" }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 wasm-bindgen = { version = "0.2.106" }
 serde_json = "1.0.150"
@@ -36,10 +38,18 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 thiserror = "2.0"
 dotenv = "0.15.0"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
-[profile.dev]
-opt-level = 0       # Pas d'optimisation pour garder le code fidèle
-debug = true        # Force la génération des symboles de débogage
-panic = "unwind"    # Permet de remonter la pile lors d'un panic
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "macros", "chrono", "json", "migrate"] }
+chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
+argon2 = "0.5"
+clap = { version = "4", features = ["derive"] }
+rpassword = "7.5"
+openidconnect = "4"
+aes-gcm = "0.10"
+base64 = "0.22"
+time = "0.3"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
 
 # Defines a size-optimized profile for the WASM bundle in release mode
 [profile.wasm-release]
@@ -117,3 +127,10 @@ lib-default-features = false
 #
 # Optional. Defaults to "release".
 lib-profile-release = "wasm-release"
+
+[profile.release]
+opt-level = "z"  # Optimize for size.
+lto = true
+
+[profile.dev]
+debug = "line-tables-only"

@@ -2,6 +2,7 @@ pub mod accordion;
 pub mod alert;
 pub mod back_to_top;
 pub mod badge;
+pub mod bloc_marque;
 pub mod breadcrumb;
 pub mod button;
 pub mod callout;
@@ -11,6 +12,7 @@ pub mod common;
 pub mod header;
 pub mod highlight;
 pub mod input;
+pub mod logo;
 pub mod notice;
 pub mod pagination;
 pub mod quote;
@@ -26,11 +28,9 @@ pub mod textarea;
 pub mod tile;
 pub mod toggle;
 pub mod tooltip;
-pub mod bloc_marque;
-pub mod logo;
 
-pub use logo::*;
 pub use bloc_marque::*;
+pub use logo::*;
 
 pub use accordion::*;
 pub use alert::*;

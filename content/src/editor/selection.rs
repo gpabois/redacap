@@ -20,8 +20,12 @@ impl EditorSelection {
     }
 
     pub fn is_plain_selected(&self, content_id: ContentId, body: &ContentHandle) -> Selection {
-        let Some(anchor) = self.anchor else { return Selection::Nothing };
-        let Some(focus) = self.focus else { return Selection::Nothing };
+        let Some(anchor) = self.anchor else {
+            return Selection::Nothing;
+        };
+        let Some(focus) = self.focus else {
+            return Selection::Nothing;
+        };
 
         if body.leaf_order_of(content_id, anchor.content_id) == Some(std::cmp::Ordering::Less) {
             return Selection::Nothing;

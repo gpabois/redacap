@@ -31,7 +31,10 @@ pub enum SelectionState {
 
 impl EditorSelection {
     pub fn selection(&self) -> Option<Selection> {
-        Some(Selection { anchor: self.anchor?, focus: self.focus? })
+        Some(Selection {
+            anchor: self.anchor?,
+            focus: self.focus?,
+        })
     }
 
     /// Corrige l'ordre anchor ≤ focus dans le document.

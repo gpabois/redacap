@@ -18,5 +18,7 @@ pub use direct::DirectContent;
 pub use editor::ContentEditor;
 pub use handle::ContentHandle;
 pub use id::ContentId;
-pub use kind::{Cell, ContentKind, List, ListItem, ListMarker, NodeSpec, Paragraph, Row, Span, Table};
+pub use kind::{
+    Cell, ContentKind, List, ListItem, ListMarker, NodeSpec, Paragraph, Row, Span, Table,
+};
 pub use traits::{ContentRead, ContentWrite};

@@ -140,7 +140,9 @@ Rédaction → [Vérification (1..N)] → Approbation → Génération ODT
 |---|---|
 | `/admin/users` | Gestion des comptes utilisateurs et permissions |
 | `/admin/groups` | Gestion des groupes |
+| `/admin/ai-models` | Modèles IA (OpenAI-compatible) utilisables comme moteur de l'agent « Marie » |
 | `/admin/oidc` | Configuration des providers OpenID Connect |
+| `/admin/integrations` | Clés API GéoRisques / Légifrance (chiffrées au repos) |
 | `/admin/audit` | Journal d'audit des accès et actions sensibles |
 
 ---
@@ -151,13 +153,18 @@ Rédaction → [Vérification (1..N)] → Approbation → Génération ODT
 DATABASE_URL=                  # URL PostgreSQL
 SESSION_SECRET=                # Secret HMAC pour les cookies de session (≥32 bytes)
 WEBRTC_STUN_SERVERS=           # URLs des serveurs STUN (JSON array)
-LEGIFRANCE_API_KEY=            # Clé API Légifrance
-GEORISQUES_API_KEY=            # Clé API GéoRisques (optionnel)
 OIDC_PROVIDERS=                # Configuration JSON des providers autorisés
-AI_AGENT_ENDPOINT=             # Endpoint du modèle IA (compatible OpenAI API)
-AI_AGENT_API_KEY=              # Clé API du modèle IA
+SECRET_ENCRYPTION_KEY=         # Clé AES-256 (32 octets, base64) de chiffrement au repos des secrets
+                                # applicatifs : client_secret OIDC, clé API des modèles IA
+                                # (/admin/ai-models), clés GéoRisques/Légifrance (/admin/integrations)
+PUBLIC_BASE_URL=               # URL publique de l'application, utilisée pour les redirect_uri OIDC
 RENDER_LIBREOFFICE_PATH=       # Chemin vers soffice pour la conversion PDF (optionnel)
 ```
+
+Le modèle IA moteur de l'agent (point de terminaison, modèle, clé API, prompt système dédié) et les
+clés API GéoRisques/Légifrance ne sont plus configurés par variable d'environnement : ils sont
+enregistrés en base, chiffrés avec `SECRET_ENCRYPTION_KEY`, via le panneau administrateur
+(`/admin/ai-models`, `/admin/integrations`).
 
 ---
 

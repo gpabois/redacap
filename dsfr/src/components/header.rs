@@ -9,8 +9,8 @@ use super::logo::Logo;
 pub struct SubHeader {
     #[prop(optional)]
     class: &'static str,
-    children: ChildrenFn
-} 
+    children: ChildrenFn,
+}
 
 /// En-tête de page DSFR avec bloc Marianne et zone d'outils.
 ///
@@ -35,7 +35,7 @@ pub fn Header(
     children: Option<Children>,
     /// Contenu de la zone en dessous de l'entête
     #[prop(optional)]
-    sub_header: Option<SubHeader>
+    sub_header: Option<SubHeader>,
 ) -> impl IntoView {
     view! {
         <header role="banner" class="fr-header bg-white border-b border-gray-300 shadow-sm">

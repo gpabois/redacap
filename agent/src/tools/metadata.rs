@@ -52,8 +52,8 @@ impl Tool for ReadMetadataTool {
     }
 
     async fn call(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
-        let args: ReadMetadataArguments =
-            serde_json::from_value(arguments).map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
+        let args: ReadMetadataArguments = serde_json::from_value(arguments)
+            .map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
 
         let value = self.metadata.read(&args.key).await?;
         Ok(ToolOutput::new(value.unwrap_or(Value::Null).to_string()))
@@ -78,7 +78,10 @@ pub struct WriteMetadataTool {
 impl WriteMetadataTool {
     #[must_use]
     pub fn new(metadata: Arc<dyn MetadataPort>, requires_confirmation: bool) -> Self {
-        Self { metadata, requires_confirmation }
+        Self {
+            metadata,
+            requires_confirmation,
+        }
     }
 }
 
@@ -108,8 +111,8 @@ impl Tool for WriteMetadataTool {
     }
 
     async fn call(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
-        let args: WriteMetadataArguments =
-            serde_json::from_value(arguments).map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
+        let args: WriteMetadataArguments = serde_json::from_value(arguments)
+            .map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
 
         self.metadata.write(&args.key, args.value).await?;
         Ok(ToolOutput::new("métadonnée mise à jour"))

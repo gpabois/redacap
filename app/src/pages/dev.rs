@@ -1,9 +1,7 @@
 //! Page de démonstration des états du panneau agent IA.
 //! Accessible en développement à la route `/dev/agent`.
 
-use agent::{
-    AgentPanel, InteractionRequest, InteractionResponse, PanelMessage, PanelQuestion,
-};
+use agent::{AgentPanel, InteractionRequest, InteractionResponse, PanelMessage, PanelQuestion};
 use leptos::prelude::*;
 
 // ── Scénarios ────────────────────────────────────────────────────────────────
@@ -151,9 +149,7 @@ fn ScenarioVide() -> impl IntoView {
 
 #[component]
 fn ScenarioEnAttente() -> impl IntoView {
-    let messages = Signal::derive(|| {
-        vec![PanelMessage::user("Rédige les visas de l'arrêté")]
-    });
+    let messages = Signal::derive(|| vec![PanelMessage::user("Rédige les visas de l'arrêté")]);
     let pending = Signal::derive(|| true);
     view! {
         <AgentPanel

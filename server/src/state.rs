@@ -1,47 +1,60 @@
-//! État partagé du serveur : le registre des salles de collaboration
-//! (une par document édité) et le modèle de langage utilisé par la
-//! boucle agentique.
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use axum::extract::FromRef;
+use axum_extra::extract::cookie::Key;
+use storage::Pool;
 
-use agent::LanguageModel;
-use legal_act::YrsBody;
-use tokio::sync::broadcast;
-
-/// Un document partagé entre les utilisateurs connectés à une même salle,
-/// avec le canal de diffusion des mises à jour Yrs vers les pairs.
-pub struct Room {
-    pub body: tokio::sync::Mutex<YrsBody>,
-    pub updates: broadcast::Sender<Vec<u8>>,
-}
-
-impl Room {
-    fn new() -> Arc<Self> {
-        let (updates, _) = broadcast::channel(256);
-        Arc::new(Self { body: tokio::sync::Mutex::new(YrsBody::new()), updates })
-    }
-}
-
-/// Registre des salles actives, une par identifiant de document
-/// (issu de l'URL `/ws/{room_id}`). Une salle est créée à la première
-/// connexion et conservée en mémoire tant que le processus tourne.
-#[derive(Default)]
-pub struct Rooms(Mutex<HashMap<String, Arc<Room>>>);
-
-impl Rooms {
-    pub fn get_or_create(&self, room_id: &str) -> Arc<Room> {
-        let mut rooms = self.0.lock().expect("verrou non empoisonné");
-        rooms.entry(room_id.to_string()).or_insert_with(Room::new).clone()
-    }
-}
+use crate::editor::state::EditorRooms;
 
 /// État partagé de l'application, exposé aux handlers Axum du websocket.
 pub struct AppState {
-    pub rooms: Rooms,
-    /// `None` si aucun point de terminaison compatible n'est configuré
-    /// (variables d'environnement `AGENT_BASE_URL`/`AGENT_API_KEY`/`AGENT_MODEL`
-    /// absentes) : les tentatives de lancer la boucle agentique échouent alors
-    /// proprement plutôt que de faire planter le serveur.
-    pub model: Option<Arc<dyn LanguageModel>>,
+    pub store: Pool,
+    pub rooms: EditorRooms,
+    /// Clé de chiffrement/signature des cookies de session, dérivée de
+    /// `SESSION_SECRET` (voir `server::auth::session`).
+    pub session_key: Key,
+    /// Clé de chiffrement/déchiffrement des secrets applicatifs (`client_secret`
+    /// des fournisseurs OIDC, clé API des modèles IA, clés GéoRisques/Légifrance),
+    /// dérivée de `SECRET_ENCRYPTION_KEY` (voir `shared::crypto`,
+    /// `server::auth::crypto`). `None` si absente ou invalide : ces
+    /// fonctionnalités sont alors indisponibles plutôt que de faire planter le
+    /// serveur au démarrage.
+    pub secret_encryption_key: Option<[u8; 32]>,
+    /// URL publique de base de l'application (ex. `https://redacap.example.org`),
+    /// nécessaire pour construire les `redirect_uri` OIDC. `None` si absente :
+    /// l'authentification OIDC est alors indisponible.
+    pub public_base_url: Option<String>,
+    /// Client HTTP partagé pour les échanges OIDC (découverte, échange de code,
+    /// userinfo), construit sans suivi de redirection (protection SSRF).
+    pub oidc_http_client: openidconnect::reqwest::Client,
+    /// État bootstrap (voir `Claude.md` § « Ajoute un état bootstrap... » et
+    /// `server::guard::bootstrap_guard`) : `true` tant qu'aucun compte ne
+    /// détient la permission globale `super_administrateur`, initialisé au
+    /// démarrage depuis `storage::bootstrap::is_required`. Repasse à `false`
+    /// dès la création du compte par `server::auth::bootstrap::create`,
+    /// sans nouvelle requête en base pour les requêtes suivantes.
+    pub bootstrap_required: Arc<AtomicBool>,
+}
+
+/// Enveloppe locale autour de `cookie::Key`, nécessaire pour satisfaire les
+/// règles de cohérence (« orphan rules ») : ni `axum::extract::FromRef` ni
+/// `axum_extra::extract::cookie::Key` ne sont définis dans ce crate, et
+/// `Arc<AppState>` ne compte pas comme un type local aux yeux du compilateur
+/// (seuls `&`, `&mut` et `Box` sont considérés « fondamentaux », pas `Arc`).
+/// `PrivateCookieJar<SessionKey>` est donc utilisé à la place de
+/// `PrivateCookieJar` (qui suppose implicitement `K = Key`).
+#[derive(Clone)]
+pub struct SessionKey(pub Key);
+
+impl From<SessionKey> for Key {
+    fn from(value: SessionKey) -> Self {
+        value.0
+    }
+}
+
+impl FromRef<Arc<AppState>> for SessionKey {
+    fn from_ref(state: &Arc<AppState>) -> Self {
+        SessionKey(state.session_key.clone())
+    }
 }

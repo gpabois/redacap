@@ -1,4 +1,3 @@
-
 /// Identifiant d'un acte légal.
 #[derive(Debug, Hash, Clone, Copy, PartialEq, Eq)]
 pub struct LegalActId(shared::id::ID);
@@ -34,6 +33,12 @@ pub struct LegalActMeta {
     pub id: LegalActId,
     pub kind: LegalActKind,
     pub autorite_id: Option<String>,
+    /// Nom de l'autorité administrative émettrice (ex. « DREAL »), affiché
+    /// dans le bloc-marque Marianne de l'en-tête ODT.
+    pub authority_name: Option<String>,
+    /// Nom de l'entité signataire de l'acte, affiché à droite de l'en-tête
+    /// ODT, en vis-à-vis du bloc-marque Marianne.
+    pub issuer_name: Option<String>,
     /// Date de signature au format ISO-8601 (`YYYY-MM-DD`).
     pub date_signature: Option<String>,
     /// Date d'entrée en vigueur au format ISO-8601 (`YYYY-MM-DD`).
@@ -50,6 +55,8 @@ impl LegalActMeta {
             id: LegalActId::new(),
             kind,
             autorite_id: None,
+            authority_name: None,
+            issuer_name: None,
             date_signature: None,
             date_entree_en_vigueur: None,
             modifie_par: vec![],

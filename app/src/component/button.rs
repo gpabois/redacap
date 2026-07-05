@@ -1,14 +1,10 @@
-use leptos::{IntoView, component, view};
 use leptos::prelude::*;
+use leptos::{IntoView, component, view};
 
 #[component]
-pub fn ButtonGroup(
-    #[prop(optional)]
-    class: &'static str,
-    children: Children
-) -> impl IntoView {
+pub fn ButtonGroup(#[prop(optional)] class: &'static str, children: Children) -> impl IntoView {
     view! {
-        <span class=format!("{class} 
+        <span class=format!("{class}
             inline-flex 
             *:text-xs 
             divide-x 

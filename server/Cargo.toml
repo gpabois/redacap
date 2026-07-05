@@ -9,10 +9,13 @@ edition = "2024"
 app = { path = "../app", default-features = false, features = ["ssr"] }
 agent = { path = "../agent", default-features = false, features = ["server"] }
 legal_act = { path = "../legal_act", default-features = false }
+storage = { path = "../storage" }
 leptos = { workspace = true, features = [ "ssr" ]}
 leptos_axum.workspace = true
 
 axum = { workspace = true, features = ["ws"] }
+axum-extra.workspace = true
+cookie.workspace = true
 simple_logger.workspace = true
 tokio.workspace = true
 tower.workspace = true
@@ -24,7 +27,17 @@ serde_json.workspace = true
 async-trait.workspace = true
 anyhow.workspace = true
 dotenv.workspace = true
+chrono.workspace = true
+shared = { path = "../shared" }
+openidconnect.workspace = true
+reqwest.workspace = true
+aes-gcm.workspace = true
+base64.workspace = true
+time.workspace = true
+thiserror.workspace = true
 futures-util = "0.3"
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [features]
 default = ["ssr"]

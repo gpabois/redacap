@@ -184,11 +184,7 @@ pub trait BodyWrite: BodyRead {
     /// Insère `child` sous `parent` à la position correcte pour respecter
     /// les règles d'ordre (pour les enfants du Root : Visa < Considerant <
     /// Sur < structurel < Annexe) et les règles d'appartenance.
-    fn append_node(
-        &mut self,
-        parent: BodyNodeId,
-        spec: NodeSpec,
-    ) -> anyhow::Result<BodyNodeId>
+    fn append_node(&mut self, parent: BodyNodeId, spec: NodeSpec) -> anyhow::Result<BodyNodeId>
     where
         Self: Sized,
     {
@@ -210,9 +206,7 @@ pub trait BodyWrite: BodyRead {
                     .ok_or_else(|| anyhow!("{container_kind} manquant sous {parent_kind}"))?;
                 return self.append_node(container, spec);
             }
-            bail!(
-                "le nœud {child_kind} n'est pas autorisé comme enfant de {parent_kind}"
-            );
+            bail!("le nœud {child_kind} n'est pas autorisé comme enfant de {parent_kind}");
         }
 
         let id = self.create_node(spec);
@@ -434,7 +428,8 @@ pub trait BodyWrite: BodyRead {
         Self: Sized,
     {
         let kind = self.kind_of(id);
-        if kind.is_label() || matches!(kind, NodeKind::Visa | NodeKind::Considerant | NodeKind::Sur) {
+        if kind.is_label() || matches!(kind, NodeKind::Visa | NodeKind::Considerant | NodeKind::Sur)
+        {
             // Libellé* ou visa/considérant/sur → recréer directement un Plain
             let plain = self.create_node(NodeSpec::Plain(String::new()));
             self.append_child_unchecked(id, plain)?;
@@ -453,11 +448,7 @@ pub trait BodyWrite: BodyRead {
     /// Fusionne `source` dans `target` (les deux doivent être des nœuds
     /// de contenu de structures compatibles). Voir les exigences pour les
     /// règles entre Paragraphe, List et ListItem.
-    fn merge_into(
-        &mut self,
-        target: BodyNodeId,
-        source: BodyNodeId,
-    ) -> anyhow::Result<()>
+    fn merge_into(&mut self, target: BodyNodeId, source: BodyNodeId) -> anyhow::Result<()>
     where
         Self: Sized,
     {
@@ -560,11 +551,7 @@ pub trait BodyWrite: BodyRead {
 
     /// Recalcule la numérotation de tous les nœuds `kind` dans les enfants
     /// directs de `parent` (numérotation locale, 1-based).
-    fn renumber_siblings(
-        &mut self,
-        parent: BodyNodeId,
-        kind: NodeKind,
-    ) -> anyhow::Result<()>
+    fn renumber_siblings(&mut self, parent: BodyNodeId, kind: NodeKind) -> anyhow::Result<()>
     where
         Self: Sized,
     {
@@ -615,10 +602,7 @@ mod tests {
         let root = body.root();
         let mut last_group = 0u8;
         for child in body.children_of(root) {
-            let group = body
-                .kind_of(child)
-                .root_order_group()
-                .unwrap_or(u8::MAX);
+            let group = body.kind_of(child).root_order_group().unwrap_or(u8::MAX);
             assert!(
                 group >= last_group,
                 "violation d'ordre dans Root : groupe {group} après groupe {last_group}"
@@ -635,7 +619,10 @@ mod tests {
         use NodeKind::*;
         // Simule l'ordre attendu
         let order = [Visa, Considerant, Sur, Titre, Article, Annexe];
-        let groups: Vec<u8> = order.iter().map(|k| k.root_order_group().unwrap()).collect();
+        let groups: Vec<u8> = order
+            .iter()
+            .map(|k| k.root_order_group().unwrap())
+            .collect();
         for w in groups.windows(2) {
             assert!(w[0] <= w[1]);
         }

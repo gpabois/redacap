@@ -4,3 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+content = { version = "0.1.0", path = "../content" }
+legal_act = { version = "0.1.0", path = "../legal_act" }
+thiserror = { workspace = true, features = ["std"] }
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+quick-xml = { version = "0.41.0" }

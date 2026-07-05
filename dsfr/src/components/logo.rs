@@ -6,7 +6,6 @@
 //!
 //! Palette : bleu République `#000091`, papier `#F7F6F1`, filet tricolore `#E1000F`.
 
-use leptos::*;
 use leptos::prelude::*;
 
 /// Bleu République (bleu Marianne).

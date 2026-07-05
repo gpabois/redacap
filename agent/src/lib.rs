@@ -38,7 +38,8 @@ pub mod tools;
 pub use error::{AgentError, ModelError, ToolError};
 #[cfg(feature = "server")]
 pub use model::{
-    ChatMessage, LanguageModel, OpenAiCompatibleModel, OpenAiCompatibleModelConfig, Role, ToolCall, ToolDefinition,
+    ChatMessage, LanguageModel, OpenAiCompatibleModel, OpenAiCompatibleModelConfig, Role, ToolCall,
+    ToolDefinition,
 };
 pub use panel::{
     AgentPanel, InteractionRequest, InteractionResponse, PanelMessage, PanelQuestion,

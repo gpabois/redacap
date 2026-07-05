@@ -1,0 +1,19 @@
+[package]
+name = "cli"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "redacap"
+path = "src/main.rs"
+
+[dependencies]
+server = { path = "../server" }
+worker = { path = "../worker" }
+storage = { path = "../storage" }
+shared = { path = "../shared" }
+clap.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+dotenv.workspace = true
+rpassword.workspace = true

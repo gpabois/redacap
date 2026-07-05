@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::{
     error::{AgentError, ToolError},
@@ -21,7 +21,10 @@ pub struct AgentConfig {
 
 impl Default for AgentConfig {
     fn default() -> Self {
-        Self { system_prompt: String::new(), max_steps: 16 }
+        Self {
+            system_prompt: String::new(),
+            max_steps: 16,
+        }
     }
 }
 
@@ -52,7 +55,13 @@ impl Agent {
         config: AgentConfig,
         auto_accept: Arc<AtomicBool>,
     ) -> Self {
-        Self { model, tools, user_interaction, config, auto_accept }
+        Self {
+            model,
+            tools,
+            user_interaction,
+            config,
+            auto_accept,
+        }
     }
 
     /// Exécute la boucle agentique jusqu'à obtenir une réponse finale du
@@ -90,7 +99,10 @@ impl Agent {
 
     async fn dispatch_tool_call(&self, call: &ToolCall) -> Result<ToolOutput, ToolError> {
         let Some(tool) = self.tools.get(&call.name) else {
-            return Err(ToolError::Other(format!("outil inconnu : « {} »", call.name)));
+            return Err(ToolError::Other(format!(
+                "outil inconnu : « {} »",
+                call.name
+            )));
         };
 
         if tool.requires_confirmation() && !self.auto_accept.load(Ordering::Relaxed) {
@@ -134,7 +146,11 @@ mod tests {
             _messages: &[ChatMessage],
             _tools: &[ToolDefinition],
         ) -> Result<ChatMessage, crate::error::ModelError> {
-            Ok(self.responses.lock().expect("verrou non empoisonné").remove(0))
+            Ok(self
+                .responses
+                .lock()
+                .expect("verrou non empoisonné")
+                .remove(0))
         }
     }
 
@@ -218,12 +234,20 @@ mod tests {
                     name: "icpe_query".to_string(),
                     arguments: json!({}),
                 }]),
-                ChatMessage { role: crate::model::Role::Assistant, content: Some("terminé".to_string()), tool_calls: vec![], tool_call_id: None },
+                ChatMessage {
+                    role: crate::model::Role::Assistant,
+                    content: Some("terminé".to_string()),
+                    tool_calls: vec![],
+                    tool_call_id: None,
+                },
             ]),
         };
 
         let mut tools = ToolRegistry::new();
-        tools.register(Box::new(CountingTool { calls: AtomicUsize::new(0), requires_confirmation: false }));
+        tools.register(Box::new(CountingTool {
+            calls: AtomicUsize::new(0),
+            requires_confirmation: false,
+        }));
 
         let agent = Agent::new(
             Arc::new(model),
@@ -233,7 +257,10 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         );
 
-        let answer = agent.run("vérifie l'installation").await.expect("exécution réussie");
+        let answer = agent
+            .run("vérifie l'installation")
+            .await
+            .expect("exécution réussie");
         assert_eq!(answer, "terminé");
     }
 
@@ -246,12 +273,20 @@ mod tests {
                     name: "icpe_query".to_string(),
                     arguments: json!({}),
                 }]),
-                ChatMessage { role: crate::model::Role::Assistant, content: Some("terminé".to_string()), tool_calls: vec![], tool_call_id: None },
+                ChatMessage {
+                    role: crate::model::Role::Assistant,
+                    content: Some("terminé".to_string()),
+                    tool_calls: vec![],
+                    tool_call_id: None,
+                },
             ]),
         };
 
         let mut tools = ToolRegistry::new();
-        tools.register(Box::new(CountingTool { calls: AtomicUsize::new(0), requires_confirmation: true }));
+        tools.register(Box::new(CountingTool {
+            calls: AtomicUsize::new(0),
+            requires_confirmation: true,
+        }));
 
         let agent = Agent::new(
             Arc::new(model),
@@ -261,7 +296,10 @@ mod tests {
             Arc::new(AtomicBool::new(true)),
         );
 
-        let answer = agent.run("vérifie l'installation").await.expect("exécution réussie");
+        let answer = agent
+            .run("vérifie l'installation")
+            .await
+            .expect("exécution réussie");
         assert_eq!(answer, "terminé");
     }
 
@@ -280,11 +318,22 @@ mod tests {
         };
 
         let mut tools = ToolRegistry::new();
-        tools.register(Box::new(CountingTool { calls: AtomicUsize::new(0), requires_confirmation: false }));
+        tools.register(Box::new(CountingTool {
+            calls: AtomicUsize::new(0),
+            requires_confirmation: false,
+        }));
 
-        let config = AgentConfig { max_steps: 2, ..AgentConfig::default() };
-        let agent =
-            Agent::new(Arc::new(model), tools, Arc::new(AlwaysConfirm), config, Arc::new(AtomicBool::new(false)));
+        let config = AgentConfig {
+            max_steps: 2,
+            ..AgentConfig::default()
+        };
+        let agent = Agent::new(
+            Arc::new(model),
+            tools,
+            Arc::new(AlwaysConfirm),
+            config,
+            Arc::new(AtomicBool::new(false)),
+        );
 
         let result = agent.run("tâche").await;
         assert!(matches!(result, Err(AgentError::MaxStepsExceeded(2))));

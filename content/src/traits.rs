@@ -139,7 +139,12 @@ pub trait ContentWrite: ContentRead {
     /// premier enfant, `children_of(parent).len()` = dernier), sans
     /// vérifier la compatibilité des types de noeuds. `child` doit être
     /// détaché (sans parent) au préalable.
-    fn insert_child_at(&mut self, parent: ContentId, index: usize, child: ContentId) -> anyhow::Result<()>;
+    fn insert_child_at(
+        &mut self,
+        parent: ContentId,
+        index: usize,
+        child: ContentId,
+    ) -> anyhow::Result<()>;
 
     /// Détache `id` de son parent, sans le supprimer : il devient un noeud
     /// sans parent, prêt à être rattaché ailleurs via
@@ -173,11 +178,17 @@ pub trait ContentWrite: ContentRead {
 
     /// Insère `sibling` (détaché au préalable) juste après `id`, comme
     /// enfant du même parent que `id`.
-    fn insert_sibling_after(&mut self, id: ContentId, sibling: ContentId) -> anyhow::Result<ContentId>
+    fn insert_sibling_after(
+        &mut self,
+        id: ContentId,
+        sibling: ContentId,
+    ) -> anyhow::Result<ContentId>
     where
         Self: Sized,
     {
-        let parent = self.parent_of(id).ok_or_else(|| anyhow!("le noeud {id} n'a pas de parent"))?;
+        let parent = self
+            .parent_of(id)
+            .ok_or_else(|| anyhow!("le noeud {id} n'a pas de parent"))?;
         let siblings = self.children_of(parent);
         let index = siblings
             .iter()
@@ -208,13 +219,19 @@ pub trait ContentWrite: ContentRead {
                 let merged = format!("{}{}", self.text_of(target), self.text_of(source));
                 self.set_spec(target, NodeSpec::Plain(merged))?;
             }
-            (t, s) if t != ContentKind::Plain && s != ContentKind::Plain && t.allowed_children_match(s) => {
+            (t, s)
+                if t != ContentKind::Plain
+                    && s != ContentKind::Plain
+                    && t.allowed_children_match(s) =>
+            {
                 for child in self.children_of(source) {
                     self.detach_unchecked(child)?;
                     self.append_child_unchecked(target, child)?;
                 }
             }
-            (t, s) => bail!("impossible de fusionner un noeud {s} dans un noeud {t} : structures incompatibles"),
+            (t, s) => bail!(
+                "impossible de fusionner un noeud {s} dans un noeud {t} : structures incompatibles"
+            ),
         }
 
         self.remove_node(source)
@@ -228,7 +245,9 @@ pub trait ContentWrite: ContentRead {
     where
         Self: Sized,
     {
-        let prev = self.prev_sibling_of(id).ok_or_else(|| anyhow!("le noeud {id} n'a pas de frère précédent"))?;
+        let prev = self
+            .prev_sibling_of(id)
+            .ok_or_else(|| anyhow!("le noeud {id} n'a pas de frère précédent"))?;
         self.merge_into(prev, id)?;
         Ok(prev)
     }
@@ -245,7 +264,11 @@ pub trait ContentWrite: ContentRead {
         let spec = self.spec_of(id);
 
         let new_id = if let NodeSpec::Plain(text) = spec {
-            let byte_at = text.char_indices().nth(at).map(|(i, _)| i).unwrap_or(text.len());
+            let byte_at = text
+                .char_indices()
+                .nth(at)
+                .map(|(i, _)| i)
+                .unwrap_or(text.len());
             let head = text[..byte_at].to_string();
             let tail = text[byte_at..].to_string();
 
@@ -269,16 +292,20 @@ pub trait ContentWrite: ContentRead {
     /// `target` pour que `descendant` devienne un descendant valide de
     /// `target`, et renvoie l'identifiant du noeud directement attachable à
     /// `target`.
-    fn ensure_compatible_node_for(&mut self, target: ContentId, descendant: ContentId) -> anyhow::Result<ContentId>
+    fn ensure_compatible_node_for(
+        &mut self,
+        target: ContentId,
+        descendant: ContentId,
+    ) -> anyhow::Result<ContentId>
     where
         Self: Sized,
     {
         let parent_kind = self.kind_of(target);
         let kind = self.kind_of(descendant);
 
-        let mut path = kind
-            .correction_path(parent_kind)
-            .ok_or_else(|| anyhow!("noeud de contenu enfant incompatible avec le parent {kind} vs. {parent_kind}"))?;
+        let mut path = kind.correction_path(parent_kind).ok_or_else(|| {
+            anyhow!("noeud de contenu enfant incompatible avec le parent {kind} vs. {parent_kind}")
+        })?;
         path.reverse();
 
         let mut content_id = descendant;

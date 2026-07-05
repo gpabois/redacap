@@ -1,15 +1,13 @@
-
-use leptos::*;
 use leptos::prelude::*;
+use leptos::*;
 use web_sys::KeyboardEvent;
-
 
 #[component]
 pub fn InlineEditableField(
     /// Le signal contenant la valeur actuelle (lecture)
-    #[prop(into)] value: Signal<String>,
-    #[prop(optional)]
-    class: &'static str,
+    #[prop(into)]
+    value: Signal<String>,
+    #[prop(optional)] class: &'static str,
     /// Le callback déclenché lorsque la valeur est validée/modifiée
     on_save: impl Fn(String) + Clone + Send + 'static,
 ) -> impl IntoView {
@@ -27,7 +25,7 @@ pub fn InlineEditableField(
     };
 
     // Style commun partagé pour s'assurer que la taille et l'alignement restent identiques
-    
+
     view! {
         <div class="inline-block">
             {move || if is_editing.get() {
@@ -54,7 +52,7 @@ pub fn InlineEditableField(
                 }.into_any()
             } else {
                 view! {
-                    <div 
+                    <div
                         // On applique base_classes, et on ajoute juste un effet au survol (hover)
                         class=format!("{class} border-b-2 border-transparent cursor-pointer after:content-['✎'] after:ml-1.5 after:text-gray-400 after:text-sm after:opacity-0 after:transition-opacity hover:after:opacity-100")
                         on:click=move |_| set_is_editing.set(true)

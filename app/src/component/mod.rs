@@ -3,8 +3,8 @@ pub mod button;
 pub mod form;
 pub mod legal_act_editor;
 
-pub use legal_act_editor::LegalActEditor;
-pub use content::ContentEditor;
 pub use bloc_marque::*;
 pub use button::*;
+pub use content::ContentEditor;
 pub use form::*;
+pub use legal_act_editor::LegalActEditor;

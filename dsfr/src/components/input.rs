@@ -11,6 +11,10 @@ pub fn Input(
     #[prop(into)] value: Signal<String>,
     on_input: impl Fn(String) + 'static,
     #[prop(optional, default = "text")] r#type: &'static str,
+    /// Attribut HTML `name`, nécessaire pour qu'un `<form>` natif (soumission
+    /// sans JavaScript, ex. connexion par identifiants) inclue ce champ.
+    #[prop(optional, default = "")]
+    name: &'static str,
     #[prop(optional)] hint: Option<&'static str>,
     #[prop(optional)] error: Option<String>,
     #[prop(optional)] disabled: bool,
@@ -28,6 +32,7 @@ pub fn Input(
             {hint.map(|hint| view! { <span class="text-sm text-gray-600">{hint}</span> })}
             <input
                 type=r#type
+                name=name
                 class=format!("{input_border} bg-gray-100 px-3 py-2 outline-none disabled:opacity-50")
                 prop:value=move || value.get()
                 disabled=disabled

@@ -1,13 +1,12 @@
 use leptos::html;
 use leptos::prelude::*;
-use web_sys::wasm_bindgen::JsCast;
 use web_sys::HtmlDocument;
+use web_sys::wasm_bindgen::JsCast;
 
-use crate::BodyNodeId;
 use super::context::expect_editor_context;
+use crate::BodyNodeId;
 
-pub(super) const TOOLBAR_BTN_CLASS: &str =
-    "no-print text-xs border border-teal-600 text-teal-600 rounded px-2 py-0.5 \
+pub(super) const TOOLBAR_BTN_CLASS: &str = "no-print text-xs border border-teal-600 text-teal-600 rounded px-2 py-0.5 \
      hover:bg-teal-50 cursor-pointer";
 
 /// Poignée de redimensionnement par glissement horizontal (souris) : ajuste
@@ -124,17 +123,33 @@ pub(super) fn InlineEditableDiv(
 
 /// Renvoie `true` si le curseur est collapsé tout au début du `div`.
 fn cursor_at_document_start(el: &web_sys::HtmlDivElement) -> bool {
-    let Ok(Some(sel)) = document().get_selection() else { return false };
-    if !sel.is_collapsed() { return false }
-    if sel.range_count() == 0 { return false }
-    let Ok(range) = sel.get_range_at(0) else { return false };
-    if range.start_offset().unwrap_or(1) != 0 { return false }
-    let Ok(container) = range.start_container() else { return false };
+    let Ok(Some(sel)) = document().get_selection() else {
+        return false;
+    };
+    if !sel.is_collapsed() {
+        return false;
+    }
+    if sel.range_count() == 0 {
+        return false;
+    }
+    let Ok(range) = sel.get_range_at(0) else {
+        return false;
+    };
+    if range.start_offset().unwrap_or(1) != 0 {
+        return false;
+    }
+    let Ok(container) = range.start_container() else {
+        return false;
+    };
     let el_node: &web_sys::Node = el.unchecked_ref();
     let mut node = container;
     loop {
-        if node.is_same_node(Some(el_node)) { return true }
-        if node.previous_sibling().is_some() { return false }
+        if node.is_same_node(Some(el_node)) {
+            return true;
+        }
+        if node.previous_sibling().is_some() {
+            return false;
+        }
         match node.parent_node() {
             Some(p) => node = p,
             None => return false,
@@ -144,19 +159,39 @@ fn cursor_at_document_start(el: &web_sys::HtmlDivElement) -> bool {
 
 /// Renvoie `true` si le curseur est collapsé tout à la fin du `div`.
 fn cursor_at_document_end(el: &web_sys::HtmlDivElement) -> bool {
-    let Ok(Some(sel)) = document().get_selection() else { return false };
-    if !sel.is_collapsed() { return false }
-    if sel.range_count() == 0 { return false }
-    let Ok(range) = sel.get_range_at(0) else { return false };
-    let Ok(container) = range.start_container() else { return false };
+    let Ok(Some(sel)) = document().get_selection() else {
+        return false;
+    };
+    if !sel.is_collapsed() {
+        return false;
+    }
+    if sel.range_count() == 0 {
+        return false;
+    }
+    let Ok(range) = sel.get_range_at(0) else {
+        return false;
+    };
+    let Ok(container) = range.start_container() else {
+        return false;
+    };
     let offset = range.start_offset().unwrap_or(0) as usize;
-    let text_len = container.text_content().unwrap_or_default().encode_utf16().count();
-    if offset != text_len { return false }
+    let text_len = container
+        .text_content()
+        .unwrap_or_default()
+        .encode_utf16()
+        .count();
+    if offset != text_len {
+        return false;
+    }
     let el_node: &web_sys::Node = el.unchecked_ref();
     let mut node = container;
     loop {
-        if node.is_same_node(Some(el_node)) { return true }
-        if node.next_sibling().is_some() { return false }
+        if node.is_same_node(Some(el_node)) {
+            return true;
+        }
+        if node.next_sibling().is_some() {
+            return false;
+        }
         match node.parent_node() {
             Some(p) => node = p,
             None => return false,
@@ -167,9 +202,13 @@ fn cursor_at_document_end(el: &web_sys::HtmlDivElement) -> bool {
 /// Place le curseur à la fin de tout le contenu du `div`.
 pub(super) fn set_cursor_to_end(el: &web_sys::HtmlDivElement) {
     let doc = document();
-    let Ok(range) = doc.create_range() else { return };
+    let Ok(range) = doc.create_range() else {
+        return;
+    };
     let el_node: &web_sys::Node = el.unchecked_ref();
-    if range.select_node_contents(el_node).is_err() { return }
+    if range.select_node_contents(el_node).is_err() {
+        return;
+    }
     range.collapse_with_to_start(false);
     if let Ok(Some(sel)) = doc.get_selection() {
         let _ = sel.remove_all_ranges();
@@ -235,11 +274,9 @@ pub(super) fn FormatToolbar() -> impl IntoView {
 /// `at_end`, place le curseur à la fin.
 #[component]
 pub(super) fn RichEditableDiv(
-    #[prop(into)]
-    html: Signal<String>,
+    #[prop(into)] html: Signal<String>,
     on_save: impl Fn(String) + Clone + Send + Sync + 'static,
-    #[prop(optional)]
-    class: &'static str,
+    #[prop(optional)] class: &'static str,
     /// Nœud du corps représenté par ce div (pour le suivi du focus contextuel).
     #[prop(optional)]
     focus_node_id: Option<BodyNodeId>,
@@ -276,7 +313,9 @@ pub(super) fn RichEditableDiv(
             if Some(req_id) == focus_node_id {
                 if let Some(el) = div_ref.get() {
                     let _ = el.focus();
-                    if at_end { set_cursor_to_end(&el); }
+                    if at_end {
+                        set_cursor_to_end(&el);
+                    }
                     ctx.content_focus_request.set(None);
                 }
             }

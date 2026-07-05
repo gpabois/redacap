@@ -20,8 +20,8 @@
 use agent::{InteractionRequest, InteractionResponse, PanelMessage, PanelQuestion};
 use legal_act::{Body, BodyNodeId, DirectBody, YrsBody};
 use leptos::prelude::*;
-use web_sys::wasm_bindgen::closure::Closure;
 use web_sys::wasm_bindgen::JsCast;
+use web_sys::wasm_bindgen::closure::Closure;
 use web_sys::{BinaryType, MessageEvent, WebSocket};
 use yrs::updates::decoder::Decode;
 // Alias : `yrs::Update` porterait sinon le même nom que le trait
@@ -30,7 +30,7 @@ use yrs::updates::decoder::Decode;
 use yrs::Update as YrsUpdate;
 use yrs::{Doc, Transact};
 
-use crate::protocol::{ClientMessage, InteractionAnswerWire, ServerMessage};
+use crate::protocol::{ClientMessage, InteractionAnswerWire, PresenceUser, ServerMessage};
 
 /// Origine posée sur les transactions Yrs appliquées depuis le réseau, pour
 /// que l'observateur de mises à jour locales (voir [`open_socket`]) sache
@@ -76,8 +76,7 @@ pub struct RoomHandle {
     pub body: RwSignal<Body>,
     /// `true` dès que le corps ci-dessus reflète l'état du serveur : la
     /// page hôte doit attendre ce signal avant de monter
-    /// [`legal_act::LegalActEditor`] (voir le commentaire de
-    /// [`super::app::PageEditeurActe`]).
+    /// [`legal_act::LegalActEditor`] (voir `super::app::PageEditorProjet`).
     pub ready: RwSignal<bool>,
     pub agent_messages: RwSignal<Vec<PanelMessage>>,
     pub agent_pending: RwSignal<bool>,
@@ -86,6 +85,10 @@ pub struct RoomHandle {
     /// les modifications proposées par l'agent, sans confirmation
     /// individuelle (voir [`RoomHandle::set_auto_accept`]).
     pub auto_accept: RwSignal<bool>,
+    /// Utilisateurs actuellement connectés à la salle (voir
+    /// `server::protocol::ServerMessage::Presence`), pour l'affichage des
+    /// pastilles de présence dans l'en-tête de l'éditeur.
+    pub connected_users: RwSignal<Vec<PresenceUser>>,
     pending_kind: RwSignal<Option<PendingInteractionKind>>,
     socket: RwSignal<Option<WasmSend<WebSocket>>>,
 }
@@ -105,13 +108,16 @@ impl RoomHandle {
     /// que l'utilisateur ait à connaître ni transmettre son identifiant
     /// technique.
     pub fn set_selection(&self, node_id: Option<BodyNodeId>) {
-        self.send(&ClientMessage::SetSelection { node_id: node_id.map(|id| id.to_string()) });
+        self.send(&ClientMessage::SetSelection {
+            node_id: node_id.map(|id| id.to_string()),
+        });
     }
 
     /// Démarre la boucle agentique côté serveur avec `task`, et ajoute
     /// immédiatement le message de l'utilisateur à l'historique affiché.
     pub fn run_agent(&self, task: String) {
-        self.agent_messages.update(|m| m.push(PanelMessage::user(task.clone())));
+        self.agent_messages
+            .update(|m| m.push(PanelMessage::user(task.clone())));
         self.agent_pending.set(true);
         self.send(&ClientMessage::RunAgent { task });
     }
@@ -121,11 +127,19 @@ impl RoomHandle {
     /// (voir [`server::protocol::ClientMessage::InteractionAnswer`]).
     pub fn respond(&self, response: InteractionResponse) {
         let value = match self.pending_kind.get_untracked() {
-            Some(PendingInteractionKind::Ask) => {
-                serde_json::Value::String(response.answers.into_iter().next().map(|a| a.value).unwrap_or_default())
-            }
+            Some(PendingInteractionKind::Ask) => serde_json::Value::String(
+                response
+                    .answers
+                    .into_iter()
+                    .next()
+                    .map(|a| a.value)
+                    .unwrap_or_default(),
+            ),
             Some(PendingInteractionKind::Confirm) => {
-                let yes = response.answers.first().is_some_and(|a| a.value.eq_ignore_ascii_case("oui"));
+                let yes = response
+                    .answers
+                    .first()
+                    .is_some_and(|a| a.value.eq_ignore_ascii_case("oui"));
                 serde_json::Value::Bool(yes)
             }
             Some(PendingInteractionKind::Questions) | None => {
@@ -148,7 +162,9 @@ impl RoomHandle {
     }
 
     fn send(&self, message: &ClientMessage) {
-        let Some(socket) = self.socket.get_untracked() else { return };
+        let Some(socket) = self.socket.get_untracked() else {
+            return;
+        };
         if let Ok(text) = serde_json::to_string(message) {
             let _ = socket.send_with_str(&text);
         }
@@ -169,6 +185,7 @@ pub fn connect_room(room_id: impl Into<String>) -> RoomHandle {
         agent_pending: RwSignal::new(false),
         interaction: RwSignal::new(None),
         auto_accept: RwSignal::new(false),
+        connected_users: RwSignal::new(Vec::new()),
         pending_kind: RwSignal::new(None),
         socket: RwSignal::new(None),
     };
@@ -182,14 +199,22 @@ pub fn connect_room(room_id: impl Into<String>) -> RoomHandle {
 
 fn room_ws_url(room_id: &str) -> Option<String> {
     let location = window().location();
-    let scheme = if location.protocol().ok()? == "https:" { "wss" } else { "ws" };
+    let scheme = if location.protocol().ok()? == "https:" {
+        "wss"
+    } else {
+        "ws"
+    };
     let host = location.host().ok()?;
-    Some(format!("{scheme}://{host}/ws/{room_id}"))
+    Some(format!("{scheme}://{host}/editor/{room_id}/ws"))
 }
 
 fn open_socket(room_id: &str, handle: RoomHandle) {
-    let Some(url) = room_ws_url(room_id) else { return };
-    let Ok(socket) = WebSocket::new(&url) else { return };
+    let Some(url) = room_ws_url(room_id) else {
+        return;
+    };
+    let Ok(socket) = WebSocket::new(&url) else {
+        return;
+    };
     socket.set_binary_type(BinaryType::Arraybuffer);
 
     let onmessage = Closure::<dyn FnMut(MessageEvent)>::new(move |ev: MessageEvent| {
@@ -220,7 +245,9 @@ fn on_message(handle: RoomHandle, ev: MessageEvent) {
 /// des mises à jour incrémentales, appliquées directement au document
 /// existant.
 fn handle_binary_frame(handle: RoomHandle, bytes: &[u8]) {
-    let Ok(update) = YrsUpdate::decode_v1(bytes) else { return };
+    let Ok(update) = YrsUpdate::decode_v1(bytes) else {
+        return;
+    };
 
     if !handle.ready.get_untracked() {
         let doc = Doc::new();
@@ -228,7 +255,9 @@ fn handle_binary_frame(handle: RoomHandle, bytes: &[u8]) {
             return;
         }
         let body_map = doc.get_or_insert_map("body");
-        let Ok(yrs_body) = YrsBody::open(doc, body_map) else { return };
+        let Ok(yrs_body) = YrsBody::open(doc, body_map) else {
+            return;
+        };
 
         // Retransmet au serveur chaque mise à jour locale (issue d'une
         // édition de l'utilisateur), en ignorant celles qui proviennent de
@@ -237,7 +266,10 @@ fn handle_binary_frame(handle: RoomHandle, bytes: &[u8]) {
         if let Some(socket) = handle.socket.get_untracked() {
             let outbound = socket;
             let subscription = yrs_body.doc().clone().observe_update_v1(move |txn, event| {
-                let is_remote = txn.origin().map(|o| o.as_ref() == REMOTE_ORIGIN.as_bytes()).unwrap_or(false);
+                let is_remote = txn
+                    .origin()
+                    .map(|o| o.as_ref() == REMOTE_ORIGIN.as_bytes())
+                    .unwrap_or(false);
                 if is_remote {
                     return;
                 }
@@ -256,7 +288,10 @@ fn handle_binary_frame(handle: RoomHandle, bytes: &[u8]) {
     } else {
         handle.body.update(|b| {
             if let Body::Yrs(yrs_body) = b {
-                let _ = yrs_body.doc().transact_mut_with(REMOTE_ORIGIN).apply_update(update);
+                let _ = yrs_body
+                    .doc()
+                    .transact_mut_with(REMOTE_ORIGIN)
+                    .apply_update(update);
             }
         });
     }
@@ -265,14 +300,20 @@ fn handle_binary_frame(handle: RoomHandle, bytes: &[u8]) {
 /// Traduit un [`ServerMessage`] en mise à jour des signaux exposés par
 /// [`RoomHandle`], consommés par [`agent::AgentPanel`].
 fn handle_text_frame(handle: RoomHandle, text: &str) {
-    let Ok(message) = serde_json::from_str::<ServerMessage>(text) else { return };
+    let Ok(message) = serde_json::from_str::<ServerMessage>(text) else {
+        return;
+    };
     match message {
         ServerMessage::AgentDone { content } => {
-            handle.agent_messages.update(|m| m.push(PanelMessage::assistant(content)));
+            handle
+                .agent_messages
+                .update(|m| m.push(PanelMessage::assistant(content)));
             handle.agent_pending.set(false);
         }
         ServerMessage::AgentError { message } => {
-            handle.agent_messages.update(|m| m.push(PanelMessage::assistant(format!("Erreur : {message}"))));
+            handle
+                .agent_messages
+                .update(|m| m.push(PanelMessage::assistant(format!("Erreur : {message}"))));
             handle.agent_pending.set(false);
         }
         ServerMessage::InteractionAsk { question } => {
@@ -289,7 +330,9 @@ fn handle_text_frame(handle: RoomHandle, text: &str) {
         }
         ServerMessage::InteractionConfirm { message } => {
             handle.agent_pending.set(false);
-            handle.pending_kind.set(Some(PendingInteractionKind::Confirm));
+            handle
+                .pending_kind
+                .set(Some(PendingInteractionKind::Confirm));
             handle.interaction.set(Some(InteractionRequest {
                 prompt: message,
                 questions: vec![PanelQuestion {
@@ -301,14 +344,23 @@ fn handle_text_frame(handle: RoomHandle, text: &str) {
         }
         ServerMessage::InteractionQuestions { prompt, questions } => {
             handle.agent_pending.set(false);
-            handle.pending_kind.set(Some(PendingInteractionKind::Questions));
+            handle
+                .pending_kind
+                .set(Some(PendingInteractionKind::Questions));
             handle.interaction.set(Some(InteractionRequest {
                 prompt,
                 questions: questions
                     .into_iter()
-                    .map(|q| PanelQuestion { id: q.id, label: q.label, options: q.options })
+                    .map(|q| PanelQuestion {
+                        id: q.id,
+                        label: q.label,
+                        options: q.options,
+                    })
                     .collect(),
             }));
+        }
+        ServerMessage::Presence { users } => {
+            handle.connected_users.set(users);
         }
     }
 }

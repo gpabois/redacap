@@ -1,5 +1,5 @@
-use leptos::{IntoView, component, view};
 use leptos::prelude::*;
+use leptos::{IntoView, component, view};
 
 #[component]
 pub fn BlocMarianneInline(autorite: String, class: &'static str) -> impl IntoView {

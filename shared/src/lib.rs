@@ -1,5 +1,3 @@
+pub mod crypto;
 pub mod id;
-
-fn main() {
-    println!("Hello, world!");
-}
+pub mod model;

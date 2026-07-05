@@ -19,7 +19,11 @@ impl std::fmt::Display for Cursor {
 
 impl Cursor {
     pub fn into_byte_offset<S: AsRef<str>>(self, value: S) -> Option<usize> {
-        value.as_ref().char_indices().nth(self.offset).map(|(i, _)| i)
+        value
+            .as_ref()
+            .char_indices()
+            .nth(self.offset)
+            .map(|(i, _)| i)
     }
 
     pub fn split_clone<S: AsRef<str>>(self, value: S) -> (String, String) {

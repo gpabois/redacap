@@ -19,7 +19,11 @@ impl std::fmt::Display for Cursor {
 impl Cursor {
     /// Convertit l'offset en index d'octet dans `value`.
     pub fn into_byte_offset<S: AsRef<str>>(self, value: S) -> Option<usize> {
-        value.as_ref().char_indices().nth(self.offset).map(|(i, _)| i)
+        value
+            .as_ref()
+            .char_indices()
+            .nth(self.offset)
+            .map(|(i, _)| i)
     }
 
     /// Découpe `value` au point du curseur : (avant, après).
@@ -81,7 +85,10 @@ pub struct Selection {
 
 impl Selection {
     pub fn collapsed(cursor: Cursor) -> Self {
-        Self { anchor: cursor, focus: cursor }
+        Self {
+            anchor: cursor,
+            focus: cursor,
+        }
     }
 
     pub fn is_collapsed(&self) -> bool {

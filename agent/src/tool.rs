@@ -67,7 +67,10 @@ impl ToolRegistry {
 
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&dyn Tool> {
-        self.tools.iter().find(|tool| tool.name() == name).map(Box::as_ref)
+        self.tools
+            .iter()
+            .find(|tool| tool.name() == name)
+            .map(Box::as_ref)
     }
 }
 

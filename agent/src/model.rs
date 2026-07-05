@@ -44,19 +44,34 @@ pub struct ChatMessage {
 impl ChatMessage {
     #[must_use]
     pub fn system(content: impl Into<String>) -> Self {
-        Self { role: Role::System, content: Some(content.into()), tool_calls: Vec::new(), tool_call_id: None }
+        Self {
+            role: Role::System,
+            content: Some(content.into()),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+        }
     }
 
     #[must_use]
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: Role::User, content: Some(content.into()), tool_calls: Vec::new(), tool_call_id: None }
+        Self {
+            role: Role::User,
+            content: Some(content.into()),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+        }
     }
 
     /// Message de réponse contenant des appels d'outils à exécuter (pas de
     /// contenu textuel final).
     #[must_use]
     pub fn assistant_tool_calls(tool_calls: Vec<ToolCall>) -> Self {
-        Self { role: Role::Assistant, content: None, tool_calls, tool_call_id: None }
+        Self {
+            role: Role::Assistant,
+            content: None,
+            tool_calls,
+            tool_call_id: None,
+        }
     }
 
     /// Résultat d'exécution d'un outil, à renvoyer au modèle.
@@ -87,7 +102,11 @@ pub trait LanguageModel: Send + Sync {
     /// Nom du modèle interrogé, à des fins de journalisation.
     fn model_name(&self) -> &str;
 
-    async fn complete(&self, messages: &[ChatMessage], tools: &[ToolDefinition]) -> Result<ChatMessage, ModelError>;
+    async fn complete(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolDefinition],
+    ) -> Result<ChatMessage, ModelError>;
 }
 
 /// Configuration d'un point de terminaison compatible avec l'API de
@@ -111,7 +130,10 @@ pub struct OpenAiCompatibleModel {
 impl OpenAiCompatibleModel {
     #[must_use]
     pub fn new(config: OpenAiCompatibleModelConfig) -> Self {
-        Self { http: reqwest::Client::new(), config }
+        Self {
+            http: reqwest::Client::new(),
+            config,
+        }
     }
 }
 
@@ -121,7 +143,11 @@ impl LanguageModel for OpenAiCompatibleModel {
         &self.config.model
     }
 
-    async fn complete(&self, messages: &[ChatMessage], tools: &[ToolDefinition]) -> Result<ChatMessage, ModelError> {
+    async fn complete(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolDefinition],
+    ) -> Result<ChatMessage, ModelError> {
         let request = WireRequest {
             model: &self.config.model,
             messages: messages.iter().map(WireMessage::from).collect(),
@@ -130,7 +156,10 @@ impl LanguageModel for OpenAiCompatibleModel {
 
         let response = self
             .http
-            .post(format!("{}/chat/completions", self.config.base_url.trim_end_matches('/')))
+            .post(format!(
+                "{}/chat/completions",
+                self.config.base_url.trim_end_matches('/')
+            ))
             .bearer_auth(&self.config.api_key)
             .json(&request)
             .send()
@@ -139,11 +168,9 @@ impl LanguageModel for OpenAiCompatibleModel {
             .json::<WireCompletionResponse>()
             .await?;
 
-        let choice = response
-            .choices
-            .into_iter()
-            .next()
-            .ok_or_else(|| ModelError::InvalidResponse("la réponse ne contient aucun choix".to_string()))?;
+        let choice = response.choices.into_iter().next().ok_or_else(|| {
+            ModelError::InvalidResponse("la réponse ne contient aucun choix".to_string())
+        })?;
 
         ChatMessage::try_from(choice.message)
     }
@@ -165,7 +192,9 @@ impl Role {
             "user" => Ok(Self::User),
             "assistant" => Ok(Self::Assistant),
             "tool" => Ok(Self::Tool),
-            other => Err(ModelError::InvalidResponse(format!("rôle de message inconnu : « {other} »"))),
+            other => Err(ModelError::InvalidResponse(format!(
+                "rôle de message inconnu : « {other} »"
+            ))),
         }
     }
 }
@@ -247,7 +276,10 @@ impl From<&ToolCall> for WireToolCall {
         Self {
             id: call.id.clone(),
             kind: "function".to_string(),
-            function: WireFunctionCall { name: call.name.clone(), arguments: call.arguments.to_string() },
+            function: WireFunctionCall {
+                name: call.name.clone(),
+                arguments: call.arguments.to_string(),
+            },
         }
     }
 }
@@ -295,7 +327,11 @@ impl TryFrom<WireToolCall> for ToolCall {
             ))
         })?;
 
-        Ok(Self { id: call.id, name: call.function.name, arguments })
+        Ok(Self {
+            id: call.id,
+            name: call.function.name,
+            arguments,
+        })
     }
 }
 

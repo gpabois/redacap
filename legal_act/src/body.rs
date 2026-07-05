@@ -1,5 +1,5 @@
-use crate::{BodyNodeId, NodeKind, NodeSpec};
 use crate::traits::node::{BodyRead, BodyWrite};
+use crate::{BodyNodeId, NodeKind, NodeSpec};
 use crate::{DirectBody, YrsBody};
 
 /// Abstraction sur le backend de stockage du corps d'un acte légal.

@@ -4,8 +4,8 @@ L'agent opère par boucle agentique (ReAct) et dispose des outils suivants :
 
 | Outil | Description |
 |---|---|
-| `legifrance_search` | Recherche dans la base Légifrance (textes législatifs, jurisprudence) via API officielle |
-| `legifrance_fetch` | Récupère le contenu complet d'un texte par identifiant |
+| `legifrance_search` | Recherche dans la base Légifrance (textes législatifs, jurisprudence) via API officielle (`/search`) |
+| `legifrance_fetch` | Récupère le contenu complet d'un texte ou d'un article par identifiant, via la route `/consult/*` adaptée à son fonds (`legiPart`, `code`, `juri`, `jorf`, `getArticle`) |
 | `ask_user` | Pose une question ou demande une confirmation à l'inspecteur |
 | `request_document` | Demande un document externe à l'utilisateur (upload) |
 | `read_metadata` | Lit les métadonnées contextuelles de l'acte en cours |

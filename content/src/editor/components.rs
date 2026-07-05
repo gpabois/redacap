@@ -8,8 +8,8 @@ use web_sys::{FocusEvent, InputEvent};
 use crate::{ContentHandle, ContentKind, ContentRead, Cursor};
 
 use super::context::{
-    CurrentContentId, EditorCursor, use_current_children, use_current_content_id, use_current_text, use_editor,
-    use_editor_content_body, use_editor_cursor, use_editor_selection,
+    CurrentContentId, EditorCursor, use_current_children, use_current_content_id, use_current_text,
+    use_editor, use_editor_content_body, use_editor_cursor, use_editor_selection,
 };
 use super::core::Editor;
 use super::event::EditorEvent;
@@ -22,8 +22,14 @@ pub fn ContentEditor(value: ContentHandle) -> impl IntoView {
 
     let cursor = EditorCursor {
         id: IdGenerator::default().next_id(),
-        caret: Cursor { content_id: first_leaf, offset: 0 },
-        mouse: Cursor { content_id: first_leaf, offset: 0 },
+        caret: Cursor {
+            content_id: first_leaf,
+            offset: 0,
+        },
+        mouse: Cursor {
+            content_id: first_leaf,
+            offset: 0,
+        },
         display: false,
     };
 
@@ -33,7 +39,12 @@ pub fn ContentEditor(value: ContentHandle) -> impl IntoView {
     let body = RwSignal::new(value);
     let selection = RwSignal::new(EditorSelection::default());
 
-    let editor = Editor { cursor, body, selection, ev_queue };
+    let editor = Editor {
+        cursor,
+        body,
+        selection,
+        ev_queue,
+    };
 
     provide_context(editor);
     provide_context(CurrentContentId(root));
@@ -48,21 +59,19 @@ pub fn EditNode() -> impl IntoView {
     let body = use_editor_content_body();
     let content_id = use_current_content_id();
 
-    let redirect = move || {
-        match body.read().kind_of(content_id) {
-            Root => view! {<EditRoot/>}.into_any(),
-            Paragraph => view! {<EditParagraph/>}.into_any(),
-            Plain => view! {<EditPlain/>}.into_any(),
-            Span => todo!(),
-            List => todo!(),
-            ListItem => todo!(),
-            Table => todo!(),
-            Row => todo!(),
-            Cell => todo!(),
-        }
+    let redirect = move || match body.read().kind_of(content_id) {
+        Root => view! {<EditRoot/>}.into_any(),
+        Paragraph => view! {<EditParagraph/>}.into_any(),
+        Plain => view! {<EditPlain/>}.into_any(),
+        Span => todo!(),
+        List => todo!(),
+        ListItem => todo!(),
+        Table => todo!(),
+        Row => todo!(),
+        Cell => todo!(),
     };
 
-    view! ({redirect})
+    view!({ redirect })
 }
 
 #[component]
@@ -108,7 +117,7 @@ pub fn EditorDebugData() -> impl IntoView {
     let selection = move || {
         let sel = editor.selection.get();
 
-        view ! {
+        view! {
             <div class="flex">
                 <div class="flex-auto">{sel.state.as_ref().to_string()}</div>
                 <div class="flex-auto">"Anchor": {sel.anchor.map(|cursor| cursor.to_string()).unwrap_or(String::from("-"))}</div>
@@ -333,5 +342,5 @@ pub fn EditPlain() -> impl IntoView {
         }
     };
 
-    view! ({render})
+    view!({ render })
 }

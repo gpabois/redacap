@@ -1,4 +1,7 @@
-use crate::{ContentId, ContentKind, ContentRead, ContentWrite, NodeSpec, crdt::YrsContent, direct::DirectContent};
+use crate::{
+    ContentId, ContentKind, ContentRead, ContentWrite, NodeSpec, crdt::YrsContent,
+    direct::DirectContent,
+};
 
 /// API opaque masquant le backend effectivement utilisé pour porter un
 /// [`Content`](crate) : mode direct (en mémoire locale) ou mode Yrs (CRDT
@@ -101,7 +104,12 @@ impl ContentWrite for ContentHandle {
         }
     }
 
-    fn insert_child_at(&mut self, parent: ContentId, index: usize, child: ContentId) -> anyhow::Result<()> {
+    fn insert_child_at(
+        &mut self,
+        parent: ContentId,
+        index: usize,
+        child: ContentId,
+    ) -> anyhow::Result<()> {
         match self {
             Self::Direct(c) => c.insert_child_at(parent, index, child),
             Self::Yrs(c) => c.insert_child_at(parent, index, child),
@@ -152,7 +160,10 @@ mod tests {
         let id = body.append_content(body.root(), "hello").unwrap();
         body.insert_text(id, 5, " world");
         assert_eq!(body.text_of(id), "hello world");
-        assert_eq!(body.kind_of(body.parent_of(id).unwrap()), ContentKind::Paragraph);
+        assert_eq!(
+            body.kind_of(body.parent_of(id).unwrap()),
+            ContentKind::Paragraph
+        );
     }
 
     #[test]

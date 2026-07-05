@@ -5,9 +5,9 @@
 //! responsable de l'appel réel à l'agent (typiquement via une fonction
 //! serveur Leptos) et de la mise à jour de `messages`/`pending` en retour.
 
-use leptos::*;
-use leptos::prelude::*;
 use dsfr::{Badge, Severity};
+use leptos::prelude::*;
+use leptos::*;
 use pulldown_cmark::{Event, Options, Parser};
 use web_sys::KeyboardEvent;
 
@@ -17,7 +17,8 @@ use web_sys::KeyboardEvent;
 /// texte de l'agent peut refléter du contenu utilisateur, donc on ne peut
 /// pas le faire confiance pour injecter du HTML tel quel (XSS).
 fn render_markdown(source: &str) -> String {
-    let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
+    let options =
+        Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
     let parser = Parser::new_ext(source, options)
         .filter(|event| !matches!(event, Event::Html(_) | Event::InlineHtml(_)));
     let mut html_output = String::new();
@@ -42,12 +43,18 @@ pub struct PanelMessage {
 impl PanelMessage {
     #[must_use]
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: PanelRole::User, content: content.into() }
+        Self {
+            role: PanelRole::User,
+            content: content.into(),
+        }
     }
 
     #[must_use]
     pub fn assistant(content: impl Into<String>) -> Self {
-        Self { role: PanelRole::Assistant, content: content.into() }
+        Self {
+            role: PanelRole::Assistant,
+            content: content.into(),
+        }
     }
 }
 
@@ -113,9 +120,11 @@ fn PendingAgent() -> impl IntoView {
 #[component]
 pub fn AgentPanel(
     /// Historique des messages échangés, tenu par la page hôte.
-    #[prop(into)] messages: Signal<Vec<PanelMessage>>,
+    #[prop(into)]
+    messages: Signal<Vec<PanelMessage>>,
     /// `true` tant que l'agent n'a pas renvoyé sa réponse finale.
-    #[prop(into)] pending: Signal<bool>,
+    #[prop(into)]
+    pending: Signal<bool>,
     /// Invoqué avec le texte saisi lorsque l'utilisateur envoie un message libre.
     on_send: impl Fn(String) + Clone + Send + 'static,
     /// Formulaire structuré à afficher lorsque l'agent attend des réponses
@@ -226,7 +235,7 @@ pub fn AgentPanel(
 
                         let value         = move || draft_answers.with(|ds| ds.get(i).map(|d| d.value.clone()).unwrap_or_default());
                         let set_value     = move |v: String| draft_answers.update(|ds| { if let Some(d) = ds.get_mut(i) { d.value = v; } });
-                        let set_value_ev  = set_value.clone();
+                        let set_value_ev  = set_value;
 
                         let unsat        = move || draft_answers.with(|ds| ds.get(i).map(|d| d.unsatisfactory).unwrap_or(false));
                         let toggle_unsat = move |_| draft_answers.update(|ds| {
@@ -323,7 +332,7 @@ pub fn AgentPanel(
                         }
                     }).collect_view();
 
-                    let on_respond_cb = on_respond.clone();
+                    let on_respond_cb = on_respond;
                     let submit = move |_| {
                         if let Some(cb) = &on_respond_cb
                             && let Some(req) = interaction.get() {

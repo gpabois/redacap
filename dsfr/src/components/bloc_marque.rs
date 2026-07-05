@@ -1,5 +1,5 @@
-use leptos::{IntoView, component, view};
 use leptos::prelude::*;
+use leptos::{IntoView, component, view};
 
 #[component]
 pub fn BlocMarianne(children: Children, #[prop(optional)] class: &'static str) -> impl IntoView {
@@ -13,8 +13,12 @@ pub fn BlocMarianne(children: Children, #[prop(optional)] class: &'static str) -
 }
 
 #[component]
-pub fn BlocMarianneInline<S: ToString>(autorite: S, #[prop(optional)] class: &'static str) -> impl IntoView {
-    let lines = autorite.to_string()
+pub fn BlocMarianneInline<S: ToString>(
+    autorite: S,
+    #[prop(optional)] class: &'static str,
+) -> impl IntoView {
+    let lines = autorite
+        .to_string()
         .split('\n')
         .enumerate()
         .map(|(index, line)| {

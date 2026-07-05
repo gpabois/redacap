@@ -11,11 +11,23 @@ use leptos::prelude::*;
 
 use dsfr::{Button, ButtonGroup, ButtonVariant, Header, SubHeader};
 
-use crate::{BodyNodeId, NodeKind, NodeSpec};
-use crate::traits::node::{BodyRead, BodyWrite};
-use super::context::expect_editor_context;
 use super::content::is_list_ordered;
+use super::context::expect_editor_context;
 use super::widgets::{FormatToolbar, TOOLBAR_BTN_CLASS};
+use crate::traits::node::{BodyRead, BodyWrite};
+use crate::{BodyNodeId, NodeKind, NodeSpec};
+
+/// Identité d'un utilisateur connecté à la salle de collaboration, affichée
+/// sous forme de pastille dans l'en-tête de l'éditeur (voir `app::ws::
+/// RoomHandle::connected_users`, alimenté par `ServerMessage::Presence`).
+/// Initiale et couleur sont calculées côté serveur, pour que tous les pairs
+/// affichent la même pastille pour un même utilisateur.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectedUser {
+    pub user_id: String,
+    pub initial: String,
+    pub color: String,
+}
 
 /// En-tête de l'éditeur : bloc Marianne + boutons d'action + portail contextuel.
 #[component]
@@ -27,6 +39,21 @@ pub fn EditorHeader(
     agent_panel_open: Signal<bool>,
     /// Callback appelé pour basculer le panneau agent.
     on_toggle_agent: Callback<()>,
+    /// Initiale du nom affiché de l'utilisateur courant, pour la bulle
+    /// d'avatar menant à `/account` (voir `app::auth::HeaderIdentity`).
+    /// `None` masque la bulle (page hôte non authentifiée).
+    user_initial: Option<String>,
+    /// `true` si l'utilisateur courant a accès au panneau administrateur
+    /// (voir `app::auth::HeaderIdentity::is_admin`) : affiche un lien vers
+    /// `/admin`.
+    #[prop(optional)]
+    is_admin: bool,
+    /// Autres utilisateurs actuellement connectés à la salle de
+    /// collaboration, affichés en pastilles à côté de la bulle de
+    /// l'utilisateur courant. Vide (ou absent) tant qu'aucun autre
+    /// utilisateur n'est présent.
+    #[prop(optional, into)]
+    connected_users: Option<Signal<Vec<ConnectedUser>>>,
 ) -> impl IntoView {
     let ctx = expect_editor_context();
     let root = ctx.body.with_untracked(|b| b.root());
@@ -158,7 +185,54 @@ pub fn EditorHeader(
                 </ButtonGroup>
             </Show>
 
+            // ── Identité utilisateur ──────────────────────────────────────
+            {is_admin.then(|| view! {
+                <a
+                    href="/admin"
+                    class="text-sm font-bold text-blue-france hover:underline whitespace-nowrap"
+                >
+                    "Administration"
+                </a>
+            })}
+            <ConnectedUserBadges connected_users=connected_users.unwrap_or_else(|| Signal::derive(Vec::new))/>
+            {user_initial.map(|initial| view! {
+                <a
+                    href="/account"
+                    title="Mon compte"
+                    class="flex items-center justify-center w-9 h-9 rounded-full bg-blue-france text-white font-bold hover:bg-blue-france-hover transition-colors shrink-0"
+                >
+                    {initial}
+                </a>
+            })}
+
         </Header>
+    }
+}
+
+/// Pastilles des autres utilisateurs connectés à la salle de collaboration,
+/// affichées à côté de la bulle de l'utilisateur courant (voir
+/// [`EditorHeader`]) : initiale sur fond de couleur déterministe (voir
+/// `server::editor::presence::color_for_id`), pour distinguer visuellement
+/// plusieurs pairs sans avoir à afficher leur nom complet.
+#[component]
+fn ConnectedUserBadges(connected_users: Signal<Vec<ConnectedUser>>) -> impl IntoView {
+    view! {
+        <div class="flex items-center -space-x-2">
+            <For
+                each=move || connected_users.get()
+                key=|user| user.user_id.clone()
+                children=|user| view! {
+                    <span
+                        title=user.initial.clone()
+                        class="flex items-center justify-center w-8 h-8 rounded-full text-white \
+                               text-sm font-bold border-2 border-white shrink-0"
+                        style:background-color=user.color.clone()
+                    >
+                        {user.initial.clone()}
+                    </span>
+                }
+            />
+        </div>
     }
 }
 
@@ -176,7 +250,10 @@ fn ContentToolbar() -> impl IntoView {
         let node_id = ctx.content_focus_node.get()?;
         let kind = ctx.body.with(|b| b.kind_of(node_id));
 
-        if !matches!(kind, NodeKind::ListItem | NodeKind::Paragraphe | NodeKind::TableCell) {
+        if !matches!(
+            kind,
+            NodeKind::ListItem | NodeKind::Paragraphe | NodeKind::TableCell
+        ) {
             return None;
         }
 
@@ -197,7 +274,9 @@ fn ContentToolbar() -> impl IntoView {
 #[component]
 fn ListContentToolbar(item_id: BodyNodeId) -> impl IntoView {
     let ctx = expect_editor_context();
-    let list_id = ctx.body.with_untracked(|b| b.parent_of(item_id).unwrap_or(item_id));
+    let list_id = ctx
+        .body
+        .with_untracked(|b| b.parent_of(item_id).unwrap_or(item_id));
     let is_ordered = Signal::derive(move || ctx.body.with(|b| is_list_ordered(b, list_id)));
 
     view! {
@@ -277,7 +356,9 @@ fn ListContentToolbar(item_id: BodyNodeId) -> impl IntoView {
 #[component]
 fn ParagraphContentToolbar(para_id: BodyNodeId) -> impl IntoView {
     let ctx = expect_editor_context();
-    let parent_kind = ctx.body.with_untracked(|b| b.parent_of(para_id).map(|p| b.kind_of(p)));
+    let parent_kind = ctx
+        .body
+        .with_untracked(|b| b.parent_of(para_id).map(|p| b.kind_of(p)));
     let can_add_table = parent_kind == Some(NodeKind::ArticleBody);
 
     view! {

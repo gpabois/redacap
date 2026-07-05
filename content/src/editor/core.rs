@@ -43,8 +43,8 @@ impl Editor {
         match ev {
             KeyDown(e) if e.key() == "ArrowLeft" => self.on_arrow_left(),
             KeyDown(e) if e.key() == "ArrowRight" => self.on_arrow_right(),
-            KeyDown(e) if e.key() == "ArrowUp" => {},
-            KeyDown(e) if e.key() == "ArrowDown" => {},
+            KeyDown(e) if e.key() == "ArrowUp" => {}
+            KeyDown(e) if e.key() == "ArrowDown" => {}
             KeyDown(e) if e.key() == "Backspace" => self.on_backspace(),
             KeyDown(e) if e.key() == "Delete" => self.on_delete(),
             KeyDown(e) if e.key() == "Enter" => self.on_enter(&e),
@@ -59,7 +59,7 @@ impl Editor {
             CharRemoved => self.on_char_removed(),
             FocusSet(cursor) => self.on_cursor_moved(cursor),
             CursorMoved(cursor) => self.on_cursor_moved(cursor),
-            _ => {},
+            _ => {}
         }
     }
 
@@ -83,7 +83,10 @@ impl Editor {
             } else if let Some(prev) = body.prev_leaf_of(caret.content_id) {
                 let offset = body.len_of(prev);
                 merge_leaves(body, prev, caret.content_id);
-                self.send_event(EditorEvent::CursorMoved(Cursor { content_id: prev, offset }));
+                self.send_event(EditorEvent::CursorMoved(Cursor {
+                    content_id: prev,
+                    offset,
+                }));
             }
         });
     }
@@ -111,10 +114,16 @@ impl Editor {
 
             if let Ok(new_leaf) = body.split_node(caret.content_id, caret.offset)
                 && let Some(paragraph) = body.parent_of(caret.content_id)
-                && let Some(index) = body.children_of(paragraph).iter().position(|&c| c == new_leaf)
+                && let Some(index) = body
+                    .children_of(paragraph)
+                    .iter()
+                    .position(|&c| c == new_leaf)
                 && body.split_node(paragraph, index).is_ok()
             {
-                self.send_event(EditorEvent::CursorMoved(Cursor { content_id: new_leaf, offset: 0 }));
+                self.send_event(EditorEvent::CursorMoved(Cursor {
+                    content_id: new_leaf,
+                    offset: 0,
+                }));
             }
         });
     }
@@ -188,7 +197,9 @@ impl Editor {
     }
 
     fn on_string_written(self, len: usize) {
-        self.cursor.update(move |cursor| (0..len).for_each(|_| cursor.right(&*self.body.read_untracked())));
+        self.cursor.update(move |cursor| {
+            (0..len).for_each(|_| cursor.right(&*self.body.read_untracked()))
+        });
     }
 
     fn on_char_added(self) {
@@ -218,9 +229,11 @@ impl Editor {
 
         loop {
             if let Some(attr) = node.get_attribute("data-content-id") {
-                let offset: usize = node.get_attribute("data-content-offset")
+                let offset: usize = node
+                    .get_attribute("data-content-offset")
                     .and_then(|off| off.parse().ok())
-                    .unwrap_or(offset) + offset;
+                    .unwrap_or(offset)
+                    + offset;
 
                 let content_id: ContentId = attr.parse().ok()?;
                 return Some(Cursor { offset, content_id });

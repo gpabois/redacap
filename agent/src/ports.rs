@@ -43,7 +43,11 @@ pub trait UserInteractionPort: Send + Sync {
     /// Présente un formulaire structuré à l'utilisateur et renvoie ses réponses.
     /// Chaque réponse peut indiquer qu'elle n'est pas satisfaisante via
     /// [`QuestionAnswer::unsatisfactory_reason`].
-    async fn ask_questions(&self, prompt: &str, questions: &[Question]) -> Result<Vec<QuestionAnswer>, ToolError>;
+    async fn ask_questions(
+        &self,
+        prompt: &str,
+        questions: &[Question],
+    ) -> Result<Vec<QuestionAnswer>, ToolError>;
 }
 
 /// Référence vers un document fourni par l'utilisateur en réponse à
@@ -59,7 +63,11 @@ pub struct DocumentRef {
 /// externe (upload), pour l'outil `request_document`.
 #[async_trait]
 pub trait DocumentRequestPort: Send + Sync {
-    async fn request_document(&self, prompt: &str, accepted_mime_types: &[String]) -> Result<DocumentRef, ToolError>;
+    async fn request_document(
+        &self,
+        prompt: &str,
+        accepted_mime_types: &[String],
+    ) -> Result<DocumentRef, ToolError>;
 }
 
 /// Accès aux métadonnées contextuelles de l'acte en cours d'édition
@@ -103,7 +111,12 @@ pub trait LegalActEditorPort: Send + Sync {
     /// Crée un nouveau noeud du type `kind` (ex. "Article", "Section",
     /// "Titre"...) sous le noeud `parent_id`, avec un contenu textuel
     /// initial optionnel, et renvoie l'identifiant du noeud créé.
-    async fn insert_node(&self, parent_id: &str, kind: &str, content: Option<&str>) -> Result<String, ToolError>;
+    async fn insert_node(
+        &self,
+        parent_id: &str,
+        kind: &str,
+        content: Option<&str>,
+    ) -> Result<String, ToolError>;
 
     /// Supprime le noeud `node_id` ainsi que tout son sous-arbre.
     async fn remove_node(&self, node_id: &str) -> Result<(), ToolError>;

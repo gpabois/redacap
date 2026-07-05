@@ -2,8 +2,8 @@ use anyhow::bail;
 use bimap::BiHashMap;
 use shared::id::IdGenerator;
 
-use crate::{BodyNodeId, NodeKind, NodeSpec};
 use crate::traits::node::{BodyRead, BodyWrite};
+use crate::{BodyNodeId, NodeKind, NodeSpec};
 
 /// Backend "mode direct" : le corps de l'acte légal vit en mémoire locale,
 /// sans CRDT. Les mutations sont immédiates et non synchronisées.
@@ -23,7 +23,13 @@ impl DirectBody {
         let root = BodyNodeId::from_raw(idgen.next_id());
         let mut index = BiHashMap::new();
         index.insert(root, arena_id);
-        Self { arena, index, idgen, root, title: String::new() }
+        Self {
+            arena,
+            index,
+            idgen,
+            root,
+            title: String::new(),
+        }
     }
 
     fn arena_id_of(&self, id: BodyNodeId) -> indextree::NodeId {
@@ -142,8 +148,12 @@ impl BodyWrite for DirectBody {
     fn remove_text_unchecked(&mut self, id: BodyNodeId, char_index: usize, char_count: usize) {
         if let NodeSpec::Plain(text) = self.node_of_mut(id) {
             let mut indices = text.char_indices().map(|(i, _)| i);
-            let Some(start) = indices.nth(char_index) else { return };
-            let end = indices.nth(char_count.saturating_sub(1)).unwrap_or(text.len());
+            let Some(start) = indices.nth(char_index) else {
+                return;
+            };
+            let end = indices
+                .nth(char_count.saturating_sub(1))
+                .unwrap_or(text.len());
             text.replace_range(start..end, "");
         }
     }
@@ -178,7 +188,10 @@ mod tests {
         let mut body = DirectBody::new();
         assert_eq!(body.title(), "");
         body.set_title("Arrêté préfectoral portant autorisation d'exploiter");
-        assert_eq!(body.title(), "Arrêté préfectoral portant autorisation d'exploiter");
+        assert_eq!(
+            body.title(),
+            "Arrêté préfectoral portant autorisation d'exploiter"
+        );
     }
 
     fn new_body_with_article() -> (DirectBody, BodyNodeId) {
@@ -196,11 +209,15 @@ mod tests {
         // append_node + ensure_only_plain_leafs
         let children = body.children_of(article);
         assert!(
-            children.iter().any(|&c| body.kind_of(c) == NodeKind::LibelleArticle),
+            children
+                .iter()
+                .any(|&c| body.kind_of(c) == NodeKind::LibelleArticle),
             "LibelleArticle manquant"
         );
         assert!(
-            children.iter().any(|&c| body.kind_of(c) == NodeKind::ArticleBody),
+            children
+                .iter()
+                .any(|&c| body.kind_of(c) == NodeKind::ArticleBody),
             "ArticleBody manquant"
         );
     }
@@ -208,7 +225,8 @@ mod tests {
     #[test]
     fn test_root_order_visa_before_titre() {
         let mut body = DirectBody::new();
-        body.append_node(body.root(), NodeSpec::Titre(Titre::default())).unwrap();
+        body.append_node(body.root(), NodeSpec::Titre(Titre::default()))
+            .unwrap();
         body.append_node(body.root(), NodeSpec::Visa).unwrap();
 
         let children = body.children_of(body.root());
@@ -224,9 +242,15 @@ mod tests {
     #[test]
     fn test_annexe_always_last() {
         let mut body = DirectBody::new();
-        body.append_node(body.root(), NodeSpec::Titre(Titre::default())).unwrap();
-        body.append_node(body.root(), NodeSpec::Annexe(crate::kind::Annexe::default())).unwrap();
-        body.append_node(body.root(), NodeSpec::Chapitre(Chapitre::default())).unwrap();
+        body.append_node(body.root(), NodeSpec::Titre(Titre::default()))
+            .unwrap();
+        body.append_node(
+            body.root(),
+            NodeSpec::Annexe(crate::kind::Annexe::default()),
+        )
+        .unwrap();
+        body.append_node(body.root(), NodeSpec::Chapitre(Chapitre::default()))
+            .unwrap();
 
         let children = body.children_of(body.root());
         let last_kind = body.kind_of(*children.last().unwrap());
@@ -236,9 +260,12 @@ mod tests {
     #[test]
     fn test_numbering_is_updated() {
         let mut body = DirectBody::new();
-        body.append_node(body.root(), NodeSpec::Titre(Titre::default())).unwrap();
-        body.append_node(body.root(), NodeSpec::Titre(Titre::default())).unwrap();
-        body.append_node(body.root(), NodeSpec::Titre(Titre::default())).unwrap();
+        body.append_node(body.root(), NodeSpec::Titre(Titre::default()))
+            .unwrap();
+        body.append_node(body.root(), NodeSpec::Titre(Titre::default()))
+            .unwrap();
+        body.append_node(body.root(), NodeSpec::Titre(Titre::default()))
+            .unwrap();
 
         let titres: Vec<BodyNodeId> = body
             .children_of(body.root())
@@ -255,9 +282,13 @@ mod tests {
     #[test]
     fn test_remove_node_renumbers() {
         let mut body = DirectBody::new();
-        let t1 = body.append_node(body.root(), NodeSpec::Titre(Titre::default())).unwrap();
-        body.append_node(body.root(), NodeSpec::Titre(Titre::default())).unwrap();
-        body.append_node(body.root(), NodeSpec::Titre(Titre::default())).unwrap();
+        let t1 = body
+            .append_node(body.root(), NodeSpec::Titre(Titre::default()))
+            .unwrap();
+        body.append_node(body.root(), NodeSpec::Titre(Titre::default()))
+            .unwrap();
+        body.append_node(body.root(), NodeSpec::Titre(Titre::default()))
+            .unwrap();
 
         body.remove_node(t1).unwrap();
 
@@ -346,7 +377,9 @@ mod tests {
     fn test_invalid_child_rejected() {
         let mut body = DirectBody::new();
         // Plain ne peut pas être ajouté directement sous Root
-        let err = body.append_node(body.root(), NodeSpec::Plain("x".into())).unwrap_err();
+        let err = body
+            .append_node(body.root(), NodeSpec::Plain("x".into()))
+            .unwrap_err();
         assert!(err.to_string().contains("autorisé"));
     }
 }

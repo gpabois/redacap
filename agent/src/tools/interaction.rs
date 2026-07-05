@@ -54,8 +54,8 @@ impl Tool for AskUserTool {
     }
 
     async fn call(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
-        let args: AskUserArguments =
-            serde_json::from_value(arguments).map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
+        let args: AskUserArguments = serde_json::from_value(arguments)
+            .map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
 
         let answer = self.user_interaction.ask(&args.question).await?;
         Ok(ToolOutput::new(answer))
@@ -132,25 +132,39 @@ impl Tool for AskQuestionsTool {
     }
 
     async fn call(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
-        let args: AskQuestionsArguments =
-            serde_json::from_value(arguments).map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
+        let args: AskQuestionsArguments = serde_json::from_value(arguments)
+            .map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
 
         let questions: Vec<Question> = args
             .questions
             .into_iter()
-            .map(|q| Question { id: q.id, label: q.label, options: q.options })
+            .map(|q| Question {
+                id: q.id,
+                label: q.label,
+                options: q.options,
+            })
             .collect();
 
-        let answers = self.user_interaction.ask_questions(&args.prompt, &questions).await?;
+        let answers = self
+            .user_interaction
+            .ask_questions(&args.prompt, &questions)
+            .await?;
 
-        let output = serde_json::to_string(&answers.iter().map(|a| {
-            serde_json::json!({
-                "question_id": a.question_id,
-                "value": a.value,
-                "unsatisfactory_reason": a.unsatisfactory_reason
-            })
-        }).collect::<Vec<_>>())
-        .map_err(|error| ToolError::Other(format!("échec de sérialisation des réponses : {error}")))?;
+        let output = serde_json::to_string(
+            &answers
+                .iter()
+                .map(|a| {
+                    serde_json::json!({
+                        "question_id": a.question_id,
+                        "value": a.value,
+                        "unsatisfactory_reason": a.unsatisfactory_reason
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|error| {
+            ToolError::Other(format!("échec de sérialisation des réponses : {error}"))
+        })?;
 
         Ok(ToolOutput::new(output))
     }
@@ -202,12 +216,16 @@ impl Tool for RequestDocumentTool {
     }
 
     async fn call(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
-        let args: RequestDocumentArguments =
-            serde_json::from_value(arguments).map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
+        let args: RequestDocumentArguments = serde_json::from_value(arguments)
+            .map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
 
-        let document = self.document_request.request_document(&args.prompt, &args.accepted_mime_types).await?;
-        let output = serde_json::to_string(&document)
-            .map_err(|error| ToolError::Other(format!("échec de sérialisation du document : {error}")))?;
+        let document = self
+            .document_request
+            .request_document(&args.prompt, &args.accepted_mime_types)
+            .await?;
+        let output = serde_json::to_string(&document).map_err(|error| {
+            ToolError::Other(format!("échec de sérialisation du document : {error}"))
+        })?;
         Ok(ToolOutput::new(output))
     }
 }

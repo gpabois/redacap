@@ -21,13 +21,12 @@ pub use body::Body;
 pub use crdt::YrsBody;
 pub use cursor::{Cursor, Selection};
 pub use direct::DirectBody;
-pub use editor::LegalActEditor;
+pub use editor::{ConnectedUser, LegalActEditor};
 pub use id::BodyNodeId;
-pub use kind::{
-    Annexe, Article, Chapitre, NodeKind, NodeSpec, Section, Titre,
-};
+pub use kind::{Annexe, Article, Chapitre, NodeKind, NodeSpec, Section, Titre};
 pub use traits::node::{BodyRead, BodyWrite};
 pub use traits::{
-    LegalActId, LegalActKind, LegalActMeta, LegalActRead, LegalActWrite, ProjectId, ProjectMeta,
-    ProjectRead, ProjectStatus, ProjectWrite, Comment, CommentId, ReviewRead, ReviewWrite, WorkNote,
+    Comment, CommentId, LegalActId, LegalActKind, LegalActMeta, LegalActRead, LegalActWrite,
+    ProjectId, ProjectMeta, ProjectRead, ProjectStatus, ProjectWrite, ReviewRead, ReviewWrite,
+    WorkNote,
 };

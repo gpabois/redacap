@@ -163,7 +163,10 @@ impl NodeKind {
     /// Les fusions et divisions ne s'appliquent qu'aux nœuds de contenu.
     pub fn is_content_node(self) -> bool {
         use NodeKind::*;
-        matches!(self, Paragraphe | Plain | Span | Table | TableRow | TableCell | List | ListItem)
+        matches!(
+            self,
+            Paragraphe | Plain | Span | Table | TableRow | TableCell | List | ListItem
+        )
     }
 
     /// Vrai si le nombre du nœud doit être maintenu automatiquement.
@@ -218,7 +221,19 @@ impl NodeKind {
     pub const CHILDREN_TABLE: &'static [(NodeKind, &'static [NodeKind])] = {
         use NodeKind::*;
         &[
-            (Root, &[Visa, Considerant, Sur, Titre, Section, Chapitre, Article, Annexe]),
+            (
+                Root,
+                &[
+                    Visa,
+                    Considerant,
+                    Sur,
+                    Titre,
+                    Section,
+                    Chapitre,
+                    Article,
+                    Annexe,
+                ],
+            ),
             (Visa, &[Plain, Span]),
             (Considerant, &[Plain, Span]),
             (Sur, &[Plain, Span]),
@@ -261,7 +276,10 @@ impl NodeKind {
     /// Vrai si ce nœud est un `Libellé*`.
     pub fn is_label(self) -> bool {
         use NodeKind::*;
-        matches!(self, LibelleTitre | LibelleSection | LibelleChapitre | LibelleArticle | LibelleAnnexe)
+        matches!(
+            self,
+            LibelleTitre | LibelleSection | LibelleChapitre | LibelleArticle | LibelleAnnexe
+        )
     }
 }
 

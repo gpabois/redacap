@@ -108,10 +108,12 @@ impl Tool for FillSectionTool {
     }
 
     async fn call(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
-        let args: FillSectionArguments =
-            serde_json::from_value(arguments).map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
+        let args: FillSectionArguments = serde_json::from_value(arguments)
+            .map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
 
-        self.editor.fill_section(&args.section_id, &args.content).await?;
+        self.editor
+            .fill_section(&args.section_id, &args.content)
+            .await?;
         Ok(ToolOutput::new("section mise à jour"))
     }
 }
@@ -187,10 +189,13 @@ impl Tool for InsertNodeTool {
     }
 
     async fn call(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
-        let args: InsertNodeArguments =
-            serde_json::from_value(arguments).map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
+        let args: InsertNodeArguments = serde_json::from_value(arguments)
+            .map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
 
-        let node_id = self.editor.insert_node(&args.parent_id, &args.kind, args.content.as_deref()).await?;
+        let node_id = self
+            .editor
+            .insert_node(&args.parent_id, &args.kind, args.content.as_deref())
+            .await?;
         Ok(ToolOutput::new(format!("noeud créé : {node_id}")))
     }
 }
@@ -248,8 +253,8 @@ impl Tool for RemoveNodeTool {
     }
 
     async fn call(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
-        let args: RemoveNodeArguments =
-            serde_json::from_value(arguments).map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
+        let args: RemoveNodeArguments = serde_json::from_value(arguments)
+            .map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
 
         self.editor.remove_node(&args.node_id).await?;
         Ok(ToolOutput::new("noeud supprimé"))
@@ -322,7 +327,10 @@ impl Tool for ValidateStructureTool {
         if report.is_valid() {
             Ok(ToolOutput::new("structure valide"))
         } else {
-            Ok(ToolOutput::new(format!("structure invalide : {}", report.errors.join("; "))))
+            Ok(ToolOutput::new(format!(
+                "structure invalide : {}",
+                report.errors.join("; ")
+            )))
         }
     }
 }
@@ -410,8 +418,8 @@ impl Tool for SetTitleTool {
     }
 
     async fn call(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
-        let args: SetTitleArguments =
-            serde_json::from_value(arguments).map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
+        let args: SetTitleArguments = serde_json::from_value(arguments)
+            .map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
 
         self.editor.set_title(&args.title).await?;
         Ok(ToolOutput::new("titre mis à jour"))

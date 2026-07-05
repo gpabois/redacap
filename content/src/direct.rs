@@ -25,7 +25,12 @@ impl DirectContent {
         let mut index = BiHashMap::new();
         index.insert(root, arena_id);
 
-        Self { arena, index, idgen, root }
+        Self {
+            arena,
+            index,
+            idgen,
+            root,
+        }
     }
 
     fn arena_id_of(&self, id: ContentId) -> indextree::NodeId {
@@ -97,7 +102,12 @@ impl ContentWrite for DirectContent {
         id
     }
 
-    fn insert_child_at(&mut self, parent: ContentId, index: usize, child: ContentId) -> anyhow::Result<()> {
+    fn insert_child_at(
+        &mut self,
+        parent: ContentId,
+        index: usize,
+        child: ContentId,
+    ) -> anyhow::Result<()> {
         let parent_arena_id = self.arena_id_of(parent);
         let child_arena_id = self.arena_id_of(child);
 
@@ -119,7 +129,9 @@ impl ContentWrite for DirectContent {
 
         let removed = arena_id
             .descendants(&self.arena)
-            .filter_map(|descendant_arena_id| self.index.get_by_right(&descendant_arena_id).copied())
+            .filter_map(|descendant_arena_id| {
+                self.index.get_by_right(&descendant_arena_id).copied()
+            })
             .collect::<Vec<_>>();
 
         arena_id.remove_subtree(&mut self.arena);
@@ -145,8 +157,12 @@ impl ContentWrite for DirectContent {
     fn remove_text(&mut self, id: ContentId, char_index: usize, char_count: usize) {
         if let NodeSpec::Plain(text) = self.node_of_mut(id) {
             let mut indices = text.char_indices().map(|(i, _)| i);
-            let Some(start) = indices.nth(char_index) else { return };
-            let end = indices.nth(char_count.saturating_sub(1)).unwrap_or(text.len());
+            let Some(start) = indices.nth(char_index) else {
+                return;
+            };
+            let end = indices
+                .nth(char_count.saturating_sub(1))
+                .unwrap_or(text.len());
             text.replace_range(start..end, "");
         }
     }
@@ -156,7 +172,9 @@ impl ContentWrite for DirectContent {
         let new_kind = spec.kind();
 
         if new_kind != current_kind {
-            bail!("impossible de remplacer un noeud {current_kind} par un noeud {new_kind} : les genres diffèrent");
+            bail!(
+                "impossible de remplacer un noeud {current_kind} par un noeud {new_kind} : les genres diffèrent"
+            );
         }
 
         *self.node_of_mut(id) = spec;
@@ -175,41 +193,69 @@ mod tests {
         // Plain > Paragraph > Root
         let mut body = DirectContent::new();
         let id = body.append_content(body.root, "").unwrap();
-        let got = body.ancestors_of(id).into_iter().map(|id| body.kind_of(id)).collect::<Vec<_>>();
+        let got = body
+            .ancestors_of(id)
+            .into_iter()
+            .map(|id| body.kind_of(id))
+            .collect::<Vec<_>>();
         assert_eq!(got.as_slice(), &[Kind::Paragraph, Kind::Root]);
 
         // Span > Paragraph > Root
         let mut body = DirectContent::new();
         let id = body.append_content(body.root, Span::default()).unwrap();
-        let got = body.ancestors_of(id).into_iter().map(|id| body.kind_of(id)).collect::<Vec<_>>();
+        let got = body
+            .ancestors_of(id)
+            .into_iter()
+            .map(|id| body.kind_of(id))
+            .collect::<Vec<_>>();
         assert_eq!(got.as_slice(), &[Kind::Paragraph, Kind::Root]);
 
         // ListItem > List > Root
         let mut body = DirectContent::new();
         let id = body.append_content(body.root, ListItem::default()).unwrap();
-        let got = body.ancestors_of(id).into_iter().map(|id| body.kind_of(id)).collect::<Vec<_>>();
+        let got = body
+            .ancestors_of(id)
+            .into_iter()
+            .map(|id| body.kind_of(id))
+            .collect::<Vec<_>>();
         assert_eq!(got.as_slice(), &[Kind::List, Kind::Root]);
 
         // Cell > Row > Table > Root
         let mut body = DirectContent::new();
         let id = body.append_content(body.root, Cell).unwrap();
-        let got = body.ancestors_of(id).into_iter().map(|id| body.kind_of(id)).collect::<Vec<_>>();
+        let got = body
+            .ancestors_of(id)
+            .into_iter()
+            .map(|id| body.kind_of(id))
+            .collect::<Vec<_>>();
         assert_eq!(got.as_slice(), &[Kind::Row, Kind::Table, Kind::Root]);
 
         // List > Root, Row > Table > Root, Table > Root (déjà compatibles : aucun noeud créé)
         let mut body = DirectContent::new();
         let id = body.append_content(body.root, List::default()).unwrap();
-        let got = body.ancestors_of(id).into_iter().map(|id| body.kind_of(id)).collect::<Vec<_>>();
+        let got = body
+            .ancestors_of(id)
+            .into_iter()
+            .map(|id| body.kind_of(id))
+            .collect::<Vec<_>>();
         assert_eq!(got.as_slice(), &[Kind::Root]);
 
         let mut body = DirectContent::new();
         let id = body.append_content(body.root, Row).unwrap();
-        let got = body.ancestors_of(id).into_iter().map(|id| body.kind_of(id)).collect::<Vec<_>>();
+        let got = body
+            .ancestors_of(id)
+            .into_iter()
+            .map(|id| body.kind_of(id))
+            .collect::<Vec<_>>();
         assert_eq!(got.as_slice(), &[Kind::Table, Kind::Root]);
 
         let mut body = DirectContent::new();
         let id = body.append_content(body.root, Table).unwrap();
-        let got = body.ancestors_of(id).into_iter().map(|id| body.kind_of(id)).collect::<Vec<_>>();
+        let got = body
+            .ancestors_of(id)
+            .into_iter()
+            .map(|id| body.kind_of(id))
+            .collect::<Vec<_>>();
         assert_eq!(got.as_slice(), &[Kind::Root]);
     }
 
@@ -219,7 +265,11 @@ mod tests {
         let mut body = DirectContent::new();
         body.append_content(body.root, Span::default()).unwrap();
         let id = body.first_leaf_of(body.root());
-        let got = body.ancestors_of(id).into_iter().map(|id| body.kind_of(id)).collect::<Vec<_>>();
+        let got = body
+            .ancestors_of(id)
+            .into_iter()
+            .map(|id| body.kind_of(id))
+            .collect::<Vec<_>>();
 
         assert_eq!(body.kind_of(id), Kind::Plain);
         assert_eq!(got.as_slice(), &[Kind::Span, Kind::Paragraph, Kind::Root]);
@@ -228,7 +278,11 @@ mod tests {
         let mut body = DirectContent::new();
         body.append_content(body.root, List::default()).unwrap();
         let id = body.first_leaf_of(body.root());
-        let got = body.ancestors_of(id).into_iter().map(|id| body.kind_of(id)).collect::<Vec<_>>();
+        let got = body
+            .ancestors_of(id)
+            .into_iter()
+            .map(|id| body.kind_of(id))
+            .collect::<Vec<_>>();
 
         assert_eq!(body.kind_of(id), Kind::Plain);
         assert_eq!(got.as_slice(), &[Kind::ListItem, Kind::List, Kind::Root]);
@@ -237,10 +291,17 @@ mod tests {
         let mut body = DirectContent::new();
         body.append_content(body.root, Table).unwrap();
         let id = body.first_leaf_of(body.root());
-        let got = body.ancestors_of(id).into_iter().map(|id| body.kind_of(id)).collect::<Vec<_>>();
+        let got = body
+            .ancestors_of(id)
+            .into_iter()
+            .map(|id| body.kind_of(id))
+            .collect::<Vec<_>>();
 
         assert_eq!(body.kind_of(id), Kind::Plain);
-        assert_eq!(got.as_slice(), &[Kind::Cell, Kind::Row, Kind::Table, Kind::Root]);
+        assert_eq!(
+            got.as_slice(),
+            &[Kind::Cell, Kind::Row, Kind::Table, Kind::Root]
+        );
     }
 
     #[test]
@@ -263,20 +324,37 @@ mod tests {
 
         assert_eq!(body.next_leaf_of(first), Some(second));
         assert_eq!(body.prev_leaf_of(second), Some(first));
-        assert_eq!(body.leaf_order_of(first, second), Some(std::cmp::Ordering::Less));
+        assert_eq!(
+            body.leaf_order_of(first, second),
+            Some(std::cmp::Ordering::Less)
+        );
     }
 
     #[test]
     fn test_spec_of_and_set_spec() {
         let mut body = DirectContent::new();
-        let id = body.create_node(Span { bold: true, ..Span::default() });
+        let id = body.create_node(Span {
+            bold: true,
+            ..Span::default()
+        });
 
-        let NodeSpec::Span(span) = body.spec_of(id) else { panic!("attendu un Span") };
+        let NodeSpec::Span(span) = body.spec_of(id) else {
+            panic!("attendu un Span")
+        };
         assert!(span.bold);
         assert!(!span.italic);
 
-        body.set_spec(id, NodeSpec::Span(Span { italic: true, ..Span::default() })).unwrap();
-        let NodeSpec::Span(span) = body.spec_of(id) else { panic!("attendu un Span") };
+        body.set_spec(
+            id,
+            NodeSpec::Span(Span {
+                italic: true,
+                ..Span::default()
+            }),
+        )
+        .unwrap();
+        let NodeSpec::Span(span) = body.spec_of(id) else {
+            panic!("attendu un Span")
+        };
         assert!(!span.bold);
         assert!(span.italic);
 
