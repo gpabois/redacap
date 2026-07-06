@@ -253,7 +253,9 @@ async fn build_client(
 ) -> Result<(OidcClient, OidcProvider), AuthError> {
     let encryption_key = state
         .secret_encryption_key
+        .clone()
         .ok_or(AuthError::OidcUnavailable)?;
+    
     let base_url = state
         .public_base_url
         .as_ref()

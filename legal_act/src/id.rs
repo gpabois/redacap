@@ -18,10 +18,6 @@ impl BodyNodeId {
     pub(crate) fn from_raw(id: id::ID) -> Self {
         Self(id)
     }
-
-    pub(crate) fn as_raw(self) -> id::ID {
-        self.0
-    }
 }
 
 impl Default for BodyNodeId {

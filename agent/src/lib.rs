@@ -24,6 +24,8 @@
 mod error;
 #[cfg(feature = "server")]
 mod model;
+#[cfg(feature = "server")]
+mod observer;
 pub mod panel;
 #[cfg(feature = "server")]
 pub mod ports;
@@ -38,12 +40,14 @@ pub mod tools;
 pub use error::{AgentError, ModelError, ToolError};
 #[cfg(feature = "server")]
 pub use model::{
-    ChatMessage, LanguageModel, OpenAiCompatibleModel, OpenAiCompatibleModelConfig, Role, ToolCall,
-    ToolDefinition,
+    ChatMessage, LanguageModel, OpenAiCompatibleModel, OpenAiCompatibleModelConfig, Role,
+    StreamEvent, ToolCall, ToolDefinition,
 };
+#[cfg(feature = "server")]
+pub use observer::{AgentObserver, NullAgentObserver};
 pub use panel::{
-    AgentPanel, InteractionRequest, InteractionResponse, PanelMessage, PanelQuestion,
-    PanelQuestionAnswer, PanelRole,
+    AgentPanel, InteractionRequest, InteractionResponse, PanelEntry, PanelMessage, PanelQuestion,
+    PanelQuestionAnswer, PanelReasoning, PanelRole, PanelToolCall, PanelToolCallStatus,
 };
 #[cfg(feature = "server")]
 pub use react::{Agent, AgentConfig};

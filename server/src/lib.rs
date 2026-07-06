@@ -15,24 +15,43 @@ use leptos::prelude::*;
 use leptos_axum::{LeptosRoutes, generate_route_list};
 
 use app::app::*;
+use log::error;
 use state::AppState;
 
 use crate::editor::state::EditorRooms;
 
 /// Décode la clé de chiffrement/déchiffrement des secrets applicatifs
 /// (`client_secret` OIDC, clé API des modèles IA, clés GéoRisques/Légifrance)
-/// depuis la variable d'environnement `SECRET_ENCRYPTION_KEY` (32 octets
-/// encodés en base64 standard — AES-256 exige une clé de cette taille pour
-/// résister à un déchiffrement par force brute). Renvoie `None` si elle est
-/// absente ou invalide : les fonctionnalités concernées sont alors
-/// indisponibles plutôt que de faire planter le serveur au démarrage.
-fn build_secret_encryption_key() -> Option<[u8; 32]> {
+/// depuis la variable d'environnement `SECRET_ENCRYPTION_KEY` (au moins 32
+/// octets encodés en base64 standard — AES-256 exige une clé de 32 octets ;
+/// si la valeur décodée est plus longue, seuls les 32 premiers octets sont
+/// conservés). Renvoie `None` si elle est absente ou invalide : les
+/// fonctionnalités concernées sont alors indisponibles plutôt que de faire
+/// planter le serveur au démarrage.
+fn build_secret_encryption_key() -> Option<Vec<u8>> {
     use base64::Engine;
-    let encoded = std::env::var("SECRET_ENCRYPTION_KEY").ok()?;
-    let bytes = base64::engine::general_purpose::STANDARD
+    let encoded = std::env::var("SECRET_ENCRYPTION_KEY")
+    .inspect_err(|err| {
+        error!("Erreur lors de la recherche du SECRET_ENCRYPTION_KEY: {err}")
+    }).ok()?;
+
+    let mut bytes = base64::engine::general_purpose::STANDARD
         .decode(encoded.trim())
+        .inspect_err(|err| {
+            error!("Erreur lors du décodage du SECRET_ENCRYPTION_KEY: {err}")
+        })
         .ok()?;
-    bytes.try_into().ok()
+
+    if bytes.len() < 32 {
+        error!(
+            "SECRET_ENCRYPTION_KEY doit faire au moins 32 octets une fois décodée (obtenu : {} octets)",
+            bytes.len()
+        );
+        return None;
+    }
+
+    bytes.truncate(32);
+    Some(bytes)
 }
 
 /// Démarre le serveur applicatif : rendu SSR, API privée (ServerFunctions,
@@ -100,12 +119,12 @@ pub async fn run() -> anyhow::Result<()> {
             {
                 let store = app_state.store.clone();
                 let session_key = app_state.session_key.clone();
-                let secret_encryption_key = app_state.secret_encryption_key;
+                let secret_encryption_key = app_state.secret_encryption_key.clone();
                 let public_base_url = app_state.public_base_url.clone();
                 move || {
                     provide_context(store.clone());
                     provide_context(session_key.clone());
-                    provide_context(secret_encryption_key);
+                    provide_context(secret_encryption_key.clone());
                     provide_context(public_base_url.clone());
                 }
             },

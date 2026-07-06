@@ -1,24 +1,58 @@
 //! Page de démonstration des états du panneau agent IA.
 //! Accessible en développement à la route `/dev/agent`.
 
-use agent::{AgentPanel, InteractionRequest, InteractionResponse, PanelMessage, PanelQuestion};
+use agent::{
+    AgentPanel, InteractionRequest, InteractionResponse, PanelEntry, PanelQuestion, PanelReasoning,
+    PanelToolCall, PanelToolCallStatus,
+};
 use leptos::prelude::*;
 
 // ── Scénarios ────────────────────────────────────────────────────────────────
 
-fn messages_conversation() -> Vec<PanelMessage> {
+fn messages_conversation() -> Vec<PanelEntry> {
     vec![
-        PanelMessage::user("Complète les visas réglementaires"),
-        PanelMessage::assistant(
+        PanelEntry::user("Complète les visas réglementaires"),
+        PanelEntry::assistant(
             "J'ai besoin de connaître la rubrique ICPE principale. \
              Quel est le code rubrique de l'installation ?",
         ),
-        PanelMessage::user("2760-1"),
-        PanelMessage::assistant(
+        PanelEntry::user("2760-1"),
+        PanelEntry::assistant(
             "Merci. Je recherche les textes applicables à la rubrique 2760-1 \
              et je vais compléter les visas correspondants.",
         ),
-        PanelMessage::user("Ajoute aussi le visa relatif au code de l'environnement"),
+        PanelEntry::user("Ajoute aussi le visa relatif au code de l'environnement"),
+    ]
+}
+
+/// Illustre le tracé des réflexions et des appels d'outils affiché en
+/// direct pendant l'exécution de la boucle agentique (voir
+/// `agent::AgentObserver`) : une réflexion achevée, un appel d'outil
+/// terminé, un autre encore en cours, avant la réponse finale.
+fn messages_trace() -> Vec<PanelEntry> {
+    vec![
+        PanelEntry::user("Complète le considérant relatif au seuil de classement"),
+        PanelEntry::Reasoning(PanelReasoning {
+            content: "L'utilisateur vise la rubrique 2760-1. Je dois d'abord lire la \
+                      structure actuelle de l'acte pour savoir où insérer le considérant, \
+                      puis rechercher le seuil réglementaire applicable."
+                .to_string(),
+            done: true,
+        }),
+        PanelEntry::ToolCall(PanelToolCall {
+            id: "call_1".to_string(),
+            name: "read_structure".to_string(),
+            arguments: "{}".to_string(),
+            status: PanelToolCallStatus::Done {
+                output: "{ \"id\": \"root\", \"kind\": \"Root\", \"children\": [] }".to_string(),
+            },
+        }),
+        PanelEntry::ToolCall(PanelToolCall {
+            id: "call_2".to_string(),
+            name: "legifrance_search".to_string(),
+            arguments: "{ \"query\": \"rubrique 2760-1 seuil\" }".to_string(),
+            status: PanelToolCallStatus::Running,
+        }),
     ]
 }
 
@@ -94,6 +128,9 @@ pub fn PageDevAgentPanel() -> impl IntoView {
                 <Scenario titre="Conversation en cours">
                     <ScenarioConversation/>
                 </Scenario>
+                <Scenario titre="Réflexions et appels d'outils">
+                    <ScenarioTrace/>
+                </Scenario>
             </div>
 
             <div class="grid grid-cols-2 gap-4 mb-6">
@@ -134,7 +171,7 @@ fn Scenario(titre: &'static str, children: Children) -> impl IntoView {
 
 #[component]
 fn ScenarioVide() -> impl IntoView {
-    let messages = Signal::derive(|| Vec::<PanelMessage>::new());
+    let messages = Signal::derive(|| Vec::<PanelEntry>::new());
     let pending = Signal::derive(|| false);
     view! {
         <AgentPanel
@@ -149,7 +186,7 @@ fn ScenarioVide() -> impl IntoView {
 
 #[component]
 fn ScenarioEnAttente() -> impl IntoView {
-    let messages = Signal::derive(|| vec![PanelMessage::user("Rédige les visas de l'arrêté")]);
+    let messages = Signal::derive(|| vec![PanelEntry::user("Rédige les visas de l'arrêté")]);
     let pending = Signal::derive(|| true);
     view! {
         <AgentPanel
@@ -175,12 +212,27 @@ fn ScenarioConversation() -> impl IntoView {
     }
 }
 
+// ── Scénario 3bis : réflexions et appels d'outils tracés en direct ───────────
+
+#[component]
+fn ScenarioTrace() -> impl IntoView {
+    let messages = Signal::derive(messages_trace);
+    let pending = Signal::derive(|| true);
+    view! {
+        <AgentPanel
+            messages=messages
+            pending=pending
+            on_send=|_| {}
+        />
+    }
+}
+
 // ── Scénario 4 : formulaire actif (texte libre + sélecteur) ──────────────────
 
 #[component]
 fn ScenarioFormulaire() -> impl IntoView {
     let messages = Signal::derive(|| {
-        vec![PanelMessage::assistant(
+        vec![PanelEntry::assistant(
             "Pour poursuivre, j'ai besoin des informations suivantes sur l'installation.",
         )]
     });
@@ -221,7 +273,7 @@ fn ScenarioFormulaire() -> impl IntoView {
 #[component]
 fn ScenarioConfirmation() -> impl IntoView {
     let messages = Signal::derive(|| {
-        vec![PanelMessage::assistant(
+        vec![PanelEntry::assistant(
             "Avant de générer les considérants, confirmez les éléments ci-dessous. \
              Si une réponse ne convient pas, indiquez-le.",
         )]
@@ -272,7 +324,7 @@ fn ScenarioConversationPuisFormulaire() -> impl IntoView {
             messages=Signal::derive(move || messages.get())
             pending=pending
             on_send=move |text| {
-                set_messages.update(|ms| ms.push(PanelMessage::user(text)));
+                set_messages.update(|ms| ms.push(PanelEntry::user(text)));
             }
             interaction=Signal::derive(move || interaction.get())
             on_respond=Callback::new(move |resp: InteractionResponse| {
@@ -283,7 +335,7 @@ fn ScenarioConversationPuisFormulaire() -> impl IntoView {
                     format!("{} = {}{}", a.question_id, a.value, suffix)
                 }).collect::<Vec<_>>().join(", ");
                 set_messages.update(|ms| {
-                    ms.push(PanelMessage::assistant(
+                    ms.push(PanelEntry::assistant(
                         format!("Merci. J'ai reçu : {summary}"),
                     ));
                 });

@@ -17,7 +17,10 @@
 //! composant — c'est ce qui permet à ce module de continuer à les modifier
 //! après le montage, à chaque frame reçue du serveur.
 
-use agent::{InteractionRequest, InteractionResponse, PanelMessage, PanelQuestion};
+use agent::{
+    InteractionRequest, InteractionResponse, PanelEntry, PanelQuestion, PanelReasoning,
+    PanelToolCall, PanelToolCallStatus,
+};
 use legal_act::{Body, BodyNodeId, DirectBody, YrsBody};
 use leptos::prelude::*;
 use web_sys::wasm_bindgen::JsCast;
@@ -78,9 +81,18 @@ pub struct RoomHandle {
     /// page hôte doit attendre ce signal avant de monter
     /// [`legal_act::LegalActEditor`] (voir `super::app::PageEditorProjet`).
     pub ready: RwSignal<bool>,
-    pub agent_messages: RwSignal<Vec<PanelMessage>>,
+    pub agent_messages: RwSignal<Vec<PanelEntry>>,
     pub agent_pending: RwSignal<bool>,
     pub interaction: RwSignal<Option<InteractionRequest>>,
+    /// Index dans `agent_messages` de la réflexion du tour courant,
+    /// toujours la dernière entrée poussée tant qu'elle n'est pas figée par
+    /// `ServerMessage::AgentStepFinished` (voir [`handle_text_frame`]).
+    /// `None` tant qu'aucun fragment de réflexion n'est encore arrivé pour
+    /// ce tour.
+    open_reasoning: RwSignal<Option<usize>>,
+    /// Même principe que `open_reasoning`, pour le message assistant en
+    /// cours de réception (fragments de contenu du tour courant).
+    open_message: RwSignal<Option<usize>>,
     /// `true` si l'utilisateur a choisi d'accepter automatiquement toutes
     /// les modifications proposées par l'agent, sans confirmation
     /// individuelle (voir [`RoomHandle::set_auto_accept`]).
@@ -116,8 +128,9 @@ impl RoomHandle {
     /// Démarre la boucle agentique côté serveur avec `task`, et ajoute
     /// immédiatement le message de l'utilisateur à l'historique affiché.
     pub fn run_agent(&self, task: String) {
-        self.agent_messages
-            .update(|m| m.push(PanelMessage::user(task.clone())));
+        self.agent_messages.update(|m| m.push(PanelEntry::user(task.clone())));
+        self.open_reasoning.set(None);
+        self.open_message.set(None);
         self.agent_pending.set(true);
         self.send(&ClientMessage::RunAgent { task });
     }
@@ -184,6 +197,8 @@ pub fn connect_room(room_id: impl Into<String>) -> RoomHandle {
         agent_messages: RwSignal::new(Vec::new()),
         agent_pending: RwSignal::new(false),
         interaction: RwSignal::new(None),
+        open_reasoning: RwSignal::new(None),
+        open_message: RwSignal::new(None),
         auto_accept: RwSignal::new(false),
         connected_users: RwSignal::new(Vec::new()),
         pending_kind: RwSignal::new(None),
@@ -304,17 +319,55 @@ fn handle_text_frame(handle: RoomHandle, text: &str) {
         return;
     };
     match message {
-        ServerMessage::AgentDone { content } => {
-            handle
-                .agent_messages
-                .update(|m| m.push(PanelMessage::assistant(content)));
+        ServerMessage::AgentDone => {
             handle.agent_pending.set(false);
         }
         ServerMessage::AgentError { message } => {
+            handle.open_reasoning.set(None);
+            handle.open_message.set(None);
             handle
                 .agent_messages
-                .update(|m| m.push(PanelMessage::assistant(format!("Erreur : {message}"))));
+                .update(|m| m.push(PanelEntry::assistant(format!("Erreur : {message}"))));
             handle.agent_pending.set(false);
+        }
+        ServerMessage::AgentReasoningDelta { delta } => {
+            append_reasoning_delta(handle, delta);
+        }
+        ServerMessage::AgentContentDelta { delta } => {
+            append_content_delta(handle, delta);
+        }
+        ServerMessage::AgentStepFinished => {
+            if let Some(idx) = handle.open_reasoning.get_untracked() {
+                handle.agent_messages.update(|entries| {
+                    if let Some(PanelEntry::Reasoning(reasoning)) = entries.get_mut(idx) {
+                        reasoning.done = true;
+                    }
+                });
+            }
+            handle.open_reasoning.set(None);
+            handle.open_message.set(None);
+        }
+        ServerMessage::AgentToolCallStarted { id, name, arguments } => {
+            let arguments = serde_json::to_string_pretty(&arguments)
+                .unwrap_or_else(|_| arguments.to_string());
+            handle.agent_messages.update(|entries| {
+                entries.push(PanelEntry::ToolCall(PanelToolCall {
+                    id,
+                    name,
+                    arguments,
+                    status: PanelToolCallStatus::Running,
+                }));
+            });
+        }
+        ServerMessage::AgentToolCallFinished { id, ok, output } => {
+            let status = if ok {
+                PanelToolCallStatus::Done { output }
+            } else {
+                PanelToolCallStatus::Error { message: output }
+            };
+            handle.agent_messages.update(|entries| {
+                set_tool_call_status(entries, &id, status);
+            });
         }
         ServerMessage::InteractionAsk { question } => {
             handle.agent_pending.set(false);
@@ -361,6 +414,64 @@ fn handle_text_frame(handle: RoomHandle, text: &str) {
         }
         ServerMessage::Presence { users } => {
             handle.connected_users.set(users);
+        }
+    }
+}
+
+/// Ajoute `delta` à la réflexion du tour courant, ouvrant une nouvelle
+/// entrée [`PanelEntry::Reasoning`] s'il n'y en a pas déjà une pour ce tour
+/// (voir `RoomHandle::open_reasoning`, remis à `None` par
+/// `ServerMessage::AgentStepFinished`).
+fn append_reasoning_delta(handle: RoomHandle, delta: String) {
+    if let Some(idx) = handle.open_reasoning.get_untracked() {
+        handle.agent_messages.update(|entries| {
+            if let Some(PanelEntry::Reasoning(reasoning)) = entries.get_mut(idx) {
+                reasoning.content.push_str(&delta);
+            }
+        });
+        return;
+    }
+    let mut new_idx = 0;
+    handle.agent_messages.update(|entries| {
+        entries.push(PanelEntry::Reasoning(PanelReasoning {
+            content: delta,
+            done: false,
+        }));
+        new_idx = entries.len() - 1;
+    });
+    handle.open_reasoning.set(Some(new_idx));
+}
+
+/// Même principe que [`append_reasoning_delta`], pour le message assistant
+/// (contenu final ou narration) du tour courant.
+fn append_content_delta(handle: RoomHandle, delta: String) {
+    if let Some(idx) = handle.open_message.get_untracked() {
+        handle.agent_messages.update(|entries| {
+            if let Some(PanelEntry::Message(message)) = entries.get_mut(idx) {
+                message.content.push_str(&delta);
+            }
+        });
+        return;
+    }
+    let mut new_idx = 0;
+    handle.agent_messages.update(|entries| {
+        entries.push(PanelEntry::assistant(delta));
+        new_idx = entries.len() - 1;
+    });
+    handle.open_message.set(Some(new_idx));
+}
+
+/// Retrouve la trace d'appel d'outil `id` (la plus récente : les
+/// identifiants d'appel sont générés par le modèle et supposés uniques par
+/// tour, mais rien n'empêche un fournisseur de les réutiliser d'un tour à
+/// l'autre) et met à jour son statut.
+fn set_tool_call_status(entries: &mut [PanelEntry], id: &str, status: PanelToolCallStatus) {
+    for entry in entries.iter_mut().rev() {
+        if let PanelEntry::ToolCall(call) = entry
+            && call.id == id
+        {
+            call.status = status;
+            return;
         }
     }
 }

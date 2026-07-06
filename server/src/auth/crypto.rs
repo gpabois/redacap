@@ -15,7 +15,7 @@ use super::AuthError;
 
 /// Déchiffre un `client_secret` chiffré selon la convention de
 /// `shared::crypto` (nonce 12 octets || texte chiffré).
-pub fn decrypt(key: &[u8; 32], data: &[u8]) -> Result<String, AuthError> {
+pub fn decrypt(key: &[u8], data: &[u8]) -> Result<String, AuthError> {
     shared::crypto::decrypt(key, data).map_err(|_| AuthError::Crypto)
 }
 

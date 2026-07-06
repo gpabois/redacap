@@ -62,7 +62,7 @@ async fn create_ai_model_admin(
         ));
     }
 
-    let encryption_key = expect_context::<Option<[u8; 32]>>().ok_or_else(|| {
+    let encryption_key = expect_context::<Option<Vec<u8>>>().ok_or_else(|| {
         ServerFnError::new("chiffrement indisponible (SECRET_ENCRYPTION_KEY absente)")
     })?;
     let api_key_encrypted = shared::crypto::encrypt(&encryption_key, &api_key)

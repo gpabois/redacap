@@ -12,6 +12,7 @@ use agent::ToolError;
 use agent::ports::{
     LegalActEditorPort, Question, QuestionAnswer, UserInteractionPort, ValidationReport,
 };
+use agent::{AgentObserver, ToolCall};
 use legal_act::{BodyNodeId, BodyRead, BodyWrite, NodeKind, NodeSpec, YrsBody};
 use serde_json::Value;
 use shared::id::ID;
@@ -427,6 +428,49 @@ impl UserInteractionPort for WsUserInteraction {
                 unsatisfactory_reason: a.unsatisfactory_reason,
             })
             .collect())
+    }
+}
+
+/// Relaie au client websocket à l'origine de la tâche les réflexions du
+/// modèle et les appels d'outils que l'agent déclenche (voir
+/// `agent::AgentObserver`), pour affichage dans `agent::AgentPanel` au fil
+/// de l'eau plutôt qu'une fois la tâche entièrement terminée.
+#[async_trait::async_trait]
+impl AgentObserver for WsUserInteraction {
+    async fn on_reasoning_delta(&self, delta: &str) {
+        let _ = self.out.send(ServerMessage::AgentReasoningDelta {
+            delta: delta.to_string(),
+        });
+    }
+
+    async fn on_content_delta(&self, delta: &str) {
+        let _ = self.out.send(ServerMessage::AgentContentDelta {
+            delta: delta.to_string(),
+        });
+    }
+
+    async fn on_turn_finished(&self) {
+        let _ = self.out.send(ServerMessage::AgentStepFinished);
+    }
+
+    async fn on_tool_call_started(&self, call: &ToolCall) {
+        let _ = self.out.send(ServerMessage::AgentToolCallStarted {
+            id: call.id.clone(),
+            name: call.name.clone(),
+            arguments: call.arguments.clone(),
+        });
+    }
+
+    async fn on_tool_call_finished(&self, call_id: &str, result: &Result<String, String>) {
+        let (ok, output) = match result {
+            Ok(output) => (true, output.clone()),
+            Err(message) => (false, message.clone()),
+        };
+        let _ = self.out.send(ServerMessage::AgentToolCallFinished {
+            id: call_id.to_string(),
+            ok,
+            output,
+        });
     }
 }
 

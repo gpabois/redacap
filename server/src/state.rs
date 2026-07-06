@@ -20,7 +20,7 @@ pub struct AppState {
     /// `server::auth::crypto`). `None` si absente ou invalide : ces
     /// fonctionnalités sont alors indisponibles plutôt que de faire planter le
     /// serveur au démarrage.
-    pub secret_encryption_key: Option<[u8; 32]>,
+    pub secret_encryption_key: Option<Vec<u8>>,
     /// URL publique de base de l'application (ex. `https://redacap.example.org`),
     /// nécessaire pour construire les `redirect_uri` OIDC. `None` si absente :
     /// l'authentification OIDC est alors indisponible.

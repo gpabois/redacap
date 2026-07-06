@@ -5,11 +5,19 @@
 //! responsable de l'appel réel à l'agent (typiquement via une fonction
 //! serveur Leptos) et de la mise à jour de `messages`/`pending` en retour.
 
-use dsfr::{Badge, Severity};
+use dsfr::{Badge, ResizeHandle, Severity};
 use leptos::prelude::*;
 use leptos::*;
 use pulldown_cmark::{Event, Options, Parser};
 use web_sys::KeyboardEvent;
+
+/// Largeur initiale du panneau de formulaire d'interaction, en pixels,
+/// lorsqu'il est affiché à côté de l'historique de chat.
+const INTERACTION_PANEL_DEFAULT_WIDTH: f64 = 280.0;
+/// Bornes de largeur autorisées lors du redimensionnement par glissement
+/// (voir [`ResizeHandle`]).
+const INTERACTION_PANEL_MIN_WIDTH: f64 = 200.0;
+const INTERACTION_PANEL_MAX_WIDTH: f64 = 480.0;
 
 /// Convertit un texte Markdown (réponse de l'agent) en HTML affichable.
 ///
@@ -58,6 +66,66 @@ impl PanelMessage {
     }
 }
 
+/// Réflexion (chaîne de raisonnement) du modèle, affichée séparément de sa
+/// réponse : `done` distingue une réflexion achevée d'une réflexion encore
+/// en cours de réception (voir [`AgentPanel`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PanelReasoning {
+    pub content: String,
+    pub done: bool,
+}
+
+/// État d'un appel d'outil tracé dans l'historique (voir [`PanelToolCall`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PanelToolCallStatus {
+    /// L'outil est en cours d'exécution (éventuellement en attente de
+    /// confirmation de l'utilisateur, voir [`InteractionRequest`]).
+    Running,
+    Done { output: String },
+    Error { message: String },
+}
+
+/// Trace d'un appel d'outil déclenché par l'agent, affichée dans
+/// l'historique au même titre qu'un message : nom, arguments et résultat
+/// (une fois disponible).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PanelToolCall {
+    pub id: String,
+    pub name: String,
+    /// Arguments de l'appel, tels que sérialisés (JSON) par l'appelant.
+    pub arguments: String,
+    pub status: PanelToolCallStatus,
+}
+
+/// Élément de l'historique affiché par [`AgentPanel`] : message texte,
+/// réflexion du modèle, ou trace d'appel d'outil. Contrairement à
+/// [`PanelMessage`], qui ne portait que des échanges texte, [`PanelEntry`]
+/// permet de tracer en direct ce que fait l'agent entre deux réponses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PanelEntry {
+    Message(PanelMessage),
+    Reasoning(PanelReasoning),
+    ToolCall(PanelToolCall),
+}
+
+impl PanelEntry {
+    #[must_use]
+    pub fn user(content: impl Into<String>) -> Self {
+        Self::Message(PanelMessage::user(content))
+    }
+
+    #[must_use]
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self::Message(PanelMessage::assistant(content))
+    }
+}
+
+impl From<PanelMessage> for PanelEntry {
+    fn from(message: PanelMessage) -> Self {
+        Self::Message(message)
+    }
+}
+
 /// Une question affichée dans le formulaire structuré du panneau.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PanelQuestion {
@@ -99,6 +167,76 @@ struct QuestionDraft {
     reason: String,
 }
 
+/// Affiche une [`PanelEntry`] de l'historique : messages texte comme avant,
+/// plus les deux nouveaux types de trace (réflexion, appel d'outil), chacun
+/// avec sa propre présentation.
+fn render_panel_entry(entry: PanelEntry) -> AnyView {
+    match entry {
+        PanelEntry::Message(message) => match message.role {
+            PanelRole::User => view! {
+                <p class="self-end bg-blue-france text-white \
+                          max-w-[80%] rounded-sm px-3 py-1.5 text-sm">
+                    {message.content.clone()}
+                </p>
+            }
+            .into_any(),
+            PanelRole::Assistant => view! {
+                <div
+                    class="markdown-content self-start bg-blue-france-975 text-gray-900 \
+                           max-w-[80%] rounded-sm px-3 py-1.5 text-sm"
+                    inner_html=render_markdown(&message.content)
+                ></div>
+            }
+            .into_any(),
+        },
+        PanelEntry::Reasoning(reasoning) => {
+            let done = reasoning.done;
+            view! {
+                <div class="self-start max-w-[80%] rounded-sm border border-dashed \
+                            border-gray-300 bg-gray-50 px-3 py-1.5 text-sm italic text-gray-500">
+                    {reasoning.content.clone()}
+                    {(!done).then(|| view! { <span class="animate-pulse">"▍"</span> })}
+                </div>
+            }
+            .into_any()
+        }
+        PanelEntry::ToolCall(call) => {
+            let (status_label, status_class) = match &call.status {
+                PanelToolCallStatus::Running => ("en cours…", "text-gray-500"),
+                PanelToolCallStatus::Done { .. } => ("terminé", "text-success"),
+                PanelToolCallStatus::Error { .. } => ("erreur", "text-error"),
+            };
+            let output = match &call.status {
+                PanelToolCallStatus::Running => None,
+                PanelToolCallStatus::Done { output } => Some(output.clone()),
+                PanelToolCallStatus::Error { message } => Some(message.clone()),
+            };
+            view! {
+                <details class="self-start w-full max-w-[90%] rounded-sm border \
+                                border-blue-france-925 bg-gray-50 text-xs">
+                    <summary class="flex cursor-pointer select-none items-center gap-2 px-2 py-1">
+                        <span class="font-mono font-bold text-gray-700">{call.name.clone()}</span>
+                        <span class=format!("italic {status_class}")>{status_label}</span>
+                    </summary>
+                    <div class="space-y-1 whitespace-pre-wrap break-words px-2 pb-2 font-mono">
+                        <div>
+                            <span class="text-gray-500">"Arguments : "</span>
+                            {call.arguments.clone()}
+                        </div>
+                        {output.map(|output| view! {
+                            <div>
+                                <span class="text-gray-500">"Résultat : "</span>
+                                {output}
+                            </div>
+                        })}
+                    </div>
+                </details>
+            }
+            .into_any()
+        }
+    }
+}
+
 #[component]
 fn PendingAgent() -> impl IntoView {
     view! {
@@ -119,9 +257,11 @@ fn PendingAgent() -> impl IntoView {
 /// `on_send`.
 #[component]
 pub fn AgentPanel(
-    /// Historique des messages échangés, tenu par la page hôte.
+    /// Historique des échanges, tenu par la page hôte : messages texte,
+    /// réflexions du modèle et traces d'appels d'outils entremêlés dans leur
+    /// ordre d'arrivée (voir [`PanelEntry`]).
     #[prop(into)]
-    messages: Signal<Vec<PanelMessage>>,
+    messages: Signal<Vec<PanelEntry>>,
     /// `true` tant que l'agent n'a pas renvoyé sa réponse finale.
     #[prop(into)]
     pending: Signal<bool>,
@@ -147,6 +287,7 @@ pub fn AgentPanel(
 ) -> impl IntoView {
     let (draft, set_draft) = signal(String::new());
     let draft_answers = RwSignal::new(Vec::<QuestionDraft>::new());
+    let interaction_panel_width = RwSignal::new(INTERACTION_PANEL_DEFAULT_WIDTH);
 
     let interaction = interaction.unwrap_or_else(|| Signal::derive(|| None));
 
@@ -199,34 +340,63 @@ pub fn AgentPanel(
                 }}
             </div>
 
-            // Historique des messages
-            <div class="flex-1 overflow-y-auto p-3 flex flex-col gap-2">
-                <For
-                    each=move || messages.get().into_iter().enumerate()
-                    key=|(index, _)| *index
-                    children=move |(_, message)| {
-                        match message.role {
-                            PanelRole::User => view! {
-                                <p class="self-end bg-blue-france text-white \
-                                          max-w-[80%] rounded-sm px-3 py-1.5 text-sm">
-                                    {message.content.clone()}
-                                </p>
-                            }.into_any(),
-                            PanelRole::Assistant => view! {
-                                <div
-                                    class="markdown-content self-start bg-blue-france-975 text-gray-900 \
-                                           max-w-[80%] rounded-sm px-3 py-1.5 text-sm"
-                                    inner_html=render_markdown(&message.content)
-                                ></div>
-                            }.into_any(),
-                        }
-                    }
-                />
-                {move || pending.get().then(|| view! { <PendingAgent/> })}
-            </div>
+            <div class="flex-1 flex overflow-hidden min-h-0">
+                // Colonne chat : historique des messages et saisie libre.
+                // Redimensionnable indépendamment du formulaire (voir
+                // colonne de droite) via la poignée de glissement partagée
+                // avec le panneau agent principal (`ResizeHandle`).
+                <div class="flex-1 flex flex-col overflow-hidden min-w-0">
+                    <div class="flex-1 overflow-y-auto p-3 flex flex-col gap-2">
+                        <For
+                            each=move || messages.get().into_iter().enumerate()
+                            key=|(index, _)| *index
+                            children=move |(_, entry)| render_panel_entry(entry)
+                        />
+                        {move || pending.get().then(|| view! { <PendingAgent/> })}
+                    </div>
 
-            // Zone de saisie : formulaire structuré ou saisie texte libre.
-            {move || {
+                    // Saisie texte libre, masquée quand un formulaire structuré
+                    // est affiché à côté (colonne de droite ci-dessous).
+                    {move || interaction.get().is_none().then(|| {
+                        let send = make_send();
+                        let send_on_click = make_send();
+                        view! {
+                            <div class="flex gap-2 items-center px-3 py-2 border-t border-blue-france-925 flex-shrink-0">
+                                <input
+                                    type="text"
+                                    class="flex-1 shadow-[inset_0_0_0_1px] shadow-gray-400 \
+                                           focus:shadow-[inset_0_0_0_2px] focus:shadow-blue-france \
+                                           bg-gray-100 px-3 py-2 outline-none disabled:opacity-50"
+                                    placeholder="Demander à l'agent…"
+                                    prop:value=draft
+                                    prop:disabled=move || pending.get()
+                                    on:input=move |ev| set_draft.set(event_target_value(&ev))
+                                    on:keydown=move |ev: KeyboardEvent| {
+                                        if ev.key() == "Enter" {
+                                            send();
+                                        }
+                                    }
+                                />
+                                <button
+                                    type="button"
+                                    class="bg-blue-france text-white hover:bg-blue-france-hover \
+                                           active:bg-blue-france-active text-sm px-3 py-2 \
+                                           inline-flex items-center font-bold rounded-sm cursor-pointer \
+                                           transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+                                    disabled=move || pending.get() || draft.get().trim().is_empty()
+                                    on:click=move |_| send_on_click()
+                                >
+                                    "Envoyer"
+                                </button>
+                            </div>
+                        }
+                    })}
+                </div>
+
+                // Colonne formulaire : n'apparaît que lorsque l'agent attend des
+                // réponses précises de l'utilisateur ; redimensionnable par
+                // glissement indépendamment de la colonne chat.
+                {move || {
                 if let Some(req) = interaction.get() {
                     let prompt = req.prompt.clone();
                     let fields = req.questions.into_iter().enumerate().map(|(i, q)| {
@@ -347,62 +517,42 @@ pub fn AgentPanel(
                             }
                     };
 
-                    view! {
-                        <div class="border-t border-blue-france-925 p-3 flex flex-col gap-3 \
-                                    overflow-y-auto flex-shrink-0" style="max-height: 50%;">
-                            <p class="text-sm italic text-gray-600">{prompt}</p>
-                            {fields}
-                            <div class="flex justify-end">
-                                <button
-                                    type="button"
-                                    class="bg-blue-france text-white hover:bg-blue-france-hover \
-                                           active:bg-blue-france-active text-sm px-3 py-1.5 \
-                                           inline-flex items-center justify-center font-bold \
-                                           rounded-sm cursor-pointer transition-colors \
-                                           disabled:cursor-not-allowed disabled:opacity-40"
-                                    disabled=move || pending.get()
-                                    on:click=submit
-                                >
-                                    "Valider"
-                                </button>
+                    Some(view! {
+                        <div class="contents">
+                            <ResizeHandle
+                                width=interaction_panel_width
+                                min_width=INTERACTION_PANEL_MIN_WIDTH
+                                max_width=INTERACTION_PANEL_MAX_WIDTH
+                            />
+                            <div
+                                class="shrink-0 overflow-y-auto p-3 flex flex-col gap-3 \
+                                       border-l border-blue-france-925"
+                                style:width=move || format!("{}px", interaction_panel_width.get())
+                            >
+                                <p class="text-sm italic text-gray-600">{prompt}</p>
+                                {fields}
+                                <div class="flex justify-end">
+                                    <button
+                                        type="button"
+                                        class="bg-blue-france text-white hover:bg-blue-france-hover \
+                                               active:bg-blue-france-active text-sm px-3 py-1.5 \
+                                               inline-flex items-center justify-center font-bold \
+                                               rounded-sm cursor-pointer transition-colors \
+                                               disabled:cursor-not-allowed disabled:opacity-40"
+                                        disabled=move || pending.get()
+                                        on:click=submit
+                                    >
+                                        "Valider"
+                                    </button>
+                                </div>
                             </div>
                         </div>
-                    }.into_any()
+                    })
                 } else {
-                    let send = make_send();
-                    let send_on_click = make_send();
-                    view! {
-                        <div class="flex gap-2 items-center px-3 py-2 border-t border-blue-france-925 flex-shrink-0">
-                            <input
-                                type="text"
-                                class="flex-1 shadow-[inset_0_0_0_1px] shadow-gray-400 \
-                                       focus:shadow-[inset_0_0_0_2px] focus:shadow-blue-france \
-                                       bg-gray-100 px-3 py-2 outline-none disabled:opacity-50"
-                                placeholder="Demander à l'agent…"
-                                prop:value=draft
-                                prop:disabled=move || pending.get()
-                                on:input=move |ev| set_draft.set(event_target_value(&ev))
-                                on:keydown=move |ev: KeyboardEvent| {
-                                    if ev.key() == "Enter" {
-                                        send();
-                                    }
-                                }
-                            />
-                            <button
-                                type="button"
-                                class="bg-blue-france text-white hover:bg-blue-france-hover \
-                                       active:bg-blue-france-active text-sm px-3 py-2 \
-                                       inline-flex items-center font-bold rounded-sm cursor-pointer \
-                                       transition-colors disabled:cursor-not-allowed disabled:opacity-40"
-                                disabled=move || pending.get() || draft.get().trim().is_empty()
-                                on:click=move |_| send_on_click()
-                            >
-                                "Envoyer"
-                            </button>
-                        </div>
-                    }.into_any()
+                    None
                 }
             }}
+            </div>
         </div>
     }
 }

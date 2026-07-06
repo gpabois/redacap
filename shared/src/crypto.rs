@@ -19,7 +19,7 @@ const NONCE_LEN: usize = 12;
 pub struct CryptoError;
 
 /// Chiffre `plaintext` avec `key`, en préfixant un nonce aléatoire.
-pub fn encrypt(key: &[u8; 32], plaintext: &str) -> Result<Vec<u8>, CryptoError> {
+pub fn encrypt(key: &[u8], plaintext: &str) -> Result<Vec<u8>, CryptoError> {
     let cipher = Aes256Gcm::new(AesKey::<Aes256Gcm>::from_slice(key));
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
     let mut ciphertext = cipher
@@ -31,7 +31,7 @@ pub fn encrypt(key: &[u8; 32], plaintext: &str) -> Result<Vec<u8>, CryptoError> 
 }
 
 /// Déchiffre `data` (nonce || texte chiffré) avec `key`.
-pub fn decrypt(key: &[u8; 32], data: &[u8]) -> Result<String, CryptoError> {
+pub fn decrypt(key: &[u8], data: &[u8]) -> Result<String, CryptoError> {
     if data.len() < NONCE_LEN {
         return Err(CryptoError);
     }

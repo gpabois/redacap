@@ -33,8 +33,11 @@ pub enum ClientMessage {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
-    /// Réponse finale de l'agent pour la tâche en cours.
-    AgentDone { content: String },
+    /// La tâche agent en cours s'est terminée avec succès. Le contenu de la
+    /// réponse finale a déjà été relayé au fil de l'eau via
+    /// `AgentContentDelta` : ce message ne fait que lever l'indicateur
+    /// d'attente côté client.
+    AgentDone,
     /// La boucle agentique a échoué (erreur de modèle, outil, etc.).
     AgentError { message: String },
     /// L'agent pose une question ouverte (outil `ask_user`).
@@ -50,6 +53,30 @@ pub enum ServerMessage {
     /// `crate::editor::state::EditorRoom`), envoyée à ce client à la
     /// connexion puis à chaque changement (arrivée/départ d'un pair).
     Presence { users: Vec<PresenceUser> },
+    /// Fragment de réflexion (chaîne de raisonnement) du modèle pour le tour
+    /// en cours (voir `agent::AgentObserver::on_reasoning_delta`). Absent
+    /// des fournisseurs qui n'exposent pas de raisonnement.
+    AgentReasoningDelta { delta: String },
+    /// Fragment de réponse texte (narration ou réponse finale) du modèle
+    /// pour le tour en cours (voir `agent::AgentObserver::on_content_delta`).
+    AgentContentDelta { delta: String },
+    /// Le tour courant du modèle est terminé : les fragments de réflexion
+    /// accumulés depuis le dernier `AgentStepFinished` peuvent être figés
+    /// (voir `agent::AgentObserver::on_turn_finished`).
+    AgentStepFinished,
+    /// L'agent démarre l'appel de l'outil `name`, avant confirmation
+    /// éventuelle et exécution (voir
+    /// `agent::AgentObserver::on_tool_call_started`).
+    AgentToolCallStarted {
+        id: String,
+        name: String,
+        arguments: serde_json::Value,
+    },
+    /// Le résultat de l'appel d'outil `id` est disponible : `ok` distingue
+    /// un succès (`output` porte alors la sortie de l'outil) d'un échec
+    /// (`output` porte alors le message d'erreur, voir
+    /// `agent::AgentObserver::on_tool_call_finished`).
+    AgentToolCallFinished { id: String, ok: bool, output: String },
 }
 
 /// Identité d'un utilisateur connecté à la salle, telle qu'affichée par une

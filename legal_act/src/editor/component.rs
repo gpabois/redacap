@@ -1,12 +1,12 @@
 use leptos::prelude::*;
 
-use agent::{AgentPanel, InteractionRequest, InteractionResponse, PanelMessage};
-use dsfr::{BlocMarianneInline, TabPanel, Tabs};
+use agent::{AgentPanel, InteractionRequest, InteractionResponse, PanelEntry};
+use dsfr::{BlocMarianneInline, ResizeHandle, TabPanel, Tabs};
 
 use super::content::ContentSubtree;
 use super::context::{expect_editor_context, provide_editor_context};
 use super::header::{ConnectedUser, EditorHeader};
-use super::widgets::{InlineEditableDiv, ResizeHandle, TOOLBAR_BTN_CLASS};
+use super::widgets::{InlineEditableDiv, TOOLBAR_BTN_CLASS};
 use crate::traits::node::{BodyRead, BodyWrite};
 use crate::{Body, BodyNodeId, NodeKind, NodeSpec};
 
@@ -41,9 +41,10 @@ pub fn LegalActEditor(
     /// n'est alors pas affiché plutôt que d'inventer un texte.
     #[prop(optional, into)]
     autorite: Option<String>,
-    /// Historique des messages échangés avec l'agent IA.
+    /// Historique des échanges avec l'agent IA (messages, réflexions,
+    /// traces d'appels d'outils, voir [`agent::PanelEntry`]).
     #[prop(optional, into)]
-    agent_messages: Option<Signal<Vec<PanelMessage>>>,
+    agent_messages: Option<Signal<Vec<PanelEntry>>>,
     /// `true` tant que l'agent n'a pas renvoyé sa réponse finale.
     #[prop(optional, into)]
     agent_pending: Option<Signal<bool>>,

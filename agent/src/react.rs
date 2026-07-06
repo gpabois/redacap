@@ -1,9 +1,11 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::{
-    error::{AgentError, ToolError},
-    model::{ChatMessage, LanguageModel, ToolCall},
+    error::{AgentError, ModelError, ToolError},
+    model::{ChatMessage, LanguageModel, Role, StreamEvent, ToolCall},
+    observer::AgentObserver,
     ports::UserInteractionPort,
     tool::{ToolOutput, ToolRegistry},
 };
@@ -36,6 +38,7 @@ pub struct Agent {
     model: Arc<dyn LanguageModel>,
     tools: ToolRegistry,
     user_interaction: Arc<dyn UserInteractionPort>,
+    observer: Arc<dyn AgentObserver>,
     config: AgentConfig,
     /// Partagé avec l'appelant : quand `true`, les outils marqués
     /// [`crate::Tool::requires_confirmation`] s'exécutent sans passer par
@@ -52,6 +55,7 @@ impl Agent {
         model: Arc<dyn LanguageModel>,
         tools: ToolRegistry,
         user_interaction: Arc<dyn UserInteractionPort>,
+        observer: Arc<dyn AgentObserver>,
         config: AgentConfig,
         auto_accept: Arc<AtomicBool>,
     ) -> Self {
@@ -59,6 +63,7 @@ impl Agent {
             model,
             tools,
             user_interaction,
+            observer,
             config,
             auto_accept,
         }
@@ -76,7 +81,8 @@ impl Agent {
         let tool_definitions = self.tools.definitions();
 
         for _ in 0..self.config.max_steps {
-            let response = self.model.complete(&messages, &tool_definitions).await?;
+            let response = self.run_turn(&messages, &tool_definitions).await?;
+            self.observer.on_turn_finished().await;
 
             if response.tool_calls.is_empty() {
                 return Ok(response.content.unwrap_or_default());
@@ -86,15 +92,77 @@ impl Agent {
             messages.push(response);
 
             for call in &tool_calls {
-                let content = match self.dispatch_tool_call(call).await {
-                    Ok(output) => output.0,
-                    Err(error) => format!("erreur : {error}"),
+                self.observer.on_tool_call_started(call).await;
+                let result = match self.dispatch_tool_call(call).await {
+                    Ok(output) => Ok(output.0),
+                    Err(error) => Err(error.to_string()),
                 };
+                self.observer
+                    .on_tool_call_finished(&call.id, &result)
+                    .await;
+                let content = result.unwrap_or_else(|error| format!("erreur : {error}"));
                 messages.push(ChatMessage::tool_result(call.id.clone(), content));
             }
         }
 
         Err(AgentError::MaxStepsExceeded(self.config.max_steps))
+    }
+
+    /// Consomme le flux d'un tour de modèle jusqu'à son terme, en notifiant
+    /// [`Self::observer`] de chaque fragment de réflexion/contenu reçu, et
+    /// accumule les fragments d'appels d'outils (identifiés par leur
+    /// `index`, voir [`StreamEvent::ToolCallDelta`]) en [`ToolCall`]s
+    /// complets une fois le flux terminé.
+    async fn run_turn(
+        &self,
+        messages: &[ChatMessage],
+        tool_definitions: &[crate::model::ToolDefinition],
+    ) -> Result<ChatMessage, AgentError> {
+        let mut events = self.model.stream(messages, tool_definitions).await?;
+
+        let mut content = String::new();
+        let mut tool_calls: BTreeMap<usize, PartialToolCall> = BTreeMap::new();
+
+        while let Some(event) = events.recv().await {
+            match event? {
+                StreamEvent::ReasoningDelta(delta) => {
+                    self.observer.on_reasoning_delta(&delta).await;
+                }
+                StreamEvent::ContentDelta(delta) => {
+                    self.observer.on_content_delta(&delta).await;
+                    content.push_str(&delta);
+                }
+                StreamEvent::ToolCallDelta {
+                    index,
+                    id,
+                    name,
+                    arguments_delta,
+                } => {
+                    let entry = tool_calls.entry(index).or_default();
+                    if let Some(id) = id {
+                        entry.id = id;
+                    }
+                    if let Some(name) = name {
+                        entry.name = name;
+                    }
+                    if let Some(fragment) = arguments_delta {
+                        entry.arguments.push_str(&fragment);
+                    }
+                }
+            }
+        }
+
+        let tool_calls = tool_calls
+            .into_values()
+            .map(PartialToolCall::finish)
+            .collect::<Result<Vec<_>, ModelError>>()?;
+
+        Ok(ChatMessage {
+            role: Role::Assistant,
+            content: (!content.is_empty()).then_some(content),
+            tool_calls,
+            tool_call_id: None,
+        })
     }
 
     async fn dispatch_tool_call(&self, call: &ToolCall) -> Result<ToolOutput, ToolError> {
@@ -123,13 +191,42 @@ impl Agent {
     }
 }
 
+/// Appel d'outil en cours d'accumulation depuis les fragments successifs
+/// d'un [`StreamEvent::ToolCallDelta`] partageant le même `index` (voir
+/// [`Agent::run_turn`]) : `arguments` est la concaténation brute des
+/// fragments de JSON reçus, analysée une fois le flux terminé par
+/// [`Self::finish`].
+#[derive(Default)]
+struct PartialToolCall {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+impl PartialToolCall {
+    fn finish(self) -> Result<ToolCall, ModelError> {
+        let arguments = serde_json::from_str(&self.arguments).map_err(|error| {
+            ModelError::InvalidResponse(format!(
+                "arguments d'appel d'outil invalides pour « {} » : {error}",
+                self.name
+            ))
+        })?;
+        Ok(ToolCall {
+            id: self.id,
+            name: self.name,
+            arguments,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{model::ToolDefinition, tool::Tool};
+    use crate::{model::ToolDefinition, observer::NullAgentObserver, tool::Tool};
     use async_trait::async_trait;
     use serde_json::{Value, json};
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::mpsc;
 
     struct ScriptedModel {
         responses: std::sync::Mutex<Vec<ChatMessage>>,
@@ -141,16 +238,30 @@ mod tests {
             "scripted"
         }
 
-        async fn complete(
+        async fn stream(
             &self,
             _messages: &[ChatMessage],
             _tools: &[ToolDefinition],
-        ) -> Result<ChatMessage, crate::error::ModelError> {
-            Ok(self
+        ) -> Result<mpsc::UnboundedReceiver<Result<StreamEvent, ModelError>>, ModelError> {
+            let response = self
                 .responses
                 .lock()
                 .expect("verrou non empoisonné")
-                .remove(0))
+                .remove(0);
+
+            let (tx, rx) = mpsc::unbounded_channel();
+            if let Some(content) = response.content {
+                let _ = tx.send(Ok(StreamEvent::ContentDelta(content)));
+            }
+            for (index, call) in response.tool_calls.into_iter().enumerate() {
+                let _ = tx.send(Ok(StreamEvent::ToolCallDelta {
+                    index,
+                    id: Some(call.id),
+                    name: Some(call.name),
+                    arguments_delta: Some(call.arguments.to_string()),
+                }));
+            }
+            Ok(rx)
         }
     }
 
@@ -253,6 +364,7 @@ mod tests {
             Arc::new(model),
             tools,
             Arc::new(AlwaysConfirm),
+            Arc::new(NullAgentObserver),
             AgentConfig::default(),
             Arc::new(AtomicBool::new(false)),
         );
@@ -292,6 +404,7 @@ mod tests {
             Arc::new(model),
             tools,
             Arc::new(NeverConfirm),
+            Arc::new(NullAgentObserver),
             AgentConfig::default(),
             Arc::new(AtomicBool::new(true)),
         );
@@ -331,6 +444,7 @@ mod tests {
             Arc::new(model),
             tools,
             Arc::new(AlwaysConfirm),
+            Arc::new(NullAgentObserver),
             config,
             Arc::new(AtomicBool::new(false)),
         );

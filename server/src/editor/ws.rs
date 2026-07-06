@@ -275,8 +275,13 @@ async fn handle_socket(
         selection.clone(),
         author_id,
     ));
-    let interaction: Arc<dyn UserInteractionPort> =
-        Arc::new(WsUserInteraction::new(out_tx.clone(), answer_rx));
+    // Une seule instance concrète, utilisée à la fois comme port
+    // d'interaction et comme observateur de la boucle agentique : les deux
+    // rôles relaient vers le même client websocket (voir `WsUserInteraction`
+    // dans `super::ports`).
+    let ws_interaction = Arc::new(WsUserInteraction::new(out_tx.clone(), answer_rx));
+    let interaction: Arc<dyn UserInteractionPort> = ws_interaction.clone();
+    let agent_observer: Arc<dyn agent::AgentObserver> = ws_interaction;
     let agent_running = Arc::new(AtomicBool::new(false));
     // Persiste pour toute la durée de la connexion (pas seulement une tâche
     // agent) : l'utilisateur peut activer/désactiver l'auto-acceptation
@@ -298,6 +303,7 @@ async fn handle_socket(
                         state.clone(),
                         editor.clone(),
                         interaction.clone(),
+                        agent_observer.clone(),
                         out_tx.clone(),
                         agent_running.clone(),
                         auto_accept.clone(),
@@ -366,7 +372,7 @@ async fn apply_and_broadcast(room: &Arc<EditorRoom>, author_id: &ID, bytes: &[u8
 /// boucle agentique.
 async fn build_active_language_model(
     pool: &storage::Pool,
-    secret_key: Option<[u8; 32]>,
+    secret_key: Option<Vec<u8>>,
 ) -> Result<(Arc<dyn LanguageModel>, String), String> {
     let ai_model = storage::ai_model::get_active_ai_model(pool)
         .await
@@ -398,7 +404,7 @@ async fn build_active_language_model(
 /// sans jeton porteur (quota réduit).
 async fn build_georisques_client(
     pool: &storage::Pool,
-    secret_key: Option<[u8; 32]>,
+    secret_key: Option<Vec<u8>>,
 ) -> GeorisquesClient {
     let api_key = storage::external_credentials::get_georisques_credentials(pool)
         .await
@@ -420,7 +426,7 @@ async fn build_georisques_client(
 /// que d'empêcher le reste de la boucle agentique de démarrer.
 async fn build_legifrance_client(
     pool: &storage::Pool,
-    secret_key: Option<[u8; 32]>,
+    secret_key: Option<Vec<u8>>,
 ) -> Option<LegifranceClient> {
     let credentials = storage::external_credentials::get_legifrance_credentials(pool)
         .await
@@ -440,6 +446,7 @@ fn spawn_agent_run(
     state: Arc<AppState>,
     editor: Arc<dyn LegalActEditorPort>,
     interaction: Arc<dyn UserInteractionPort>,
+    agent_observer: Arc<dyn agent::AgentObserver>,
     out_tx: mpsc::UnboundedSender<ServerMessage>,
     agent_running: Arc<AtomicBool>,
     auto_accept: Arc<AtomicBool>,
@@ -447,14 +454,15 @@ fn spawn_agent_run(
     task: String,
 ) {
     tokio::spawn(async move {
-        let secret_key = state.secret_encryption_key;
-        let message = match build_active_language_model(&state.store, secret_key).await {
+        let secret_key = state.secret_encryption_key.clone();
+        let message = match build_active_language_model(&state.store, secret_key.clone()).await {
             Err(message) => ServerMessage::AgentError { message },
             Ok((model, ai_model_system_prompt)) => {
                 let (system_prompt, allowed_tools) =
                     build_agent_context(&state.store, legal_act_id, &ai_model_system_prompt).await;
 
                 let mut tools = ToolRegistry::new();
+                
                 tools.register(Box::new(ReadStructureTool::new(editor.clone())));
                 tools.register(Box::new(FillSectionTool::new(editor.clone())));
                 tools.register(Box::new(InsertNodeTool::new(editor.clone())));
@@ -470,7 +478,7 @@ fn spawn_agent_run(
                     || allowed_tools.contains("icpe_query")
                 {
                     let georisques_client =
-                        Arc::new(build_georisques_client(&state.store, secret_key).await);
+                        Arc::new(build_georisques_client(&state.store, secret_key.clone()).await);
                     if allowed_tools.contains("georisques_query") {
                         tools.register(Box::new(GeorisquesQueryTool::new(
                             georisques_client.clone(),
@@ -485,7 +493,7 @@ fn spawn_agent_run(
                     || allowed_tools.contains("legifrance_fetch")
                 {
                     if let Some(legifrance_client) =
-                        build_legifrance_client(&state.store, secret_key).await
+                        build_legifrance_client(&state.store, secret_key.clone()).await
                     {
                         let legifrance_client = Arc::new(legifrance_client);
                         if allowed_tools.contains("legifrance_search") {
@@ -503,10 +511,11 @@ fn spawn_agent_run(
                     system_prompt,
                     ..AgentConfig::default()
                 };
-                let agent = Agent::new(model, tools, interaction, config, auto_accept);
+                let agent =
+                    Agent::new(model, tools, interaction, agent_observer, config, auto_accept);
 
                 match agent.run(&task).await {
-                    Ok(content) => ServerMessage::AgentDone { content },
+                    Ok(_content) => ServerMessage::AgentDone,
                     Err(error) => ServerMessage::AgentError {
                         message: error.to_string(),
                     },

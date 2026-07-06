@@ -10,6 +10,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::sync::mpsc;
 
 use crate::error::ModelError;
 
@@ -29,6 +30,25 @@ pub struct ToolCall {
     pub id: String,
     pub name: String,
     pub arguments: Value,
+}
+
+/// Fragment produit au fil de l'eau par [`LanguageModel::stream`] : le
+/// modèle répartit sa réponse entre réflexion (chaîne de raisonnement,
+/// absente chez la plupart des fournisseurs mais renvoyée par certains sous
+/// `reasoning_content`/`reasoning`), contenu textuel final, et appels
+/// d'outils — ces derniers arrivant fragment par fragment (nom une fois,
+/// arguments en plusieurs morceaux de JSON à concaténer) et distingués par
+/// `index` lorsque le modèle en enchaîne plusieurs dans le même tour.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StreamEvent {
+    ReasoningDelta(String),
+    ContentDelta(String),
+    ToolCallDelta {
+        index: usize,
+        id: Option<String>,
+        name: Option<String>,
+        arguments_delta: Option<String>,
+    },
 }
 
 /// Message échangé avec le modèle de langage, indépendant du format de
@@ -95,18 +115,25 @@ pub struct ToolDefinition {
     pub parameters: Value,
 }
 
-/// Un fournisseur de modèle de langage capable de produire le prochain
-/// message d'une conversation, en tenant compte des outils disponibles.
+/// Un fournisseur de modèle de langage capable de produire le prochain tour
+/// d'une conversation, en tenant compte des outils disponibles.
 #[async_trait]
 pub trait LanguageModel: Send + Sync {
     /// Nom du modèle interrogé, à des fins de journalisation.
     fn model_name(&self) -> &str;
 
-    async fn complete(
+    /// Lance la complétion en flux : les fragments de réflexion, de contenu
+    /// et d'appels d'outils sont livrés au fil de l'eau sur le canal
+    /// renvoyé, à mesure que le fournisseur les produit — voir
+    /// [`StreamEvent`]. Échoue immédiatement si la requête elle-même ne peut
+    /// pas être établie (réseau, authentification...) ; une erreur survenant
+    /// après coup, pendant la lecture du flux, est renvoyée comme dernier
+    /// élément du canal plutôt que par cette méthode.
+    async fn stream(
         &self,
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
-    ) -> Result<ChatMessage, ModelError>;
+    ) -> Result<mpsc::UnboundedReceiver<Result<StreamEvent, ModelError>>, ModelError>;
 }
 
 /// Configuration d'un point de terminaison compatible avec l'API de
@@ -143,18 +170,27 @@ impl LanguageModel for OpenAiCompatibleModel {
         &self.config.model
     }
 
-    async fn complete(
+    async fn stream(
         &self,
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
-    ) -> Result<ChatMessage, ModelError> {
+    ) -> Result<mpsc::UnboundedReceiver<Result<StreamEvent, ModelError>>, ModelError> {
+        let wire_tools: Vec<WireToolDefinition> =
+            tools.iter().map(WireToolDefinition::from).collect();
         let request = WireRequest {
             model: &self.config.model,
             messages: messages.iter().map(WireMessage::from).collect(),
-            tools: tools.iter().map(WireToolDefinition::from).collect(),
+            // Explicite plutôt qu'omis : certains points de terminaison
+            // compatibles OpenAI (passerelles, proxys) traitent l'absence de
+            // `tool_choice` comme `"none"` plutôt que le défaut standard
+            // `"auto"`, ce qui fait répondre le modèle en texte libre sans
+            // jamais appeler les outils pourtant transmis dans `tools`.
+            tool_choice: (!wire_tools.is_empty()).then_some("auto"),
+            tools: wire_tools,
+            stream: true,
         };
 
-        let response = self
+        let mut response = self
             .http
             .post(format!(
                 "{}/chat/completions",
@@ -164,16 +200,115 @@ impl LanguageModel for OpenAiCompatibleModel {
             .json(&request)
             .send()
             .await?
-            .error_for_status()?
-            .json::<WireCompletionResponse>()
-            .await?;
+            .error_for_status()?;
 
-        let choice = response.choices.into_iter().next().ok_or_else(|| {
-            ModelError::InvalidResponse("la réponse ne contient aucun choix".to_string())
-        })?;
+        let (tx, rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let mut buffer = String::new();
+            loop {
+                let chunk = match response.chunk().await {
+                    Ok(Some(bytes)) => bytes,
+                    Ok(None) => break,
+                    Err(error) => {
+                        let _ = tx.send(Err(ModelError::from(error)));
+                        break;
+                    }
+                };
+                buffer.push_str(&String::from_utf8_lossy(&chunk));
 
-        ChatMessage::try_from(choice.message)
+                // Les événements SSE sont séparés par une ligne vide ;
+                // `buffer` peut contenir un événement incomplet en fin de
+                // tampon si la frontière TCP tombe au milieu (on la laisse
+                // alors pour le prochain morceau reçu).
+                while let Some(pos) = buffer.find("\n\n") {
+                    let block = buffer[..pos].to_string();
+                    buffer.drain(..pos + 2);
+                    match parse_sse_block(&block) {
+                        Ok(SseBlock::Ignore) => {}
+                        Ok(SseBlock::Done) => return,
+                        Ok(SseBlock::Chunk(chunk)) => {
+                            for event in events_from_chunk(chunk) {
+                                if tx.send(Ok(event)).is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            let _ = tx.send(Err(error));
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+
+        Ok(rx)
     }
+}
+
+/// Résultat de l'analyse d'un bloc SSE (voir [`parse_sse_block`]).
+enum SseBlock {
+    /// Bloc sans ligne `data:` (commentaire, ping de tenue de connexion...).
+    Ignore,
+    /// Marqueur de fin de flux standard (`data: [DONE]`).
+    Done,
+    Chunk(WireStreamChunk),
+}
+
+/// Analyse un bloc SSE complet (les lignes entre deux séparateurs `\n\n`) :
+/// concatène ses éventuelles lignes `data:` (un événement peut être
+/// fragmenté sur plusieurs lignes `data:` successives selon la spécification
+/// SSE) puis le désérialise comme fragment de complétion en flux.
+fn parse_sse_block(block: &str) -> Result<SseBlock, ModelError> {
+    let data = block
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .map(str::trim_start)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if data.is_empty() {
+        return Ok(SseBlock::Ignore);
+    }
+    if data == "[DONE]" {
+        return Ok(SseBlock::Done);
+    }
+
+    serde_json::from_str(&data)
+        .map(SseBlock::Chunk)
+        .map_err(|error| {
+            ModelError::InvalidResponse(format!("fragment de flux invalide : {error}"))
+        })
+}
+
+/// Traduit un fragment de complétion en flux en [`StreamEvent`]s : au plus
+/// une réflexion et un contenu par choix (chacun ignoré s'il est vide, ce
+/// qui est fréquent une fois le flux entamé), et un événement par appel
+/// d'outil delta présent.
+fn events_from_chunk(chunk: WireStreamChunk) -> Vec<StreamEvent> {
+    let mut events = Vec::new();
+    for choice in chunk.choices {
+        let delta = choice.delta;
+        if let Some(reasoning) = delta.reasoning_content
+            && !reasoning.is_empty()
+        {
+            events.push(StreamEvent::ReasoningDelta(reasoning));
+        }
+        if let Some(content) = delta.content
+            && !content.is_empty()
+        {
+            events.push(StreamEvent::ContentDelta(content));
+        }
+        for tool_call in delta.tool_calls {
+            events.push(StreamEvent::ToolCallDelta {
+                index: tool_call.index,
+                id: tool_call.id,
+                name: tool_call.function.as_ref().and_then(|f| f.name.clone()),
+                arguments_delta: tool_call.function.and_then(|f| f.arguments),
+            });
+        }
+    }
+    events
 }
 
 impl Role {
@@ -205,6 +340,9 @@ struct WireRequest<'req> {
     messages: Vec<WireMessage>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<WireToolDefinition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<&'static str>,
+    stream: bool,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -250,14 +388,50 @@ struct WireFunctionDefinition {
     parameters: Value,
 }
 
+/// Fragment de complétion en flux (`data: { ... }` d'un événement SSE),
+/// format commun aux points de terminaison compatibles avec l'API de
+/// complétion de chat OpenAI en mode `stream: true`.
 #[derive(Deserialize)]
-struct WireCompletionResponse {
-    choices: Vec<WireChoice>,
+struct WireStreamChunk {
+    #[serde(default)]
+    choices: Vec<WireStreamChoice>,
+}
+
+#[derive(Deserialize, Default)]
+struct WireStreamChoice {
+    #[serde(default)]
+    delta: WireStreamDelta,
+}
+
+#[derive(Deserialize, Default)]
+struct WireStreamDelta {
+    #[serde(default)]
+    content: Option<String>,
+    /// Chaîne de raisonnement, absente chez la plupart des fournisseurs :
+    /// `reasoning_content` (DeepSeek et compatibles) et `reasoning`
+    /// (OpenRouter) désignent le même concept sous deux noms différents
+    /// selon le fournisseur, d'où l'alias plutôt qu'un second champ.
+    #[serde(default, alias = "reasoning")]
+    reasoning_content: Option<String>,
+    #[serde(default)]
+    tool_calls: Vec<WireStreamToolCallDelta>,
 }
 
 #[derive(Deserialize)]
-struct WireChoice {
-    message: WireMessage,
+struct WireStreamToolCallDelta {
+    index: usize,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    function: Option<WireStreamFunctionDelta>,
+}
+
+#[derive(Deserialize)]
+struct WireStreamFunctionDelta {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    arguments: Option<String>,
 }
 
 impl From<&ChatMessage> for WireMessage {
