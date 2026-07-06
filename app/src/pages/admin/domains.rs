@@ -114,12 +114,12 @@ async fn delete_domain_admin(domain_id: String) -> Result<(), ServerFnError> {
 pub fn PageAdminDomains() -> impl IntoView {
     let context = Resource::new(|| (), |_| admin_context());
     view! {
-        <Suspense fallback=|| view! { <p class="p-8 text-gray-500">"Chargement…"</p> }>
+        <Suspense fallback=|| view! { <p class="p-8 text-gray-500 dark:text-gray-400">"Chargement…"</p> }>
             {move || Suspend::new(async move {
                 match context.await {
                     Err(_) => view! { <AdminAccessDenied/> }.into_any(),
                     Ok(access) => view! {
-                        <div class="min-h-screen bg-gray-50">
+                        <div class="min-h-screen bg-gray-50 dark:bg-gray-800">
                             <AdminHeader initial=access.initial.clone()/>
                             <AdminNav active=AdminSection::Domains/>
                             <div class="max-w-6xl mx-auto p-6">
@@ -198,10 +198,10 @@ fn DomainsPanel() -> impl IntoView {
     });
 
     view! {
-        <h1 class="text-xl font-bold text-gray-900 mb-4">"Domaines techniques"</h1>
+        <h1 class="text-xl font-bold text-gray-900 dark:text-gray-100 mb-4">"Domaines techniques"</h1>
 
-        <div class="bg-white border border-gray-200 rounded-sm p-4 mb-6 flex flex-col gap-3">
-            <h2 class="text-base font-bold text-gray-900">
+        <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-sm p-4 mb-6 flex flex-col gap-3">
+            <h2 class="text-base font-bold text-gray-900 dark:text-gray-100">
                 {move || if editing_id.get().is_some() { "Modifier le domaine" } else { "Créer un domaine" }}
             </h2>
             {move || form_error.get().map(|message| view! {
@@ -251,7 +251,7 @@ fn DomainsPanel() -> impl IntoView {
             <Alert severity=Severity::Error small=true class="mb-3">{message}</Alert>
         })}
 
-        <Suspense fallback=|| view! { <p class="text-gray-500">"Chargement des domaines…"</p> }>
+        <Suspense fallback=|| view! { <p class="text-gray-500 dark:text-gray-400">"Chargement des domaines…"</p> }>
             {move || Suspend::new(async move {
                 match domains.await {
                     Err(error) => view! { <Alert severity=Severity::Error>{error.to_string()}</Alert> }.into_any(),
@@ -263,7 +263,7 @@ fn DomainsPanel() -> impl IntoView {
                                 view! {
                                     <tr>
                                         <td class="px-3 py-2">{domain.name}</td>
-                                        <td class="px-3 py-2 text-gray-600 max-w-md truncate">{domain.agent_context}</td>
+                                        <td class="px-3 py-2 text-gray-600 dark:text-gray-400 max-w-md truncate">{domain.agent_context}</td>
                                         <td class="px-3 py-2">
                                             <div class="flex gap-2">
                                                 <Button

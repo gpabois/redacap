@@ -35,14 +35,14 @@ fn render_markdown(source: &str) -> String {
 }
 
 /// Rôle de l'émetteur d'un message affiché dans le panneau.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PanelRole {
     User,
     Assistant,
 }
 
 /// Message affiché dans l'historique du panneau.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PanelMessage {
     pub role: PanelRole,
     pub content: String,
@@ -69,26 +69,30 @@ impl PanelMessage {
 /// Réflexion (chaîne de raisonnement) du modèle, affichée séparément de sa
 /// réponse : `done` distingue une réflexion achevée d'une réflexion encore
 /// en cours de réception (voir [`AgentPanel`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PanelReasoning {
     pub content: String,
     pub done: bool,
 }
 
 /// État d'un appel d'outil tracé dans l'historique (voir [`PanelToolCall`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PanelToolCallStatus {
     /// L'outil est en cours d'exécution (éventuellement en attente de
     /// confirmation de l'utilisateur, voir [`InteractionRequest`]).
     Running,
-    Done { output: String },
-    Error { message: String },
+    Done {
+        output: String,
+    },
+    Error {
+        message: String,
+    },
 }
 
 /// Trace d'un appel d'outil déclenché par l'agent, affichée dans
 /// l'historique au même titre qu'un message : nom, arguments et résultat
 /// (une fois disponible).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PanelToolCall {
     pub id: String,
     pub name: String,
@@ -101,7 +105,13 @@ pub struct PanelToolCall {
 /// réflexion du modèle, ou trace d'appel d'outil. Contrairement à
 /// [`PanelMessage`], qui ne portait que des échanges texte, [`PanelEntry`]
 /// permet de tracer en direct ce que fait l'agent entre deux réponses.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Hash` (en plus de `PartialEq`/`Eq`) sert de clé de rendu à [`AgentPanel`]
+/// : chaque entrée est mutée en place (delta de réflexion, statut d'outil...)
+/// plutôt que remplacée, donc `<For>` doit être reclé sur le contenu entier
+/// et pas seulement sur la position, sans quoi Leptos ne réconcilie jamais
+/// la vue déjà montée avec la mutation (voir `render_panel_entry`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PanelEntry {
     Message(PanelMessage),
     Reasoning(PanelReasoning),
@@ -284,6 +294,11 @@ pub fn AgentPanel(
     /// « accepter toutes les modifications ».
     #[prop(optional)]
     on_toggle_auto_accept: Option<Callback<bool>>,
+    /// Invoqué lorsque l'utilisateur choisit d'effacer l'historique de la
+    /// conversation (voir `app::ws::RoomHandle::clear_history`). Si absent,
+    /// le bouton correspondant n'est pas affiché.
+    #[prop(optional)]
+    on_clear_history: Option<Callback<()>>,
 ) -> impl IntoView {
     let (draft, set_draft) = signal(String::new());
     let draft_answers = RwSignal::new(Vec::<QuestionDraft>::new());
@@ -318,9 +333,22 @@ pub fn AgentPanel(
 
             // En-tête
             <div class="px-3 py-2 border-b border-blue-france-925 bg-blue-france-975 flex-shrink-0">
-                <p class="text-sm font-bold text-blue-france flex items-baseline">
+                <p class="text-sm font-bold text-blue-france flex items-baseline gap-2">
                     <span class="flex-1 uppercase">Marie</span>
                     <Badge severity=Severity::Info>IA</Badge>
+                    {on_clear_history.map(|on_clear| view! {
+                        <button
+                            type="button"
+                            title="Effacer l'historique de la conversation"
+                            class="text-xs font-normal normal-case text-gray-500 hover:text-blue-france \
+                                   underline-offset-2 hover:underline cursor-pointer disabled:cursor-not-allowed \
+                                   disabled:opacity-40 disabled:hover:no-underline"
+                            disabled=move || pending.get() || messages.get().is_empty()
+                            on:click=move |_| on_clear.run(())
+                        >
+                            "Effacer"
+                        </button>
+                    })}
                 </p>
                 {move || {
                     match (auto_accept, on_toggle_auto_accept) {
@@ -349,7 +377,7 @@ pub fn AgentPanel(
                     <div class="flex-1 overflow-y-auto p-3 flex flex-col gap-2">
                         <For
                             each=move || messages.get().into_iter().enumerate()
-                            key=|(index, _)| *index
+                            key=|(index, entry)| (*index, entry.clone())
                             children=move |(_, entry)| render_panel_entry(entry)
                         />
                         {move || pending.get().then(|| view! { <PendingAgent/> })}

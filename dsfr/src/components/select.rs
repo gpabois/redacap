@@ -33,10 +33,10 @@ pub fn Select(
 ) -> impl IntoView {
     view! {
         <div class=format!("{class} flex flex-col gap-1")>
-            <label class="text-sm font-bold text-gray-900">{label}</label>
-            {hint.map(|hint| view! { <span class="text-sm text-gray-600">{hint}</span> })}
+            <label class="text-sm font-bold text-gray-900 dark:text-gray-100">{label}</label>
+            {hint.map(|hint| view! { <span class="text-sm text-gray-600 dark:text-gray-400">{hint}</span> })}
             <select
-                class="shadow-[inset_0_0_0_1px] shadow-gray-400 focus:shadow-[inset_0_0_0_2px] focus:shadow-blue-france bg-gray-100 px-3 py-2 outline-none disabled:opacity-50"
+                class="shadow-[inset_0_0_0_1px] shadow-gray-400 focus:shadow-[inset_0_0_0_2px] focus:shadow-blue-france bg-gray-100 dark:bg-gray-800 px-3 py-2 outline-none disabled:opacity-50"
                 disabled=disabled
                 prop:value=move || value.get()
                 on:change=move |ev: Event| on_change(event_target_value(&ev))

@@ -21,12 +21,12 @@ pub fn Tile(
     view! {
         <a
             href=href
-            class=format!("{class} {layout} flex gap-4 p-6 border border-gray-300 hover:bg-blue-france-975 transition-colors")
+            class=format!("{class} {layout} flex gap-4 p-6 border border-gray-300 dark:border-gray-700 hover:bg-blue-france-975 dark:hover:bg-gray-800 transition-colors")
         >
             {pictogram.map(|pictogram| view! { <span class="text-3xl shrink-0">{pictogram}</span> })}
             <span class="flex flex-col gap-1">
-                <span class="font-bold text-blue-france">{title}</span>
-                {description.map(|description| view! { <span class="text-sm text-gray-700">{description}</span> })}
+                <span class="font-bold text-blue-france dark:text-blue-france-925">{title}</span>
+                {description.map(|description| view! { <span class="text-sm text-gray-700 dark:text-gray-300">{description}</span> })}
             </span>
         </a>
     }

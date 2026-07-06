@@ -103,7 +103,7 @@ async fn update_ai_model_admin(
 
     let api_key_encrypted = match new_api_key.filter(|key| !key.is_empty()) {
         Some(key) => {
-            let encryption_key = expect_context::<Option<[u8; 32]>>().ok_or_else(|| {
+            let encryption_key = expect_context::<Option<Vec<u8>>>().ok_or_else(|| {
                 ServerFnError::new("chiffrement indisponible (SECRET_ENCRYPTION_KEY absente)")
             })?;
             Some(
@@ -169,12 +169,12 @@ async fn delete_ai_model_admin(model_id: String) -> Result<(), ServerFnError> {
 pub fn PageAdminAiModels() -> impl IntoView {
     let context = Resource::new(|| (), |_| admin_context());
     view! {
-        <Suspense fallback=|| view! { <p class="p-8 text-gray-500">"Chargement…"</p> }>
+        <Suspense fallback=|| view! { <p class="p-8 text-gray-500 dark:text-gray-400">"Chargement…"</p> }>
             {move || Suspend::new(async move {
                 match context.await {
                     Err(_) => view! { <AdminAccessDenied/> }.into_any(),
                     Ok(access) => view! {
-                        <div class="min-h-screen bg-gray-50">
+                        <div class="min-h-screen bg-gray-50 dark:bg-gray-800">
                             <AdminHeader initial=access.initial.clone()/>
                             <AdminNav active=AdminSection::AiModels/>
                             <div class="max-w-6xl mx-auto p-6">
@@ -261,14 +261,14 @@ fn AiModelsPanel() -> impl IntoView {
     });
 
     view! {
-        <h1 class="text-xl font-bold text-gray-900 mb-4">"Modèles IA"</h1>
-        <p class="text-sm text-gray-600 mb-4">
+        <h1 class="text-xl font-bold text-gray-900 dark:text-gray-100 mb-4">"Modèles IA"</h1>
+        <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
             "Points de terminaison compatibles avec l'API de complétion de chat OpenAI. "
             "Le modèle marqué « Actif » est utilisé comme moteur de l'agent IA « Marie »."
         </p>
 
-        <div class="bg-white border border-gray-200 rounded-sm p-4 mb-6 flex flex-col gap-3">
-            <h2 class="text-base font-bold text-gray-900">
+        <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-sm p-4 mb-6 flex flex-col gap-3">
+            <h2 class="text-base font-bold text-gray-900 dark:text-gray-100">
                 {move || if editing_id.get().is_some() { "Modifier le modèle" } else { "Enregistrer un modèle" }}
             </h2>
             {move || form_error.get().map(|message| view! {
@@ -333,7 +333,7 @@ fn AiModelsPanel() -> impl IntoView {
             </div>
         </div>
 
-        <Suspense fallback=|| view! { <p class="text-gray-500">"Chargement des modèles…"</p> }>
+        <Suspense fallback=|| view! { <p class="text-gray-500 dark:text-gray-400">"Chargement des modèles…"</p> }>
             {move || Suspend::new(async move {
                 match models.await {
                     Err(error) => view! { <Alert severity=Severity::Error>{error.to_string()}</Alert> }.into_any(),

@@ -4,6 +4,7 @@ use leptos::prelude::*;
 
 use super::BlocMarianne;
 use super::logo::Logo;
+use super::theme_toggle::ThemeToggle;
 
 #[slot]
 pub struct SubHeader {
@@ -38,7 +39,7 @@ pub fn Header(
     sub_header: Option<SubHeader>,
 ) -> impl IntoView {
     view! {
-        <header role="banner" class="fr-header bg-white border-b border-gray-300 shadow-sm">
+        <header role="banner" class="fr-header bg-white border-b border-gray-300 shadow-sm dark:bg-gray-900 dark:border-gray-700">
             <div class="fr-header__body">
                 <div class="max-w-screen-2xl mx-auto px-4 sm:px-6">
                     <div class="flex items-center justify-between min-h-10 gap-4 py-2 short:min-h-0 short:gap-2 short:py-1">
@@ -54,15 +55,15 @@ pub fn Header(
                                 <Logo class="h-10 w-10 shrink-0 short:h-6 short:w-6"/>
 
                                 // Séparateur
-                                <div class="w-px h-8 bg-gray-300 shrink-0 short:h-6"/>
+                                <div class="w-px h-8 bg-gray-300 dark:bg-gray-700 shrink-0 short:h-6"/>
 
                                 // Nom + accroche du service
                                 <div class="fr-header__service">
-                                    <span class="fr-header__service-title block text-sm font-bold text-[#000091] leading-tight">
+                                    <span class="fr-header__service-title block text-sm font-bold text-[#000091] dark:text-blue-france-925 leading-tight">
                                         {service_title}
                                     </span>
                                     {service_tagline.map(|t| view! {
-                                        <p class="fr-header__service-tagline text-xs text-gray-500 leading-tight mt-0.5 short:hidden">
+                                        <p class="fr-header__service-tagline text-xs text-gray-500 dark:text-gray-400 leading-tight mt-0.5 short:hidden">
                                             {t}
                                         </p>
                                     })}
@@ -71,16 +72,15 @@ pub fn Header(
                         </div>
 
                         // ── Zone outils ──────────────────────────────────────
-                        {children.map(|c| view! {
-                            <div class="fr-header__tools flex items-center gap-2 ml-auto flex-wrap">
-                                {c()}
-                            </div>
-                        })}
+                        <div class="fr-header__tools flex items-center gap-2 ml-auto flex-wrap">
+                            {children.map(|c| c())}
+                            <ThemeToggle/>
+                        </div>
                     </div>
                 </div>
             </div>
             {sub_header.map(|s| view! {
-                <div class=format!("border-t border-gray-300 text-center py-1 short:py-0 {}", s.class)>
+                <div class=format!("border-t border-gray-300 dark:border-gray-700 text-center py-1 short:py-0 {}", s.class)>
                     {(s.children)()}
                 </div>
             })}

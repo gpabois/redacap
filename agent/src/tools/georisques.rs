@@ -170,13 +170,13 @@ impl Tool for IcpeQueryTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "nom_etablissement": { "type": "string", "description": "Raison sociale, recherche partielle" },
-                "code_postal": { "type": "string" },
-                "departement": { "type": "string", "description": "Code département (ex: \"33\")" },
-                "region": { "type": "string", "description": "Code région INSEE" },
-                "code_insee": { "type": "string", "description": "Code INSEE de la commune" },
-                "regime": { "type": "string", "description": "Régime ICPE (ex: \"Autorisation\", \"Déclaration\")" },
-                "code_aiot": { "type": "string", "description": "Code AIOT de l'installation" },
+                "nom_etablissement": { "type": ["string", "null"], "description": "Raison sociale, recherche partielle" },
+                "code_postal": { "type": ["string", "null"] },
+                "departement": { "type": ["string", "null"], "description": "Code département (ex: \"33\")" },
+                "region": { "type": ["string", "null"], "description": "Code région INSEE" },
+                "code_insee": { "type": ["string", "null"], "description": "Code INSEE de la commune" },
+                "regime": { "type": ["string", "null"], "description": "Régime ICPE (ex: \"Autorisation\", \"Déclaration\")" },
+                "codeAIOT": { "type": ["string", "null"], "description": "Code AIOT de l'installation" },
                 "page": { "type": "integer", "default": 1 },
                 "page_size": { "type": "integer", "default": 10 }
             }

@@ -6,7 +6,7 @@ fn page_button_class(active: bool) -> &'static str {
     if active {
         "bg-blue-france text-white"
     } else {
-        "text-blue-france hover:bg-blue-france-975"
+        "text-blue-france dark:text-blue-france-925 hover:bg-blue-france-975 dark:hover:bg-gray-800"
     }
 }
 
@@ -22,7 +22,7 @@ pub fn Pagination(
         <nav role="navigation" aria-label="Pagination" class=format!("{class} flex items-center gap-1 text-sm")>
             <button
                 type="button"
-                class="px-3 py-2 rounded-sm cursor-pointer text-blue-france hover:bg-blue-france-975 disabled:opacity-40 disabled:cursor-not-allowed"
+                class="px-3 py-2 rounded-sm cursor-pointer text-blue-france dark:text-blue-france-925 hover:bg-blue-france-975 dark:hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed"
                 disabled=move || current.get() == 0
                 on:click=move |_| current.update(|p| *p = p.saturating_sub(1))
             >
@@ -42,7 +42,7 @@ pub fn Pagination(
             }).collect::<Vec<_>>()}
             <button
                 type="button"
-                class="px-3 py-2 rounded-sm cursor-pointer text-blue-france hover:bg-blue-france-975 disabled:opacity-40 disabled:cursor-not-allowed"
+                class="px-3 py-2 rounded-sm cursor-pointer text-blue-france dark:text-blue-france-925 hover:bg-blue-france-975 dark:hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed"
                 disabled=move || current.get() + 1 >= total_pages
                 on:click=move |_| current.update(|p| *p = (*p + 1).min(total_pages - 1))
             >

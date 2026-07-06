@@ -28,6 +28,12 @@ pub enum ClientMessage {
     /// `insert_node`/`remove_node`, sans jamais avoir à connaître ni
     /// demander son identifiant technique (voir `crate::ports::WsLegalActEditor`).
     SetSelection { node_id: Option<String> },
+    /// Efface l'historique de la conversation avec l'agent pour cette
+    /// connexion (voir `agent::Agent::run`'s `history`) : la prochaine
+    /// [`ClientMessage::RunAgent`] repart d'une conversation vide plutôt que
+    /// de poursuivre celle en cours. Ignoré si une tâche agent est en cours
+    /// d'exécution sur cette connexion.
+    ClearHistory,
 }
 
 #[derive(Debug, Serialize)]
@@ -76,7 +82,11 @@ pub enum ServerMessage {
     /// un succès (`output` porte alors la sortie de l'outil) d'un échec
     /// (`output` porte alors le message d'erreur, voir
     /// `agent::AgentObserver::on_tool_call_finished`).
-    AgentToolCallFinished { id: String, ok: bool, output: String },
+    AgentToolCallFinished {
+        id: String,
+        ok: bool,
+        output: String,
+    },
 }
 
 /// Identité d'un utilisateur connecté à la salle, telle qu'affichée par une

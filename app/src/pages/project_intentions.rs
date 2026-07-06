@@ -215,15 +215,15 @@ pub fn ProjectIntentionsPanel(legal_act_id: String) -> impl IntoView {
     });
 
     view! {
-        <div class="px-4 py-2 border-b border-gray-200 bg-white flex flex-wrap items-center gap-3">
-            <span class="text-sm font-bold text-gray-700 whitespace-nowrap">"Intentions :"</span>
+        <div class="px-4 py-2 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 flex flex-wrap items-center gap-3">
+            <span class="text-sm font-bold text-gray-700 dark:text-gray-300 whitespace-nowrap">"Intentions :"</span>
             {move || error.get().map(|message| view! {
                 <Alert severity=Severity::Error small=true>{message}</Alert>
             })}
-            <Suspense fallback=|| view! { <span class="text-sm text-gray-500">"Chargement…"</span> }>
+            <Suspense fallback=|| view! { <span class="text-sm text-gray-500 dark:text-gray-400">"Chargement…"</span> }>
                 {move || Suspend::new(async move {
                     match intentions.await {
-                        Err(_) => view! { <span class="text-sm text-gray-500">"Intentions indisponibles."</span> }.into_any(),
+                        Err(_) => view! { <span class="text-sm text-gray-500 dark:text-gray-400">"Intentions indisponibles."</span> }.into_any(),
                         Ok(options) => {
                             let attached: Vec<_> = options.iter().filter(|option| option.selected).cloned().collect();
                             let available: Vec<_> = options.into_iter().filter(|option| !option.selected).collect();

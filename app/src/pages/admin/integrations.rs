@@ -45,7 +45,7 @@ async fn set_georisques_api_key_admin(api_key: String) -> Result<(), ServerFnErr
     let pool = expect_context::<storage::Pool>();
     crate::auth::require_admin(&pool, &actor_id).await?;
 
-    let encryption_key = expect_context::<Option<[u8; 32]>>().ok_or_else(|| {
+    let encryption_key = expect_context::<Option<Vec<u8>>>().ok_or_else(|| {
         ServerFnError::new("chiffrement indisponible (SECRET_ENCRYPTION_KEY absente)")
     })?;
     let api_key_encrypted = shared::crypto::encrypt(&encryption_key, &api_key)
@@ -99,7 +99,7 @@ async fn set_legifrance_credentials_admin(
 
     let client_secret_encrypted = match client_secret.filter(|secret| !secret.is_empty()) {
         Some(secret) => {
-            let encryption_key = expect_context::<Option<[u8; 32]>>().ok_or_else(|| {
+            let encryption_key = expect_context::<Option<Vec<u8>>>().ok_or_else(|| {
                 ServerFnError::new("chiffrement indisponible (SECRET_ENCRYPTION_KEY absente)")
             })?;
             Some(
@@ -157,12 +157,12 @@ async fn clear_legifrance_credentials_admin() -> Result<(), ServerFnError> {
 pub fn PageAdminIntegrations() -> impl IntoView {
     let context = Resource::new(|| (), |_| admin_context());
     view! {
-        <Suspense fallback=|| view! { <p class="p-8 text-gray-500">"Chargement…"</p> }>
+        <Suspense fallback=|| view! { <p class="p-8 text-gray-500 dark:text-gray-400">"Chargement…"</p> }>
             {move || Suspend::new(async move {
                 match context.await {
                     Err(_) => view! { <AdminAccessDenied/> }.into_any(),
                     Ok(access) => view! {
-                        <div class="min-h-screen bg-gray-50">
+                        <div class="min-h-screen bg-gray-50 dark:bg-gray-800">
                             <AdminHeader initial=access.initial.clone()/>
                             <AdminNav active=AdminSection::Integrations/>
                             <div class="max-w-6xl mx-auto p-6 flex flex-col gap-6">
@@ -241,25 +241,25 @@ fn IntegrationsPanel() -> impl IntoView {
     });
 
     view! {
-        <h1 class="text-xl font-bold text-gray-900">"Intégrations externes"</h1>
+        <h1 class="text-xl font-bold text-gray-900 dark:text-gray-100">"Intégrations externes"</h1>
 
         {move || error.get().map(|message| view! {
             <Alert severity=Severity::Error small=true>{message}</Alert>
         })}
 
-        <Suspense fallback=|| view! { <p class="text-gray-500">"Chargement…"</p> }>
+        <Suspense fallback=|| view! { <p class="text-gray-500 dark:text-gray-400">"Chargement…"</p> }>
             {move || Suspend::new(async move {
                 match status.await {
                     Err(error) => view! { <Alert severity=Severity::Error>{error.to_string()}</Alert> }.into_any(),
                     Ok(status) => view! {
                         <div class="flex flex-col gap-6">
-                            <div class="bg-white border border-gray-200 rounded-sm p-4 flex flex-col gap-3">
+                            <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-sm p-4 flex flex-col gap-3">
                                 <div class="flex items-center justify-between">
-                                    <h2 class="text-base font-bold text-gray-900">"GéoRisques"</h2>
+                                    <h2 class="text-base font-bold text-gray-900 dark:text-gray-100">"GéoRisques"</h2>
                                     {if status.georisques_configured {
                                         view! { <span class="text-sm text-success font-bold">"Clé configurée"</span> }.into_any()
                                     } else {
-                                        view! { <span class="text-sm text-gray-500">"Non configurée (API v1 accessible sans jeton, quota réduit)"</span> }.into_any()
+                                        view! { <span class="text-sm text-gray-500 dark:text-gray-400">"Non configurée (API v1 accessible sans jeton, quota réduit)"</span> }.into_any()
                                     }}
                                 </div>
                                 <Input
@@ -288,13 +288,13 @@ fn IntegrationsPanel() -> impl IntoView {
                                 </div>
                             </div>
 
-                            <div class="bg-white border border-gray-200 rounded-sm p-4 flex flex-col gap-3">
+                            <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-sm p-4 flex flex-col gap-3">
                                 <div class="flex items-center justify-between">
-                                    <h2 class="text-base font-bold text-gray-900">"Légifrance (PISTE)"</h2>
+                                    <h2 class="text-base font-bold text-gray-900 dark:text-gray-100">"Légifrance (PISTE)"</h2>
                                     {if status.legifrance_configured {
                                         view! { <span class="text-sm text-success font-bold">"Configuré"</span> }.into_any()
                                     } else {
-                                        view! { <span class="text-sm text-gray-500">"Non configuré : outils legifrance_search/legifrance_fetch indisponibles"</span> }.into_any()
+                                        view! { <span class="text-sm text-gray-500 dark:text-gray-400">"Non configuré : outils legifrance_search/legifrance_fetch indisponibles"</span> }.into_any()
                                     }}
                                 </div>
                                 <div class="grid grid-cols-1 md:grid-cols-2 gap-3">

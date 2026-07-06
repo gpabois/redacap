@@ -187,11 +187,11 @@ pub fn PageEditorNew() -> impl IntoView {
     };
 
     view! {
-        <div class="min-h-screen bg-gray-50 flex items-center justify-center p-6">
-            <div class="w-full max-w-lg bg-white border border-gray-200 rounded-sm p-8 flex flex-col gap-6">
+        <div class="min-h-screen bg-gray-50 dark:bg-gray-800 flex items-center justify-center p-6">
+            <div class="w-full max-w-lg bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-sm p-8 flex flex-col gap-6">
                 <div>
-                    <h1 class="text-xl font-bold text-gray-900">"Nouveau projet d'arrêté"</h1>
-                    <p class="text-sm text-gray-600">
+                    <h1 class="text-xl font-bold text-gray-900 dark:text-gray-100">"Nouveau projet d'arrêté"</h1>
+                    <p class="text-sm text-gray-600 dark:text-gray-400">
                         "Renseignez l'autorité, le domaine et le titre de l'arrêté à rédiger. "
                         "Le domaine ne pourra plus être modifié une fois le projet créé."
                     </p>
@@ -209,7 +209,7 @@ pub fn PageEditorNew() -> impl IntoView {
                 })}
 
                 <div class="flex flex-col gap-4">
-                    <Suspense fallback=|| view! { <p class="text-sm text-gray-500">"Chargement des autorités…"</p> }>
+                    <Suspense fallback=|| view! { <p class="text-sm text-gray-500 dark:text-gray-400">"Chargement des autorités…"</p> }>
                         {move || Suspend::new(async move {
                             let options = authorities.await.unwrap_or_default();
                             let mut select_options = vec![SelectOption::new("", "— Sélectionnez une autorité —")];
@@ -225,7 +225,7 @@ pub fn PageEditorNew() -> impl IntoView {
                         })}
                     </Suspense>
 
-                    <Suspense fallback=|| view! { <p class="text-sm text-gray-500">"Chargement des domaines…"</p> }>
+                    <Suspense fallback=|| view! { <p class="text-sm text-gray-500 dark:text-gray-400">"Chargement des domaines…"</p> }>
                         {move || Suspend::new(async move {
                             let options = domains.await.unwrap_or_default();
                             // Auto-sélection si l'utilisateur n'a de droit que sur un seul domaine.

@@ -17,7 +17,7 @@ pub fn Tag(
     let state_class = if selected {
         "bg-blue-france text-white"
     } else {
-        "bg-gray-100 text-blue-france hover:bg-blue-france-975"
+        "bg-gray-100 dark:bg-gray-800 text-blue-france dark:text-blue-france-925 hover:bg-blue-france-975 dark:hover:bg-gray-800"
     };
     view! {
         <span class=format!("{class} {state_class} inline-flex items-center gap-1.5 text-sm rounded-full px-3 py-1 cursor-pointer transition-colors")

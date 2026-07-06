@@ -75,7 +75,7 @@ async fn create_oidc_provider_admin(
         ));
     }
 
-    let encryption_key = expect_context::<Option<[u8; 32]>>().ok_or_else(|| {
+    let encryption_key = expect_context::<Option<Vec<u8>>>().ok_or_else(|| {
         ServerFnError::new("chiffrement indisponible (SECRET_ENCRYPTION_KEY absente)")
     })?;
     let client_secret_encrypted = shared::crypto::encrypt(&encryption_key, &client_secret)
@@ -123,7 +123,7 @@ async fn update_oidc_provider_admin(
 
     let client_secret_encrypted = match new_secret.filter(|secret| !secret.is_empty()) {
         Some(secret) => {
-            let encryption_key = expect_context::<Option<[u8; 32]>>().ok_or_else(|| {
+            let encryption_key = expect_context::<Option<Vec<u8>>>().ok_or_else(|| {
                 ServerFnError::new("chiffrement indisponible (SECRET_ENCRYPTION_KEY absente)")
             })?;
             Some(
@@ -216,12 +216,12 @@ async fn delete_oidc_provider_admin(provider_id: String) -> Result<(), ServerFnE
 pub fn PageAdminOidc() -> impl IntoView {
     let context = Resource::new(|| (), |_| admin_context());
     view! {
-        <Suspense fallback=|| view! { <p class="p-8 text-gray-500">"Chargement…"</p> }>
+        <Suspense fallback=|| view! { <p class="p-8 text-gray-500 dark:text-gray-400">"Chargement…"</p> }>
             {move || Suspend::new(async move {
                 match context.await {
                     Err(_) => view! { <AdminAccessDenied/> }.into_any(),
                     Ok(access) => view! {
-                        <div class="min-h-screen bg-gray-50">
+                        <div class="min-h-screen bg-gray-50 dark:bg-gray-800">
                             <AdminHeader initial=access.initial.clone()/>
                             <AdminNav active=AdminSection::Oidc/>
                             <div class="max-w-6xl mx-auto p-6">
@@ -311,10 +311,10 @@ fn OidcPanel() -> impl IntoView {
     });
 
     view! {
-        <h1 class="text-xl font-bold text-gray-900 mb-4">"Fournisseurs OpenID Connect"</h1>
+        <h1 class="text-xl font-bold text-gray-900 dark:text-gray-100 mb-4">"Fournisseurs OpenID Connect"</h1>
 
-        <div class="bg-white border border-gray-200 rounded-sm p-4 mb-6 flex flex-col gap-3">
-            <h2 class="text-base font-bold text-gray-900">
+        <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-sm p-4 mb-6 flex flex-col gap-3">
+            <h2 class="text-base font-bold text-gray-900 dark:text-gray-100">
                 {move || if editing_id.get().is_some() { "Modifier le fournisseur" } else { "Enregistrer un fournisseur" }}
             </h2>
             {move || form_error.get().map(|message| view! {
@@ -374,7 +374,7 @@ fn OidcPanel() -> impl IntoView {
             </div>
         </div>
 
-        <Suspense fallback=|| view! { <p class="text-gray-500">"Chargement des fournisseurs…"</p> }>
+        <Suspense fallback=|| view! { <p class="text-gray-500 dark:text-gray-400">"Chargement des fournisseurs…"</p> }>
             {move || Suspend::new(async move {
                 match providers.await {
                     Err(error) => view! { <Alert severity=Severity::Error>{error.to_string()}</Alert> }.into_any(),
@@ -403,7 +403,7 @@ fn OidcPanel() -> impl IntoView {
                                                 }).collect::<Vec<_>>()}
                                             </div>
                                         </td>
-                                        <td class="px-3 py-2 break-all text-xs text-gray-500">
+                                        <td class="px-3 py-2 break-all text-xs text-gray-500 dark:text-gray-400">
                                             {provider.callback_url.unwrap_or_else(|| "PUBLIC_BASE_URL non configurée".to_string())}
                                         </td>
                                         <td class="px-3 py-2">

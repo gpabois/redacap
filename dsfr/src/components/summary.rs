@@ -22,12 +22,12 @@ impl SummaryItem {
 #[component]
 pub fn Summary(items: Vec<SummaryItem>, #[prop(optional)] class: &'static str) -> impl IntoView {
     view! {
-        <nav aria-label="Sommaire" class=format!("{class} bg-gray-100 p-6")>
-            <p class="font-bold text-gray-900 mb-2">"Sommaire"</p>
+        <nav aria-label="Sommaire" class=format!("{class} bg-gray-100 dark:bg-gray-800 p-6")>
+            <p class="font-bold text-gray-900 dark:text-gray-100 mb-2">"Sommaire"</p>
             <ol class="flex flex-col gap-1 list-decimal list-inside text-sm">
                 {items.into_iter().map(|item| view! {
                     <li>
-                        <a href=format!("#{}", item.anchor) class="text-blue-france hover:underline">
+                        <a href=format!("#{}", item.anchor) class="text-blue-france dark:text-blue-france-925 hover:underline">
                             {item.label}
                         </a>
                     </li>

@@ -22,12 +22,14 @@ impl ButtonVariant {
                 "bg-blue-france text-white hover:bg-blue-france-hover active:bg-blue-france-active"
             }
             ButtonVariant::Secondary => {
-                "bg-transparent text-blue-france shadow-[inset_0_0_0_1px] shadow-blue-france hover:bg-blue-france-975"
+                "bg-transparent text-blue-france shadow-[inset_0_0_0_1px] shadow-blue-france hover:bg-blue-france-975 dark:text-blue-france-925 dark:shadow-blue-france-925 dark:hover:bg-gray-800"
             }
             ButtonVariant::Tertiary => {
-                "bg-transparent text-blue-france shadow-[inset_0_0_0_1px] shadow-gray-300 hover:bg-blue-france-975"
+                "bg-transparent text-blue-france shadow-[inset_0_0_0_1px] shadow-gray-300 hover:bg-blue-france-975 dark:text-blue-france-925 dark:shadow-gray-700 dark:hover:bg-gray-800"
             }
-            ButtonVariant::TertiaryNoOutline => "bg-transparent text-blue-france hover:bg-gray-200",
+            ButtonVariant::TertiaryNoOutline => {
+                "bg-transparent text-blue-france hover:bg-gray-200 dark:text-blue-france-925 dark:hover:bg-gray-800"
+            }
         }
     }
 }

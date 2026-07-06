@@ -11,7 +11,7 @@ pub fn Tabs(
     #[prop(optional)] class: &'static str,
 ) -> impl IntoView {
     view! {
-        <div role="tablist" class=format!("{class} flex border-b border-gray-300 overflow-x-auto")>
+        <div role="tablist" class=format!("{class} flex border-b border-gray-300 dark:border-gray-700 overflow-x-auto")>
             {titles.into_iter().enumerate().map(|(i, title)| {
                 view! {
                     <button
@@ -21,9 +21,9 @@ pub fn Tabs(
                         class=move || format!(
                             "px-4 py-2 text-sm font-bold border-b-2 cursor-pointer whitespace-nowrap transition-colors {}",
                             if selected.get() == i {
-                                "border-blue-france text-blue-france"
+                                "border-blue-france text-blue-france dark:text-blue-france-925"
                             } else {
-                                "border-transparent text-gray-600 hover:text-blue-france"
+                                "border-transparent text-gray-600 dark:text-gray-400 hover:text-blue-france dark:text-blue-france-925"
                             },
                         )
                         on:click=move |_| selected.set(i)

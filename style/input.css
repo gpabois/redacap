@@ -13,6 +13,12 @@
    l'éditeur pour laisser un maximum de place à l'arrêté édité. */
 @custom-variant short (@media (max-height: 700px));
 
+/* Mode sombre piloté par la classe `.dark` sur `<html>` (voir
+   `dsfr::ThemeToggle`) plutôt que par `prefers-color-scheme` seul : permet
+   à l'utilisateur de choisir clair/sombre/système indépendamment du thème
+   du système d'exploitation. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   /* Palette DSFR (Système de Design de l'État) */
   --color-blue-france: #000091;
@@ -135,13 +141,11 @@
 }
 
 @layer base {
-    @media (prefers-color-scheme: dark) {
-        body {
-            background-color: var(--color-stone-900);
-        }
-    }
     body {
         font-family: 'Marianne';
+    }
+    .dark body {
+        background-color: var(--color-gray-950);
     }
 }
 

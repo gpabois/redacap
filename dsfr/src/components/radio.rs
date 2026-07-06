@@ -37,7 +37,7 @@ pub fn RadioGroup(
 ) -> impl IntoView {
     view! {
         <fieldset class=format!("{class} flex flex-col gap-2")>
-            <legend class="text-base font-bold text-gray-900 mb-1">{legend}</legend>
+            <legend class="text-base font-bold text-gray-900 dark:text-gray-100 mb-1">{legend}</legend>
             {children()}
         </fieldset>
     }

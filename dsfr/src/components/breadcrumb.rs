@@ -43,10 +43,10 @@ pub fn Breadcrumb(
                         <li class="flex items-center gap-1">
                             {match item.href {
                                 Some(href) if !is_last => view! {
-                                    <a href=href class="text-blue-france hover:underline">{item.label}</a>
+                                    <a href=href class="text-blue-france dark:text-blue-france-925 hover:underline">{item.label}</a>
                                 }.into_any(),
                                 _ => view! {
-                                    <span aria-current="page" class="text-gray-600">{item.label}</span>
+                                    <span aria-current="page" class="text-gray-600 dark:text-gray-400">{item.label}</span>
                                 }.into_any(),
                             }}
                             {(!is_last).then(|| view! { <span class="text-gray-400">"›"</span> })}

@@ -71,25 +71,37 @@ impl Agent {
 
     /// Exécute la boucle agentique jusqu'à obtenir une réponse finale du
     /// modèle, ou jusqu'à atteindre `max_steps` itérations.
-    pub async fn run(&self, task: &str) -> Result<String, AgentError> {
-        let mut messages = Vec::new();
-        if !self.config.system_prompt.is_empty() {
-            messages.push(ChatMessage::system(self.config.system_prompt.clone()));
+    ///
+    /// `history` porte la conversation complète et doit être conservé par
+    /// l'appelant d'un appel à l'autre : chaque nouvelle tâche est ajoutée à
+    /// la suite des échanges précédents (messages utilisateur, réponses de
+    /// l'assistant, résultats d'outils) plutôt que de repartir d'une
+    /// conversation vide, sans quoi l'agent perd tout le contexte des tours
+    /// précédents dès la tâche suivante.
+    pub async fn run(
+        &self,
+        task: &str,
+        history: &mut Vec<ChatMessage>,
+    ) -> Result<String, AgentError> {
+        if history.is_empty() && !self.config.system_prompt.is_empty() {
+            history.push(ChatMessage::system(self.config.system_prompt.clone()));
         }
-        messages.push(ChatMessage::user(task));
+        history.push(ChatMessage::user(task));
 
         let tool_definitions = self.tools.definitions();
 
         for _ in 0..self.config.max_steps {
-            let response = self.run_turn(&messages, &tool_definitions).await?;
+            let response = self.run_turn(history, &tool_definitions).await?;
             self.observer.on_turn_finished().await;
 
             if response.tool_calls.is_empty() {
-                return Ok(response.content.unwrap_or_default());
+                let content = response.content.clone().unwrap_or_default();
+                history.push(response);
+                return Ok(content);
             }
 
             let tool_calls = response.tool_calls.clone();
-            messages.push(response);
+            history.push(response);
 
             for call in &tool_calls {
                 self.observer.on_tool_call_started(call).await;
@@ -97,11 +109,9 @@ impl Agent {
                     Ok(output) => Ok(output.0),
                     Err(error) => Err(error.to_string()),
                 };
-                self.observer
-                    .on_tool_call_finished(&call.id, &result)
-                    .await;
+                self.observer.on_tool_call_finished(&call.id, &result).await;
                 let content = result.unwrap_or_else(|error| format!("erreur : {error}"));
-                messages.push(ChatMessage::tool_result(call.id.clone(), content));
+                history.push(ChatMessage::tool_result(call.id.clone(), content));
             }
         }
 
@@ -369,11 +379,62 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         );
 
+        let mut history = Vec::new();
         let answer = agent
-            .run("vérifie l'installation")
+            .run("vérifie l'installation", &mut history)
             .await
             .expect("exécution réussie");
         assert_eq!(answer, "terminé");
+    }
+
+    #[tokio::test]
+    async fn run_reuses_history_across_successive_calls() {
+        let model = ScriptedModel {
+            responses: std::sync::Mutex::new(vec![
+                ChatMessage {
+                    role: crate::model::Role::Assistant,
+                    content: Some("première réponse".to_string()),
+                    tool_calls: vec![],
+                    tool_call_id: None,
+                },
+                ChatMessage {
+                    role: crate::model::Role::Assistant,
+                    content: Some("seconde réponse".to_string()),
+                    tool_calls: vec![],
+                    tool_call_id: None,
+                },
+            ]),
+        };
+
+        let agent = Agent::new(
+            Arc::new(model),
+            ToolRegistry::new(),
+            Arc::new(AlwaysConfirm),
+            Arc::new(NullAgentObserver),
+            AgentConfig {
+                system_prompt: "tu es Marie".to_string(),
+                ..AgentConfig::default()
+            },
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        let mut history = Vec::new();
+        agent
+            .run("premier message", &mut history)
+            .await
+            .expect("exécution réussie");
+        agent
+            .run("second message", &mut history)
+            .await
+            .expect("exécution réussie");
+
+        // système + 1er message utilisateur + 1ère réponse + 2e message + 2e réponse
+        assert_eq!(history.len(), 5);
+        assert_eq!(history[0].role, crate::model::Role::System);
+        assert_eq!(history[1].content.as_deref(), Some("premier message"));
+        assert_eq!(history[2].content.as_deref(), Some("première réponse"));
+        assert_eq!(history[3].content.as_deref(), Some("second message"));
+        assert_eq!(history[4].content.as_deref(), Some("seconde réponse"));
     }
 
     #[tokio::test]
@@ -409,8 +470,9 @@ mod tests {
             Arc::new(AtomicBool::new(true)),
         );
 
+        let mut history = Vec::new();
         let answer = agent
-            .run("vérifie l'installation")
+            .run("vérifie l'installation", &mut history)
             .await
             .expect("exécution réussie");
         assert_eq!(answer, "terminé");
@@ -449,7 +511,8 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         );
 
-        let result = agent.run("tâche").await;
+        let mut history = Vec::new();
+        let result = agent.run("tâche", &mut history).await;
         assert!(matches!(result, Err(AgentError::MaxStepsExceeded(2))));
     }
 }

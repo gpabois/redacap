@@ -12,12 +12,12 @@ pub fn Accordion(
 ) -> impl IntoView {
     let (open, set_open) = signal(default_open);
     view! {
-        <div class=format!("{class} border-b border-gray-300")>
+        <div class=format!("{class} border-b border-gray-300 dark:border-gray-700")>
             <h3>
                 <button
                     type="button"
                     aria-expanded=move || open.get().to_string()
-                    class="w-full flex items-center justify-between gap-2 py-3 text-left font-bold text-blue-france cursor-pointer"
+                    class="w-full flex items-center justify-between gap-2 py-3 text-left font-bold text-blue-france dark:text-blue-france-925 cursor-pointer"
                     on:click=move |_| set_open.update(|open| *open = !*open)
                 >
                     <span>{title}</span>

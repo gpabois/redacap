@@ -91,7 +91,7 @@ pub fn AdminHeader(initial: String) -> impl IntoView {
         <Header service_title="Redac'AP" service_tagline="Panneau d'administration">
             <a
                 href="/"
-                class="text-sm font-bold text-blue-france hover:underline whitespace-nowrap"
+                class="text-sm font-bold text-blue-france dark:text-blue-france-925 hover:underline whitespace-nowrap"
             >
                 "Tableau de bord"
             </a>
@@ -113,13 +113,13 @@ pub fn AdminHeader(initial: String) -> impl IntoView {
 pub fn AdminNav(active: AdminSection) -> impl IntoView {
     let link_class = |section: AdminSection| {
         if section == active {
-            "px-4 py-2 text-sm font-bold border-b-2 border-blue-france text-blue-france whitespace-nowrap"
+            "px-4 py-2 text-sm font-bold border-b-2 border-blue-france text-blue-france dark:text-blue-france-925 whitespace-nowrap"
         } else {
-            "px-4 py-2 text-sm font-bold border-b-2 border-transparent text-gray-600 hover:text-blue-france whitespace-nowrap"
+            "px-4 py-2 text-sm font-bold border-b-2 border-transparent text-gray-600 dark:text-gray-400 hover:text-blue-france dark:text-blue-france-925 whitespace-nowrap"
         }
     };
     view! {
-        <nav class="border-b border-gray-300 bg-white">
+        <nav class="border-b border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900">
             <div class="max-w-6xl mx-auto flex overflow-x-auto">
                 <a href="/admin" class=link_class(AdminSection::Dashboard)>"Tableau de bord"</a>
                 <a href="/admin/users" class=link_class(AdminSection::Users)>"Utilisateurs"</a>
@@ -199,7 +199,7 @@ pub fn ConfirmButton(
 #[component]
 pub fn AdminAccessDenied() -> impl IntoView {
     view! {
-        <div class="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+        <div class="min-h-screen bg-gray-50 dark:bg-gray-800 flex items-center justify-center p-6">
             <div class="max-w-md">
                 <Alert severity=Severity::Error>
                     "Accès réservé aux administrateurs."

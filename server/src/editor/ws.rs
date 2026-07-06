@@ -28,10 +28,11 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use agent::ports::{LegalActEditorPort, UserInteractionPort};
 use agent::tools::{
-    AskQuestionsTool, AskUserTool, FillSectionTool, GenerateNumberingTool, GeorisquesClient,
-    GeorisquesConfig, GeorisquesQueryTool, IcpeQueryTool, InsertNodeTool, LegifranceClient,
-    LegifranceConfig, LegifranceFetchTool, LegifranceSearchTool, ReadStructureTool, ReadTitleTool,
-    RemoveNodeTool, SetTitleTool, ValidateStructureTool,
+    AddIntentionTool, AskQuestionsTool, AskUserTool, FillSectionTool, GenerateNumberingTool,
+    GeorisquesClient, GeorisquesConfig, GeorisquesQueryTool, IcpeQueryTool, InsertNodeTool,
+    LegifranceClient, LegifranceConfig, LegifranceFetchTool, LegifranceSearchTool,
+    ListIntentionsTool, ReadStructureTool, ReadTitleTool, RemoveIntentionTool, RemoveNodeTool,
+    SetTitleTool, ValidateStructureTool,
 };
 use agent::{
     Agent, AgentConfig, LanguageModel, OpenAiCompatibleModel, OpenAiCompatibleModelConfig,
@@ -49,7 +50,7 @@ use tokio::sync::mpsc;
 use yrs::updates::decoder::Decode;
 use yrs::{ReadTxn, StateVector, Transact, Update};
 
-use super::ports::{WsLegalActEditor, WsUserInteraction};
+use super::ports::{WsIntentions, WsLegalActEditor, WsUserInteraction};
 use super::presence::{color_for_id, display_initial};
 use super::protocol::{ClientMessage, PresenceUser, ServerMessage};
 use super::state::{EditorRoom, Presence};
@@ -71,7 +72,11 @@ const AGENT_SYSTEM_PROMPT: &str = "Tu es un agent IA qui aide à rédiger un arr
     encore l'un des identifiants renvoyés par `read_structure`. Le titre de l'acte (son intitulé, \
     ex. « Arrêté préfectoral portant autorisation d'exploiter... ») se lit et se modifie avec \
     `read_title`/`set_title` : ne le confonds pas avec les nœuds `Titre` du corps, qui sont des \
-    subdivisions numérotées (« Titre I », « Titre II »...) créées via `insert_node`.";
+    subdivisions numérotées (« Titre I », « Titre II »...) créées via `insert_node`. Les \
+    intentions rédactionnelles du projet (ex. « mise en demeure », « sanction administrative ») \
+    s'ajoutent ou se retirent uniquement sur demande explicite de l'inspecteur, avec \
+    `add_intention`/`remove_intention` : appelle d'abord `list_intentions` pour connaître les \
+    intentions disponibles pour le domaine du projet et leur identifiant, n'en invente jamais un.";
 
 /// Complète [`AGENT_SYSTEM_PROMPT`] avec le prompt système dédié du modèle IA
 /// actif (voir `shared::model::AiModel::system_prompt`, ajouté en entête),
@@ -289,6 +294,14 @@ async fn handle_socket(
     // cours (voir `agent::Agent::dispatch_tool_call`, qui le relit à chaque
     // appel d'outil plutôt qu'à la construction).
     let auto_accept = Arc::new(AtomicBool::new(false));
+    // Historique de la conversation avec l'agent, conservé pour toute la
+    // durée de la connexion : chaque `RunAgent` reconstruit un `Agent` (les
+    // outils disponibles peuvent changer entre deux tâches), mais doit
+    // reprendre la conversation là où elle s'est arrêtée, sans quoi l'agent
+    // oublie les échanges précédents dès le message suivant (voir
+    // `agent::Agent::run`).
+    let agent_history: Arc<tokio::sync::Mutex<Vec<agent::ChatMessage>>> =
+        Arc::new(tokio::sync::Mutex::new(Vec::new()));
 
     while let Some(Ok(message)) = stream.next().await {
         match message {
@@ -307,7 +320,9 @@ async fn handle_socket(
                         out_tx.clone(),
                         agent_running.clone(),
                         auto_accept.clone(),
+                        agent_history.clone(),
                         room.legal_act_id(),
+                        author_id,
                         task,
                     );
                 }
@@ -322,6 +337,18 @@ async fn handle_socket(
                         .as_deref()
                         .and_then(|raw| raw.parse::<BodyNodeId>().ok());
                     *selection.lock().expect("verrou non empoisonné") = parsed;
+                }
+                Ok(ClientMessage::ClearHistory) => {
+                    // Ignoré si une tâche est en cours : `spawn_agent_run`
+                    // détient alors le verrou pour toute la durée de
+                    // `Agent::run`, `try_lock` échouerait de toute façon,
+                    // mais autant éviter l'appel et rester explicite sur la
+                    // raison de l'ignorance.
+                    if !agent_running.load(Ordering::SeqCst)
+                        && let Ok(mut history) = agent_history.try_lock()
+                    {
+                        history.clear();
+                    }
                 }
                 Err(_) => {}
             },
@@ -450,7 +477,9 @@ fn spawn_agent_run(
     out_tx: mpsc::UnboundedSender<ServerMessage>,
     agent_running: Arc<AtomicBool>,
     auto_accept: Arc<AtomicBool>,
+    agent_history: Arc<tokio::sync::Mutex<Vec<agent::ChatMessage>>>,
     legal_act_id: Option<ID>,
+    author_id: ID,
     task: String,
 ) {
     tokio::spawn(async move {
@@ -462,7 +491,7 @@ fn spawn_agent_run(
                     build_agent_context(&state.store, legal_act_id, &ai_model_system_prompt).await;
 
                 let mut tools = ToolRegistry::new();
-                
+
                 tools.register(Box::new(ReadStructureTool::new(editor.clone())));
                 tools.register(Box::new(FillSectionTool::new(editor.clone())));
                 tools.register(Box::new(InsertNodeTool::new(editor.clone())));
@@ -473,6 +502,15 @@ fn spawn_agent_run(
                 tools.register(Box::new(SetTitleTool::new(editor)));
                 tools.register(Box::new(AskUserTool::new(interaction.clone())));
                 tools.register(Box::new(AskQuestionsTool::new(interaction.clone())));
+
+                if let Some(legal_act_id) = legal_act_id {
+                    let intentions: Arc<dyn agent::ports::IntentionPort> = Arc::new(
+                        WsIntentions::new(state.store.clone(), legal_act_id, author_id),
+                    );
+                    tools.register(Box::new(ListIntentionsTool::new(intentions.clone())));
+                    tools.register(Box::new(AddIntentionTool::new(intentions.clone())));
+                    tools.register(Box::new(RemoveIntentionTool::new(intentions)));
+                }
 
                 if allowed_tools.contains("georisques_query")
                     || allowed_tools.contains("icpe_query")
@@ -511,10 +549,17 @@ fn spawn_agent_run(
                     system_prompt,
                     ..AgentConfig::default()
                 };
-                let agent =
-                    Agent::new(model, tools, interaction, agent_observer, config, auto_accept);
+                let agent = Agent::new(
+                    model,
+                    tools,
+                    interaction,
+                    agent_observer,
+                    config,
+                    auto_accept,
+                );
 
-                match agent.run(&task).await {
+                let mut history = agent_history.lock().await;
+                match agent.run(&task, &mut history).await {
                     Ok(_content) => ServerMessage::AgentDone,
                     Err(error) => ServerMessage::AgentError {
                         message: error.to_string(),

@@ -132,12 +132,12 @@ async fn delete_authority_admin(authority_id: String) -> Result<(), ServerFnErro
 pub fn PageAdminAuthorities() -> impl IntoView {
     let context = Resource::new(|| (), |_| admin_context());
     view! {
-        <Suspense fallback=|| view! { <p class="p-8 text-gray-500">"Chargement…"</p> }>
+        <Suspense fallback=|| view! { <p class="p-8 text-gray-500 dark:text-gray-400">"Chargement…"</p> }>
             {move || Suspend::new(async move {
                 match context.await {
                     Err(_) => view! { <AdminAccessDenied/> }.into_any(),
                     Ok(access) => view! {
-                        <div class="min-h-screen bg-gray-50">
+                        <div class="min-h-screen bg-gray-50 dark:bg-gray-800">
                             <AdminHeader initial=access.initial.clone()/>
                             <AdminNav active=AdminSection::Authorities/>
                             <div class="max-w-6xl mx-auto p-6">
@@ -220,10 +220,10 @@ fn AuthoritiesPanel() -> impl IntoView {
     });
 
     view! {
-        <h1 class="text-xl font-bold text-gray-900 mb-4">"Autorités administratives"</h1>
+        <h1 class="text-xl font-bold text-gray-900 dark:text-gray-100 mb-4">"Autorités administratives"</h1>
 
-        <div class="bg-white border border-gray-200 rounded-sm p-4 mb-6 flex flex-col gap-3">
-            <h2 class="text-base font-bold text-gray-900">
+        <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-sm p-4 mb-6 flex flex-col gap-3">
+            <h2 class="text-base font-bold text-gray-900 dark:text-gray-100">
                 {move || if editing_id.get().is_some() { "Modifier l'autorité" } else { "Créer une autorité" }}
             </h2>
             {move || form_error.get().map(|message| view! {
@@ -270,7 +270,7 @@ fn AuthoritiesPanel() -> impl IntoView {
             <Alert severity=Severity::Error small=true class="mb-3">{message}</Alert>
         })}
 
-        <Suspense fallback=|| view! { <p class="text-gray-500">"Chargement des autorités…"</p> }>
+        <Suspense fallback=|| view! { <p class="text-gray-500 dark:text-gray-400">"Chargement des autorités…"</p> }>
             {move || Suspend::new(async move {
                 match authorities.await {
                     Err(error) => view! { <Alert severity=Severity::Error>{error.to_string()}</Alert> }.into_any(),

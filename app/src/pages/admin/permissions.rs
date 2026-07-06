@@ -400,12 +400,12 @@ pub fn PermissionsPanel(
     view! {
         <div class="flex flex-col gap-4">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div class="border border-gray-200 rounded-sm p-3">
-                    <h4 class="text-sm font-bold text-gray-900 mb-2">"Domaines"</h4>
+                <div class="border border-gray-200 dark:border-gray-800 rounded-sm p-3">
+                    <h4 class="text-sm font-bold text-gray-900 dark:text-gray-100 mb-2">"Domaines"</h4>
                     {move || domain_error.get().map(|message| view! {
                         <Alert severity=Severity::Error small=true>{message}</Alert>
                     })}
-                    <Suspense fallback=|| view! { <p class="text-sm text-gray-500">"Chargement…"</p> }>
+                    <Suspense fallback=|| view! { <p class="text-sm text-gray-500 dark:text-gray-400">"Chargement…"</p> }>
                         {move || Suspend::new(async move {
                             let options = domain_options.await.unwrap_or_default();
                             let mut select_options = vec![SelectOption::new("", "— Choisir un domaine —")];
@@ -427,12 +427,12 @@ pub fn PermissionsPanel(
                     </Suspense>
                 </div>
 
-                <div class="border border-gray-200 rounded-sm p-3">
-                    <h4 class="text-sm font-bold text-gray-900 mb-2">"Actes légaux (arrêtés)"</h4>
+                <div class="border border-gray-200 dark:border-gray-800 rounded-sm p-3">
+                    <h4 class="text-sm font-bold text-gray-900 dark:text-gray-100 mb-2">"Actes légaux (arrêtés)"</h4>
                     {move || legal_act_error.get().map(|message| view! {
                         <Alert severity=Severity::Error small=true>{message}</Alert>
                     })}
-                    <Suspense fallback=|| view! { <p class="text-sm text-gray-500">"Chargement…"</p> }>
+                    <Suspense fallback=|| view! { <p class="text-sm text-gray-500 dark:text-gray-400">"Chargement…"</p> }>
                         {move || Suspend::new(async move {
                             let options = legal_act_options.await.unwrap_or_default();
                             let mut select_options = vec![SelectOption::new("", "— Choisir un acte —")];
@@ -474,13 +474,13 @@ pub fn PermissionsPanel(
             </div>
 
             <div>
-                <h4 class="text-sm font-bold text-gray-900 mb-2">"Permissions accordées"</h4>
-                <Suspense fallback=|| view! { <p class="text-sm text-gray-500">"Chargement…"</p> }>
+                <h4 class="text-sm font-bold text-gray-900 dark:text-gray-100 mb-2">"Permissions accordées"</h4>
+                <Suspense fallback=|| view! { <p class="text-sm text-gray-500 dark:text-gray-400">"Chargement…"</p> }>
                     {move || Suspend::new(async move {
                         match permissions.await {
                             Err(error) => view! { <Alert severity=Severity::Error small=true>{error.to_string()}</Alert> }.into_any(),
                             Ok(rows) if rows.is_empty() => view! {
-                                <p class="text-sm text-gray-500">"Aucune permission directe."</p>
+                                <p class="text-sm text-gray-500 dark:text-gray-400">"Aucune permission directe."</p>
                             }.into_any(),
                             Ok(rows) => view! {
                                 <Table headers=vec!["Type de ressource", "Ressource", "Action", ""]>
@@ -511,8 +511,8 @@ pub fn PermissionsPanel(
                 </Suspense>
             </div>
 
-            <details class="border border-gray-200 rounded-sm p-3">
-                <summary class="text-sm font-bold text-gray-900 cursor-pointer">
+            <details class="border border-gray-200 dark:border-gray-800 rounded-sm p-3">
+                <summary class="text-sm font-bold text-gray-900 dark:text-gray-100 cursor-pointer">
                     "Portée avancée (application, gestion par groupe…)"
                 </summary>
                 <div class="mt-3 flex flex-col gap-3">
@@ -540,7 +540,7 @@ pub fn PermissionsPanel(
                         <Input label="Action" value=generic_action on_input=move |v| set_generic_action.set(v)/>
                     </div>
                     {(!is_super_admin).then(|| view! {
-                        <p class="text-xs text-gray-500">
+                        <p class="text-xs text-gray-500 dark:text-gray-400">
                             "Seul un super administrateur peut accorder ou révoquer les actions "
                             <code>"administrateur"</code>" / "<code>"super_administrateur"</code>"."
                         </p>

@@ -30,6 +30,11 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
             <head>
                 <meta charset="utf-8"/>
                 <meta name="viewport" content="width=device-width, initial-scale=1"/>
+                // Posé en premier et exécuté de façon synchrone, avant le
+                // chargement du WASM : applique la classe `dark` sur `<html>`
+                // d'après la préférence persistée pour éviter un flash du
+                // mauvais thème (voir `dsfr::THEME_INIT_SCRIPT`).
+                <script inner_html=dsfr::THEME_INIT_SCRIPT></script>
                 <AutoReload options=options.clone()/>
                 <HydrationScripts options/>
                 <MetaTags/>
@@ -49,7 +54,7 @@ pub fn App() -> impl IntoView {
         <Stylesheet id="leptos" href="/pkg/redacap.css"/>
         <Title text="Redac'AP"/>
         <Router>
-            <main class="min-h-screen bg-white">
+            <main class="min-h-screen bg-white dark:bg-gray-950 dark:text-gray-100">
                 <Routes fallback=|| view! { <p class="p-8">"Page introuvable."</p> }>
                     <Route path=StaticSegment("") view=PageDashboard/>
                     <Route path=path!("/login") view=PageLogin/>
@@ -105,9 +110,14 @@ fn PageEditorProjet() -> impl IntoView {
     let identity = Resource::new(|| (), |_| editor_header_identity());
 
     view! {
-        <Suspense fallback=|| view! { <p class="p-8 text-gray-500">"Connexion à la salle de collaboration…"</p> }>
+        <Suspense fallback=|| view! { <p class="p-8 text-gray-500 dark:text-gray-400">"Connexion à la salle de collaboration…"</p> }>
             {move || {
-                let legal_act_id = legal_act_id.clone();
+                // `StoredValue` (Copy) plutôt qu'un `String` capturé
+                // directement : `legal_act_id` est utilisé depuis la
+                // fermeture `Fn` imbriquée des enfants de `<LegalActEditor>`
+                // (onglet « Paramètres »), elle-même imbriquée dans celle de
+                // `<Show>`.
+                let legal_act_id = StoredValue::new(legal_act_id.clone());
                 Suspend::new(async move {
                 let identity = identity.await.ok();
                 let user_initial = identity.as_ref().map(|identity| identity.initial.clone());
@@ -131,9 +141,8 @@ fn PageEditorProjet() -> impl IntoView {
                 view! {
                     <Show
                         when=move || room.ready.get()
-                        fallback=|| view! { <p class="p-8 text-gray-500">"Connexion à la salle de collaboration…"</p> }
+                        fallback=|| view! { <p class="p-8 text-gray-500 dark:text-gray-400">"Connexion à la salle de collaboration…"</p> }
                     >
-                        <ProjectIntentionsPanel legal_act_id=legal_act_id.clone()/>
                         <LegalActEditor
                             autorite="Préfet\nDe Normandie"
                             body=room.body
@@ -144,11 +153,14 @@ fn PageEditorProjet() -> impl IntoView {
                             on_agent_respond=Callback::new(move |resp| room.respond(resp))
                             agent_auto_accept=room.auto_accept
                             on_agent_toggle_auto_accept=Callback::new(move |enabled| room.set_auto_accept(enabled))
+                            on_agent_clear_history=Callback::new(move |()| room.clear_history())
                             on_agent_target=Callback::new(move |node_id| room.set_selection(node_id))
                             user_initial=user_initial.clone()
                             is_admin=is_admin
                             connected_users=connected_users
-                        />
+                        >
+                            <ProjectIntentionsPanel legal_act_id=legal_act_id.get_value()/>
+                        </LegalActEditor>
                     </Show>
                 }
                 })

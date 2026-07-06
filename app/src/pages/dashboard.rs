@@ -105,7 +105,7 @@ pub fn PageDashboard() -> impl IntoView {
     let user_summary = Resource::new(|| (), |_| dashboard_header_summary());
 
     view! {
-        <div class="min-h-screen bg-gray-50">
+        <div class="min-h-screen bg-gray-50 dark:bg-gray-800">
             <Header service_title="Redac'AP" service_tagline="Éditeur d'arrêtés préfectoraux">
                 <Suspense fallback=|| ()>
                     {move || Suspend::new(async move {
@@ -115,7 +115,7 @@ pub fn PageDashboard() -> impl IntoView {
                                 {user.is_admin.then(|| view! {
                                     <a
                                         href="/admin"
-                                        class="text-sm font-bold text-blue-france hover:underline whitespace-nowrap"
+                                        class="text-sm font-bold text-blue-france dark:text-blue-france-925 hover:underline whitespace-nowrap"
                                     >
                                         "Administration"
                                     </a>
@@ -135,8 +135,8 @@ pub fn PageDashboard() -> impl IntoView {
             <div class="max-w-6xl mx-auto p-6 flex flex-col gap-6">
                 <div class="flex items-center justify-between flex-wrap gap-3">
                     <div>
-                        <h1 class="text-xl font-bold text-gray-900">"Mes projets d'arrêtés"</h1>
-                        <p class="text-sm text-gray-600">
+                        <h1 class="text-xl font-bold text-gray-900 dark:text-gray-100">"Mes projets d'arrêtés"</h1>
+                        <p class="text-sm text-gray-600 dark:text-gray-400">
                             "Retrouvez ici les projets d'arrêtés que vous avez créés ou auxquels vous avez été associé."
                         </p>
                     </div>
@@ -148,12 +148,12 @@ pub fn PageDashboard() -> impl IntoView {
                     </a>
                 </div>
 
-                <Suspense fallback=|| view! { <p class="text-gray-500">"Chargement des projets…"</p> }>
+                <Suspense fallback=|| view! { <p class="text-gray-500 dark:text-gray-400">"Chargement des projets…"</p> }>
                     {move || Suspend::new(async move {
                         match projects.await {
-                            Err(_) => view! { <p class="text-gray-500">"Redirection…"</p> }.into_any(),
+                            Err(_) => view! { <p class="text-gray-500 dark:text-gray-400">"Redirection…"</p> }.into_any(),
                             Ok(projects) if projects.is_empty() => view! {
-                                <p class="text-gray-500">
+                                <p class="text-gray-500 dark:text-gray-400">
                                     "Aucun projet d'arrêté pour l'instant. Créez-en un pour commencer."
                                 </p>
                             }.into_any(),
@@ -173,7 +173,7 @@ pub fn PageDashboard() -> impl IntoView {
                                                 <td class="px-3 py-2">{project.domain_name}</td>
                                                 <td class="px-3 py-2 whitespace-nowrap">{project.updated_at}</td>
                                                 <td class="px-3 py-2">
-                                                    <a href=href class="text-blue-france font-bold hover:underline">
+                                                    <a href=href class="text-blue-france dark:text-blue-france-925 font-bold hover:underline">
                                                         "Ouvrir"
                                                     </a>
                                                 </td>

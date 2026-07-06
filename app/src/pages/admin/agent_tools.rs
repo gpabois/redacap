@@ -122,12 +122,12 @@ async fn set_agent_tool_domain(
 pub fn PageAdminAgentTools() -> impl IntoView {
     let context = Resource::new(|| (), |_| admin_context());
     view! {
-        <Suspense fallback=|| view! { <p class="p-8 text-gray-500">"Chargement…"</p> }>
+        <Suspense fallback=|| view! { <p class="p-8 text-gray-500 dark:text-gray-400">"Chargement…"</p> }>
             {move || Suspend::new(async move {
                 match context.await {
                     Err(_) => view! { <AdminAccessDenied/> }.into_any(),
                     Ok(access) => view! {
-                        <div class="min-h-screen bg-gray-50">
+                        <div class="min-h-screen bg-gray-50 dark:bg-gray-800">
                             <AdminHeader initial=access.initial.clone()/>
                             <AdminNav active=AdminSection::AgentTools/>
                             <div class="max-w-6xl mx-auto p-6">
@@ -176,8 +176,8 @@ fn AgentToolsPanel() -> impl IntoView {
     });
 
     view! {
-        <h1 class="text-xl font-bold text-gray-900 mb-4">"Outils de l'agent"</h1>
-        <p class="text-sm text-gray-600 mb-4">
+        <h1 class="text-xl font-bold text-gray-900 dark:text-gray-100 mb-4">"Outils de l'agent"</h1>
+        <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
             "Les outils cœur d'édition et d'interaction sont toujours disponibles. Les outils "
             "ci-dessous appellent des API externes : rendez-les disponibles globalement, ou "
             "réservez-les à certains domaines."
@@ -187,7 +187,7 @@ fn AgentToolsPanel() -> impl IntoView {
             <Alert severity=Severity::Error small=true class="mb-4">{message}</Alert>
         })}
 
-        <Suspense fallback=|| view! { <p class="text-gray-500">"Chargement…"</p> }>
+        <Suspense fallback=|| view! { <p class="text-gray-500 dark:text-gray-400">"Chargement…"</p> }>
             {move || Suspend::new(async move {
                 let domain_options = domains.await.unwrap_or_default();
                 match tools.await {
@@ -200,9 +200,9 @@ fn AgentToolsPanel() -> impl IntoView {
                                 let tool_name = tool.tool_name.clone();
                                 let tool_name_for_global = tool_name.clone();
                                 view! {
-                                    <div class="bg-white border border-gray-200 rounded-sm p-4 flex flex-col gap-3">
+                                    <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-sm p-4 flex flex-col gap-3">
                                         <div class="flex items-center justify-between">
-                                            <h2 class="text-base font-bold text-gray-900">{tool.label}</h2>
+                                            <h2 class="text-base font-bold text-gray-900 dark:text-gray-100">{tool.label}</h2>
                                             <Toggle
                                                 label="Disponible globalement"
                                                 checked=tool.is_global

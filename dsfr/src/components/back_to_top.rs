@@ -11,7 +11,7 @@ pub fn BackToTop(
     view! {
         <a
             href=format!("#{anchor}")
-            class=format!("{class} inline-flex items-center gap-2 text-sm font-bold text-blue-france hover:underline")
+            class=format!("{class} inline-flex items-center gap-2 text-sm font-bold text-blue-france dark:text-blue-france-925 hover:underline")
         >
             <span aria-hidden="true">"↑"</span>
             "Haut de page"

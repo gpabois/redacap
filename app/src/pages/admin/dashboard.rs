@@ -83,12 +83,12 @@ async fn admin_dashboard_stats() -> Result<DashboardStats, ServerFnError> {
 pub fn PageAdminDashboard() -> impl IntoView {
     let context = Resource::new(|| (), |_| admin_context());
     view! {
-        <Suspense fallback=|| view! { <p class="p-8 text-gray-500">"Chargement…"</p> }>
+        <Suspense fallback=|| view! { <p class="p-8 text-gray-500 dark:text-gray-400">"Chargement…"</p> }>
             {move || Suspend::new(async move {
                 match context.await {
                     Err(_) => view! { <AdminAccessDenied/> }.into_any(),
                     Ok(access) => view! {
-                        <div class="min-h-screen bg-gray-50">
+                        <div class="min-h-screen bg-gray-50 dark:bg-gray-800">
                             <AdminHeader initial=access.initial.clone()/>
                             <AdminNav active=AdminSection::Dashboard/>
                             <div class="max-w-6xl mx-auto p-6">
@@ -105,9 +105,9 @@ pub fn PageAdminDashboard() -> impl IntoView {
 #[component]
 fn StatCard(label: &'static str, value: usize) -> impl IntoView {
     view! {
-        <div class="bg-white border border-gray-200 rounded-sm p-4 flex flex-col gap-1">
-            <span class="text-3xl font-bold text-blue-france">{value}</span>
-            <span class="text-sm text-gray-700">{label}</span>
+        <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-sm p-4 flex flex-col gap-1">
+            <span class="text-3xl font-bold text-blue-france dark:text-blue-france-925">{value}</span>
+            <span class="text-sm text-gray-700 dark:text-gray-300">{label}</span>
         </div>
     }
 }
@@ -117,9 +117,9 @@ fn DashboardPanel() -> impl IntoView {
     let stats = Resource::new(|| (), |_| admin_dashboard_stats());
 
     view! {
-        <h1 class="text-xl font-bold text-gray-900 mb-4">"Tableau de bord"</h1>
+        <h1 class="text-xl font-bold text-gray-900 dark:text-gray-100 mb-4">"Tableau de bord"</h1>
 
-        <Suspense fallback=|| view! { <p class="text-gray-500">"Chargement des statistiques…"</p> }>
+        <Suspense fallback=|| view! { <p class="text-gray-500 dark:text-gray-400">"Chargement des statistiques…"</p> }>
             {move || Suspend::new(async move {
                 match stats.await {
                     Err(error) => view! { <Alert severity=Severity::Error>{error.to_string()}</Alert> }.into_any(),
@@ -134,7 +134,7 @@ fn DashboardPanel() -> impl IntoView {
                             </div>
 
                             <div>
-                                <h2 class="text-base font-bold text-gray-900 mb-2">"Accès rapide"</h2>
+                                <h2 class="text-base font-bold text-gray-900 dark:text-gray-100 mb-2">"Accès rapide"</h2>
                                 <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                                     <Tile title="Utilisateurs" href="/admin/users".to_string() description="Comptes et permissions"/>
                                     <Tile title="Groupes" href="/admin/groups".to_string() description="Hiérarchie de groupes"/>
@@ -148,18 +148,18 @@ fn DashboardPanel() -> impl IntoView {
                             </div>
 
                             <div>
-                                <h2 class="text-base font-bold text-gray-900 mb-2">"Activité récente"</h2>
+                                <h2 class="text-base font-bold text-gray-900 dark:text-gray-100 mb-2">"Activité récente"</h2>
                                 {if stats.recent_audit_events.is_empty() {
-                                    view! { <p class="text-sm text-gray-500">"Aucune activité récente."</p> }.into_any()
+                                    view! { <p class="text-sm text-gray-500 dark:text-gray-400">"Aucune activité récente."</p> }.into_any()
                                 } else {
                                     view! {
-                                        <ul class="bg-white border border-gray-200 rounded-sm divide-y divide-gray-200">
+                                        <ul class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-sm divide-y divide-gray-200 dark:divide-gray-800">
                                             {stats.recent_audit_events.into_iter().map(|entry| view! {
                                                 <li class="px-3 py-2 text-sm flex flex-wrap gap-x-2 gap-y-0">
-                                                    <span class="text-gray-500 whitespace-nowrap">{entry.occurred_at}</span>
+                                                    <span class="text-gray-500 dark:text-gray-400 whitespace-nowrap">{entry.occurred_at}</span>
                                                     <span class="font-bold">{entry.actor}</span>
                                                     <span>{entry.action}</span>
-                                                    <span class="text-gray-500">{entry.resource_type}</span>
+                                                    <span class="text-gray-500 dark:text-gray-400">{entry.resource_type}</span>
                                                 </li>
                                             }).collect::<Vec<_>>()}
                                         </ul>

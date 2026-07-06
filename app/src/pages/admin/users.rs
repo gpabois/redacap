@@ -251,12 +251,12 @@ async fn unassign_group_admin(user_id: String, group_id: String) -> Result<(), S
 pub fn PageAdminUsers() -> impl IntoView {
     let context = Resource::new(|| (), |_| admin_context());
     view! {
-        <Suspense fallback=|| view! { <p class="p-8 text-gray-500">"Chargement…"</p> }>
+        <Suspense fallback=|| view! { <p class="p-8 text-gray-500 dark:text-gray-400">"Chargement…"</p> }>
             {move || Suspend::new(async move {
                 match context.await {
                     Err(_) => view! { <AdminAccessDenied/> }.into_any(),
                     Ok(ctx) => view! {
-                        <div class="min-h-screen bg-gray-50">
+                        <div class="min-h-screen bg-gray-50 dark:bg-gray-800">
                             <AdminHeader initial=ctx.initial.clone()/>
                             <AdminNav active=AdminSection::Users/>
                             <div class="max-w-6xl mx-auto p-6">
@@ -307,10 +307,10 @@ fn UsersPanel(is_super_admin: bool) -> impl IntoView {
     let selected_user = RwSignal::new(Option::<String>::None);
 
     view! {
-        <h1 class="text-xl font-bold text-gray-900 mb-4">"Utilisateurs"</h1>
+        <h1 class="text-xl font-bold text-gray-900 dark:text-gray-100 mb-4">"Utilisateurs"</h1>
 
-        <div class="bg-white border border-gray-200 rounded-sm p-4 mb-6 flex flex-col gap-3">
-            <h2 class="text-base font-bold text-gray-900">"Créer un compte"</h2>
+        <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-sm p-4 mb-6 flex flex-col gap-3">
+            <h2 class="text-base font-bold text-gray-900 dark:text-gray-100">"Créer un compte"</h2>
             {move || form_error.get().map(|message| view! {
                 <Alert severity=Severity::Error small=true>{message}</Alert>
             })}
@@ -336,7 +336,7 @@ fn UsersPanel(is_super_admin: bool) -> impl IntoView {
             </div>
         </div>
 
-        <Suspense fallback=|| view! { <p class="text-gray-500">"Chargement des utilisateurs…"</p> }>
+        <Suspense fallback=|| view! { <p class="text-gray-500 dark:text-gray-400">"Chargement des utilisateurs…"</p> }>
             {move || Suspend::new(async move {
                 match users.await {
                     Err(error) => view! { <Alert severity=Severity::Error>{error.to_string()}</Alert> }.into_any(),
@@ -439,10 +439,10 @@ fn UserDetailPanel(
     let user_id_for_unassign = user_id.clone();
 
     view! {
-        <div class="bg-white border border-gray-200 rounded-sm p-4 mt-4 flex flex-col gap-4">
+        <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-sm p-4 mt-4 flex flex-col gap-4">
             <div>
-                <h3 class="text-base font-bold text-gray-900 mb-2">"Groupes"</h3>
-                <Suspense fallback=|| view! { <p class="text-sm text-gray-500">"Chargement…"</p> }>
+                <h3 class="text-base font-bold text-gray-900 dark:text-gray-100 mb-2">"Groupes"</h3>
+                <Suspense fallback=|| view! { <p class="text-sm text-gray-500 dark:text-gray-400">"Chargement…"</p> }>
                     {move || Suspend::new(async move {
                         let options = groups.await.unwrap_or_default();
                         let mut select_options = vec![SelectOption::new("", "— Ajouter à un groupe —")];
@@ -467,7 +467,7 @@ fn UserDetailPanel(
             </div>
 
             <div>
-                <h3 class="text-base font-bold text-gray-900 mb-2">"Permissions"</h3>
+                <h3 class="text-base font-bold text-gray-900 dark:text-gray-100 mb-2">"Permissions"</h3>
                 <PermissionsPanel subject_kind="user" subject_id=user_id.clone() is_super_admin=is_super_admin/>
             </div>
 

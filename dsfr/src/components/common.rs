@@ -24,10 +24,10 @@ impl Severity {
     /// Classes Tailwind pour le fond.
     pub fn bg_class(self) -> &'static str {
         match self {
-            Severity::Info => "bg-info-bg",
-            Severity::Success => "bg-success-bg",
-            Severity::Warning => "bg-warning-bg",
-            Severity::Error => "bg-error-bg",
+            Severity::Info => "bg-info-bg dark:bg-info/15",
+            Severity::Success => "bg-success-bg dark:bg-success/15",
+            Severity::Warning => "bg-warning-bg dark:bg-warning/15",
+            Severity::Error => "bg-error-bg dark:bg-error/15",
         }
     }
 

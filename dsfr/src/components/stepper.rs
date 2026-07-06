@@ -16,15 +16,15 @@ pub fn Stepper(
     let progress = (current_step.min(total_steps) * 100) / total_steps;
     view! {
         <div class=format!("{class} flex flex-col gap-2")>
-            <p class="text-sm text-gray-600">
+            <p class="text-sm text-gray-600 dark:text-gray-400">
                 "Étape " {current_step} " sur " {total_steps}
             </p>
-            <h2 class="text-xl font-bold text-gray-900">{title}</h2>
+            <h2 class="text-xl font-bold text-gray-900 dark:text-gray-100">{title}</h2>
             <div class="h-1 w-full bg-gray-300 rounded-full overflow-hidden">
                 <div class="h-full bg-blue-france" style=format!("width: {progress}%")></div>
             </div>
             {next_title.map(|next_title| view! {
-                <p class="text-sm text-gray-600">
+                <p class="text-sm text-gray-600 dark:text-gray-400">
                     "Étape suivante : " {next_title}
                 </p>
             })}

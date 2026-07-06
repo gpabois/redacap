@@ -25,6 +25,11 @@ pub enum ClientMessage {
     /// viser via le mot-clé `"selection"` sans jamais avoir à connaître son
     /// identifiant technique (voir `server::protocol::ClientMessage::SetSelection`).
     SetSelection { node_id: Option<String> },
+    /// Efface l'historique de la conversation avec l'agent pour cette
+    /// connexion : la prochaine `RunAgent` repart d'une conversation vide
+    /// plutôt que de poursuivre celle en cours (voir
+    /// `server::protocol::ClientMessage::ClearHistory`).
+    ClearHistory,
 }
 
 #[derive(Debug, Deserialize)]
@@ -68,7 +73,11 @@ pub enum ServerMessage {
     /// Le résultat de l'appel d'outil `id` est disponible : `ok` distingue
     /// un succès (`output` porte alors la sortie de l'outil) d'un échec
     /// (`output` porte alors le message d'erreur).
-    AgentToolCallFinished { id: String, ok: bool, output: String },
+    AgentToolCallFinished {
+        id: String,
+        ok: bool,
+        output: String,
+    },
 }
 
 /// Identité d'un utilisateur connecté à la salle (voir

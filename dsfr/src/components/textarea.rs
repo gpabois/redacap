@@ -23,10 +23,10 @@ pub fn Textarea(
     };
     view! {
         <div class=format!("{class} flex flex-col gap-1")>
-            <label class="text-sm font-bold text-gray-900">{label}</label>
-            {hint.map(|hint| view! { <span class="text-sm text-gray-600">{hint}</span> })}
+            <label class="text-sm font-bold text-gray-900 dark:text-gray-100">{label}</label>
+            {hint.map(|hint| view! { <span class="text-sm text-gray-600 dark:text-gray-400">{hint}</span> })}
             <textarea
-                class=format!("{border} bg-gray-100 px-3 py-2 outline-none disabled:opacity-50")
+                class=format!("{border} bg-gray-100 dark:bg-gray-800 px-3 py-2 outline-none disabled:opacity-50")
                 rows=rows
                 disabled=disabled
                 prop:value=move || value.get()

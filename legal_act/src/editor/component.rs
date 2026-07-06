@@ -66,6 +66,10 @@ pub fn LegalActEditor(
     /// « accepter toutes les modifications ».
     #[prop(optional)]
     on_agent_toggle_auto_accept: Option<Callback<bool>>,
+    /// Appelé lorsque l'utilisateur choisit d'effacer l'historique de la
+    /// conversation avec l'agent (voir [`AgentPanel`]'s `on_clear_history`).
+    #[prop(optional)]
+    on_agent_clear_history: Option<Callback<()>>,
     /// Appelé à chaque changement du nœud ciblé pour l'agent IA (bouton
     /// « Cibler », voir [`super::context::EditorContext::agent_target`]),
     /// pour que la page hôte le transmette au serveur (voir `app::ws::
@@ -87,6 +91,12 @@ pub fn LegalActEditor(
     /// pastilles à côté de la bulle de l'utilisateur courant.
     #[prop(optional, into)]
     connected_users: Option<Signal<Vec<ConnectedUser>>>,
+    /// Contenu de l'onglet « Paramètres » du panneau latéral (ex. gestion
+    /// des intentions rattachées au projet, voir
+    /// `app::pages::project_intentions::ProjectIntentionsPanel`) : ce
+    /// composant reste agnostique de ce contenu, fourni par la page hôte.
+    #[prop(optional)]
+    children: Option<ChildrenFn>,
 ) -> impl IntoView {
     let ctx = provide_editor_context(body);
     if let Some(on_agent_target) = on_agent_target {
@@ -103,6 +113,12 @@ pub fn LegalActEditor(
     let agent_auto_accept = agent_auto_accept.unwrap_or_else(|| Signal::derive(|| false));
     let on_agent_toggle_auto_accept =
         on_agent_toggle_auto_accept.unwrap_or_else(|| Callback::new(|_| {}));
+    let on_agent_clear_history = on_agent_clear_history.unwrap_or_else(|| Callback::new(|_| {}));
+
+    // `StoredValue` (Copy) plutôt qu'une capture directe de `children` (non
+    // `Copy`, `Rc<dyn Fn...>`) : le bloc réactif ci-dessous s'exécute à
+    // chaque bascule de `show_agent`, ce qui exige des captures `Copy`.
+    let children = StoredValue::new(children);
 
     let has_agent = agent_cfg.is_some();
     let show_agent = RwSignal::new(true);
@@ -129,7 +145,10 @@ pub fn LegalActEditor(
                 />
             </div>
             <div class="flex flex-1 overflow-hidden">
-                <main class="flex-1 overflow-y-auto bg-gray-200 print:bg-white print:overflow-visible">
+                <main class="flex-1 overflow-y-auto bg-gray-200 dark:bg-gray-800 print:bg-white print:overflow-visible">
+                    // Le papier reste blanc en mode sombre (métaphore de la
+                    // feuille imprimée) : seul le plateau qui l'entoure
+                    // bascule en sombre.
                     <div class="legal-act-page my-4 mx-auto bg-white">
                         {autorite.map(|a| view! {
                             <BlocMarianneInline autorite=a class="mb-8"/>
@@ -147,9 +166,9 @@ pub fn LegalActEditor(
                                 min_width=AGENT_PANEL_MIN_WIDTH
                                 max_width=AGENT_PANEL_MAX_WIDTH
                             />
-                            <aside class="shrink-0 overflow-hidden flex flex-col" style:width=move || format!("{}px", agent_panel_width.get())>
-                                <Tabs titles=vec!["Marie", "Commentaires"] selected=selected_tab></Tabs>
-                                <TabPanel index=0 selected=selected_tab class="flex-1 flex flex-col">
+                            <aside class="shrink-0 overflow-hidden flex flex-col min-h-0" style:width=move || format!("{}px", agent_panel_width.get())>
+                                <Tabs titles=vec!["Marie", "Commentaires", "Paramètres"] selected=selected_tab></Tabs>
+                                <TabPanel index=0 selected=selected_tab class="flex-1 flex flex-col min-h-0">
                                     <AgentTargetIndicator/>
                                     <AgentPanel
                                         messages=msgs
@@ -159,10 +178,14 @@ pub fn LegalActEditor(
                                         on_respond=on_agent_respond
                                         auto_accept=agent_auto_accept
                                         on_toggle_auto_accept=on_agent_toggle_auto_accept
+                                        on_clear_history=on_agent_clear_history
                                     />
                                 </TabPanel>
-                                <TabPanel index=1 selected=selected_tab class="flex-1 flex flex-col">
+                                <TabPanel index=1 selected=selected_tab class="flex-1 flex flex-col min-h-0">
                                     <div></div>
+                                </TabPanel>
+                                <TabPanel index=2 selected=selected_tab class="flex-1 flex flex-col min-h-0 overflow-y-auto">
+                                    {children.get_value().map(|children| children())}
                                 </TabPanel>
                             </aside>
                         </div>
@@ -309,11 +332,11 @@ fn AgentTargetIndicator() -> impl IntoView {
     view! {
         {move || label().map(|text| view! {
             <div class="flex items-center justify-between gap-2 px-3 py-1.5 text-xs \
-                        bg-blue-france-975 text-blue-france border-b border-blue-france-925">
+                        bg-blue-france-975 dark:bg-gray-800 text-blue-france dark:text-blue-france-925 border-b border-blue-france-925 dark:border-gray-700">
                 <span>"Cible pour l'agent IA : " <strong>{text}</strong></span>
                 <button
                     type="button"
-                    class="text-blue-france hover:underline cursor-pointer shrink-0"
+                    class="text-blue-france dark:text-blue-france-925 hover:underline cursor-pointer shrink-0"
                     on:click=move |_| ctx.agent_target.set(None)
                 >"Retirer"</button>
             </div>
@@ -351,8 +374,10 @@ fn TargetButton(node_id: BodyNodeId) -> impl IntoView {
             class:opacity-0=move || !active()
             class:group-hover:opacity-100=move || !active()
             class:text-blue-france=active
+            class:dark:text-blue-france-925=active
             class:text-gray-400=move || !active()
             class:hover:text-blue-france=move || !active()
+            class:dark:hover:text-blue-france-925=move || !active()
             on:click=move |_| ctx.toggle_agent_target(node_id)
         >
             {move || if active() { "Ciblé ✓" } else { "Cibler" }}

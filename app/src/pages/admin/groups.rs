@@ -203,12 +203,12 @@ fn flatten_tree(groups: Vec<GroupRow>) -> Vec<(GroupRow, usize)> {
 pub fn PageAdminGroups() -> impl IntoView {
     let context = Resource::new(|| (), |_| admin_context());
     view! {
-        <Suspense fallback=|| view! { <p class="p-8 text-gray-500">"Chargement…"</p> }>
+        <Suspense fallback=|| view! { <p class="p-8 text-gray-500 dark:text-gray-400">"Chargement…"</p> }>
             {move || Suspend::new(async move {
                 match context.await {
                     Err(_) => view! { <AdminAccessDenied/> }.into_any(),
                     Ok(access) => view! {
-                        <div class="min-h-screen bg-gray-50">
+                        <div class="min-h-screen bg-gray-50 dark:bg-gray-800">
                             <AdminHeader initial=access.initial.clone()/>
                             <AdminNav active=AdminSection::Groups/>
                             <div class="max-w-6xl mx-auto p-6">
@@ -287,16 +287,16 @@ fn GroupsPanel(is_super_admin: bool) -> impl IntoView {
     });
 
     view! {
-        <h1 class="text-xl font-bold text-gray-900 mb-4">"Groupes"</h1>
+        <h1 class="text-xl font-bold text-gray-900 dark:text-gray-100 mb-4">"Groupes"</h1>
 
-        <div class="bg-white border border-gray-200 rounded-sm p-4 mb-6 flex flex-col gap-3">
-            <h2 class="text-base font-bold text-gray-900">"Créer un groupe"</h2>
+        <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-sm p-4 mb-6 flex flex-col gap-3">
+            <h2 class="text-base font-bold text-gray-900 dark:text-gray-100">"Créer un groupe"</h2>
             {move || form_error.get().map(|message| view! {
                 <Alert severity=Severity::Error small=true>{message}</Alert>
             })}
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <Input label="Nom" value=new_name on_input=move |v| set_new_name.set(v)/>
-                <Suspense fallback=|| view! { <p class="text-sm text-gray-500">"Chargement…"</p> }>
+                <Suspense fallback=|| view! { <p class="text-sm text-gray-500 dark:text-gray-400">"Chargement…"</p> }>
                     {move || Suspend::new(async move {
                         let options = groups.await.unwrap_or_default();
                         let mut select_options = vec![SelectOption::new("", "— Groupe racine —")];
@@ -333,7 +333,7 @@ fn GroupsPanel(is_super_admin: bool) -> impl IntoView {
             <Alert severity=Severity::Error small=true class="mb-3">{message}</Alert>
         })}
 
-        <Suspense fallback=|| view! { <p class="text-gray-500">"Chargement des groupes…"</p> }>
+        <Suspense fallback=|| view! { <p class="text-gray-500 dark:text-gray-400">"Chargement des groupes…"</p> }>
             {move || Suspend::new(async move {
                 match groups.await {
                     Err(error) => view! { <Alert severity=Severity::Error>{error.to_string()}</Alert> }.into_any(),
@@ -345,7 +345,7 @@ fn GroupsPanel(is_super_admin: bool) -> impl IntoView {
                         };
                         let flattened = flatten_tree(rows);
                         view! {
-                            <div class="bg-white border border-gray-200 rounded-sm divide-y divide-gray-200">
+                            <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-sm divide-y divide-gray-200 dark:divide-gray-800">
                                 {flattened.into_iter().map(|(group, depth)| {
                                     let group_id_for_rename = group.id.clone();
                                     let group_id_for_reparent = group.id.clone();
@@ -408,8 +408,8 @@ fn GroupsPanel(is_super_admin: bool) -> impl IntoView {
         </Suspense>
 
         {move || selected_group.get().map(|group_id| view! {
-            <div class="bg-white border border-gray-200 rounded-sm p-4 mt-4">
-                <h3 class="text-base font-bold text-gray-900 mb-2">"Permissions du groupe"</h3>
+            <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-sm p-4 mt-4">
+                <h3 class="text-base font-bold text-gray-900 dark:text-gray-100 mb-2">"Permissions du groupe"</h3>
                 <PermissionsPanel subject_kind="group" subject_id=group_id is_super_admin=is_super_admin/>
             </div>
         })}

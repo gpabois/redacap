@@ -3,12 +3,14 @@
 //! enregistrer dans un [`crate::ToolRegistry`].
 
 mod georisques;
+mod intention;
 mod interaction;
 mod legal_act_editor;
 mod legifrance;
 mod metadata;
 
 pub use georisques::{GeorisquesClient, GeorisquesConfig, GeorisquesQueryTool, IcpeQueryTool};
+pub use intention::{AddIntentionTool, ListIntentionsTool, RemoveIntentionTool};
 pub use interaction::{AskQuestionsTool, AskUserTool, RequestDocumentTool};
 pub use legal_act_editor::{
     FillSectionTool, GenerateNumberingTool, InsertNodeTool, ReadStructureTool, ReadTitleTool,

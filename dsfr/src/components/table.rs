@@ -23,7 +23,7 @@ pub fn Table(
                         }).collect::<Vec<_>>()}
                     </tr>
                 </thead>
-                <tbody class="*:border-b *:border-gray-300 *:odd:bg-gray-50">
+                <tbody class="*:border-b *:border-gray-300 dark:border-gray-700 *:odd:bg-gray-50 dark:bg-gray-800">
                     {children()}
                 </tbody>
             </table>

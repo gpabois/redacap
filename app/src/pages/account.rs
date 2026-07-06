@@ -38,14 +38,14 @@ pub fn PageAccount() -> impl IntoView {
     let account = Resource::new(|| (), |_| fetch_account_info());
 
     view! {
-        <div class="min-h-screen bg-gray-50">
+        <div class="min-h-screen bg-gray-50 dark:bg-gray-800">
             <div class="max-w-xl mx-auto p-6 flex flex-col gap-6">
                 <div>
-                    <h1 class="text-xl font-bold text-gray-900">"Mon compte"</h1>
-                    <a href="/" class="text-sm text-blue-france hover:underline">"← Retour au tableau de bord"</a>
+                    <h1 class="text-xl font-bold text-gray-900 dark:text-gray-100">"Mon compte"</h1>
+                    <a href="/" class="text-sm text-blue-france dark:text-blue-france-925 hover:underline">"← Retour au tableau de bord"</a>
                 </div>
 
-                <Suspense fallback=|| view! { <p class="text-gray-500">"Chargement…"</p> }>
+                <Suspense fallback=|| view! { <p class="text-gray-500 dark:text-gray-400">"Chargement…"</p> }>
                     {move || Suspend::new(async move {
                         match account.await {
                             Err(error) => view! {
@@ -54,14 +54,14 @@ pub fn PageAccount() -> impl IntoView {
                                 </Alert>
                             }.into_any(),
                             Ok(account) => view! {
-                                <div class="bg-white border border-gray-200 rounded-sm p-6 flex flex-col gap-4">
+                                <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-sm p-6 flex flex-col gap-4">
                                     <div>
-                                        <span class="block text-xs font-bold text-gray-500 uppercase">"Nom affiché"</span>
-                                        <span class="text-base text-gray-900">{account.display_name}</span>
+                                        <span class="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase">"Nom affiché"</span>
+                                        <span class="text-base text-gray-900 dark:text-gray-100">{account.display_name}</span>
                                     </div>
                                     <div>
-                                        <span class="block text-xs font-bold text-gray-500 uppercase">"Email"</span>
-                                        <span class="text-base text-gray-900">{account.email}</span>
+                                        <span class="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase">"Email"</span>
+                                        <span class="text-base text-gray-900 dark:text-gray-100">{account.email}</span>
                                     </div>
                                 </div>
                             }.into_any(),
@@ -71,7 +71,7 @@ pub fn PageAccount() -> impl IntoView {
 
                 <a
                     href="/logout"
-                    class="self-start bg-transparent text-blue-france shadow-[inset_0_0_0_1px] shadow-gray-300 hover:bg-blue-france-975 font-bold px-4 py-2 transition-colors"
+                    class="self-start bg-transparent text-blue-france dark:text-blue-france-925 shadow-[inset_0_0_0_1px] shadow-gray-300 hover:bg-blue-france-975 dark:hover:bg-gray-800 font-bold px-4 py-2 transition-colors"
                 >
                     "Se déconnecter"
                 </a>

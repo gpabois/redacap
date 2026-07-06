@@ -46,11 +46,11 @@ pub fn PageBootstrap() -> impl IntoView {
     let status = Resource::new(|| (), |_| bootstrap_status());
 
     view! {
-        <div class="min-h-screen bg-gray-50 flex items-center justify-center p-6">
-            <div class="w-full max-w-md bg-white border border-gray-200 rounded-sm p-8 flex flex-col gap-6">
+        <div class="min-h-screen bg-gray-50 dark:bg-gray-800 flex items-center justify-center p-6">
+            <div class="w-full max-w-md bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-sm p-8 flex flex-col gap-6">
                 <div>
-                    <h1 class="text-xl font-bold text-gray-900">"Initialisation"</h1>
-                    <p class="text-sm text-gray-600">
+                    <h1 class="text-xl font-bold text-gray-900 dark:text-gray-100">"Initialisation"</h1>
+                    <p class="text-sm text-gray-600 dark:text-gray-400">
                         "Créez le compte super administrateur unique de l'application."
                     </p>
                 </div>
@@ -61,7 +61,7 @@ pub fn PageBootstrap() -> impl IntoView {
                     </Alert>
                 })}
 
-                <Suspense fallback=|| view! { <p class="text-sm text-gray-500">"Chargement…"</p> }>
+                <Suspense fallback=|| view! { <p class="text-sm text-gray-500 dark:text-gray-400">"Chargement…"</p> }>
                     {move || Suspend::new(async move {
                         match status.await {
                             Ok(false) => view! {
@@ -69,7 +69,7 @@ pub fn PageBootstrap() -> impl IntoView {
                                     <Alert severity=dsfr::components::common::Severity::Info small=true>
                                         "Un super administrateur existe déjà."
                                     </Alert>
-                                    <a href="/login" class="text-sm text-blue-france underline">
+                                    <a href="/login" class="text-sm text-blue-france dark:text-blue-france-925 underline">
                                         "Se connecter"
                                     </a>
                                 </div>

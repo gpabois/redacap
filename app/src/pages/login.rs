@@ -61,11 +61,11 @@ pub fn PageLogin() -> impl IntoView {
     let providers = Resource::new(|| (), |_| list_active_oidc_providers());
 
     view! {
-        <div class="min-h-screen bg-gray-50 flex items-center justify-center p-6">
-            <div class="w-full max-w-md bg-white border border-gray-200 rounded-sm p-8 flex flex-col gap-6">
+        <div class="min-h-screen bg-gray-50 dark:bg-gray-800 flex items-center justify-center p-6">
+            <div class="w-full max-w-md bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-sm p-8 flex flex-col gap-6">
                 <div>
-                    <h1 class="text-xl font-bold text-gray-900">"Connexion"</h1>
-                    <p class="text-sm text-gray-600">"Éditeur d'arrêtés préfectoraux"</p>
+                    <h1 class="text-xl font-bold text-gray-900 dark:text-gray-100">"Connexion"</h1>
+                    <p class="text-sm text-gray-600 dark:text-gray-400">"Éditeur d'arrêtés préfectoraux"</p>
                 </div>
 
                 {move || error().map(|message| view! {
@@ -99,16 +99,16 @@ pub fn PageLogin() -> impl IntoView {
                         match providers.await {
                             Ok(providers) if !providers.is_empty() => Some(view! {
                                 <div class="flex flex-col gap-3">
-                                    <div class="flex items-center gap-3 text-xs text-gray-500 uppercase">
-                                        <span class="flex-1 border-t border-gray-200"></span>
+                                    <div class="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400 uppercase">
+                                        <span class="flex-1 border-t border-gray-200 dark:border-gray-800"></span>
                                         "ou"
-                                        <span class="flex-1 border-t border-gray-200"></span>
+                                        <span class="flex-1 border-t border-gray-200 dark:border-gray-800"></span>
                                     </div>
                                     <div class="flex flex-col gap-2">
                                         {providers.into_iter().map(|provider| view! {
                                             <a
                                                 href=format!("/oidc/{}/start", provider.id)
-                                                class="text-center bg-transparent text-blue-france shadow-[inset_0_0_0_1px] shadow-gray-300 hover:bg-blue-france-975 font-bold px-4 py-2 transition-colors"
+                                                class="text-center bg-transparent text-blue-france dark:text-blue-france-925 shadow-[inset_0_0_0_1px] shadow-gray-300 hover:bg-blue-france-975 dark:hover:bg-gray-800 font-bold px-4 py-2 transition-colors"
                                             >
                                                 {format!("Se connecter avec {}", provider.name)}
                                             </a>

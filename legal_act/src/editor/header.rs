@@ -189,7 +189,7 @@ pub fn EditorHeader(
             {is_admin.then(|| view! {
                 <a
                     href="/admin"
-                    class="text-sm font-bold text-blue-france hover:underline whitespace-nowrap"
+                    class="text-sm font-bold text-blue-france dark:text-blue-france-925 hover:underline whitespace-nowrap"
                 >
                     "Administration"
                 </a>

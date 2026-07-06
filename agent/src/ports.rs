@@ -92,6 +92,33 @@ impl ValidationReport {
     }
 }
 
+/// Intention rédactionnelle (ex. « mise en demeure », « sanction
+/// administrative ») associable au projet en cours d'édition, pour les
+/// outils `list_intentions`, `add_intention` et `remove_intention`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntentionSummary {
+    pub id: String,
+    pub name: String,
+    /// `true` si l'intention est déjà associée au projet en cours.
+    pub attached: bool,
+}
+
+/// Accès aux intentions du domaine du projet en cours d'édition et à leur
+/// association au projet, pour les outils `list_intentions`,
+/// `add_intention` et `remove_intention`.
+#[async_trait]
+pub trait IntentionPort: Send + Sync {
+    /// Liste les intentions du domaine du projet, avec leur état
+    /// d'association actuel au projet en cours.
+    async fn list(&self) -> Result<Vec<IntentionSummary>, ToolError>;
+
+    /// Associe l'intention `intention_id` au projet en cours d'édition.
+    async fn add(&self, intention_id: &str) -> Result<(), ToolError>;
+
+    /// Retire l'intention `intention_id` du projet en cours d'édition.
+    async fn remove(&self, intention_id: &str) -> Result<(), ToolError>;
+}
+
 /// Accès à la structure de l'acte en cours d'édition, pour les outils
 /// `read_structure`, `fill_section`, `insert_node`, `remove_node`,
 /// `generate_numbering` et `validate_structure`.

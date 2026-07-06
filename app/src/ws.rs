@@ -128,11 +128,28 @@ impl RoomHandle {
     /// Démarre la boucle agentique côté serveur avec `task`, et ajoute
     /// immédiatement le message de l'utilisateur à l'historique affiché.
     pub fn run_agent(&self, task: String) {
-        self.agent_messages.update(|m| m.push(PanelEntry::user(task.clone())));
+        self.agent_messages
+            .update(|m| m.push(PanelEntry::user(task.clone())));
         self.open_reasoning.set(None);
         self.open_message.set(None);
         self.agent_pending.set(true);
         self.send(&ClientMessage::RunAgent { task });
+    }
+
+    /// Efface l'historique affiché et la conversation tenue côté serveur
+    /// (voir [`server::protocol::ClientMessage::ClearHistory`]) : sans effet
+    /// tant qu'une tâche agent est en cours (voir `agent_pending`), pour ne
+    /// pas effacer sous les pieds d'une réponse en train d'arriver.
+    pub fn clear_history(&self) {
+        if self.agent_pending.get_untracked() {
+            return;
+        }
+        self.agent_messages.set(Vec::new());
+        self.open_reasoning.set(None);
+        self.open_message.set(None);
+        self.interaction.set(None);
+        self.pending_kind.set(None);
+        self.send(&ClientMessage::ClearHistory);
     }
 
     /// Répond au formulaire d'interaction affiché par [`agent::AgentPanel`].
@@ -347,9 +364,13 @@ fn handle_text_frame(handle: RoomHandle, text: &str) {
             handle.open_reasoning.set(None);
             handle.open_message.set(None);
         }
-        ServerMessage::AgentToolCallStarted { id, name, arguments } => {
-            let arguments = serde_json::to_string_pretty(&arguments)
-                .unwrap_or_else(|_| arguments.to_string());
+        ServerMessage::AgentToolCallStarted {
+            id,
+            name,
+            arguments,
+        } => {
+            let arguments =
+                serde_json::to_string_pretty(&arguments).unwrap_or_else(|_| arguments.to_string());
             handle.agent_messages.update(|entries| {
                 entries.push(PanelEntry::ToolCall(PanelToolCall {
                     id,

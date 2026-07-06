@@ -167,12 +167,12 @@ async fn delete_intention_admin(intention_id: String) -> Result<(), ServerFnErro
 pub fn PageAdminIntentions() -> impl IntoView {
     let context = Resource::new(|| (), |_| admin_context());
     view! {
-        <Suspense fallback=|| view! { <p class="p-8 text-gray-500">"Chargement…"</p> }>
+        <Suspense fallback=|| view! { <p class="p-8 text-gray-500 dark:text-gray-400">"Chargement…"</p> }>
             {move || Suspend::new(async move {
                 match context.await {
                     Err(_) => view! { <AdminAccessDenied/> }.into_any(),
                     Ok(access) => view! {
-                        <div class="min-h-screen bg-gray-50">
+                        <div class="min-h-screen bg-gray-50 dark:bg-gray-800">
                             <AdminHeader initial=access.initial.clone()/>
                             <AdminNav active=AdminSection::Intentions/>
                             <div class="max-w-6xl mx-auto p-6">
@@ -257,17 +257,17 @@ fn IntentionsPanel() -> impl IntoView {
     });
 
     view! {
-        <h1 class="text-xl font-bold text-gray-900 mb-4">"Intentions"</h1>
+        <h1 class="text-xl font-bold text-gray-900 dark:text-gray-100 mb-4">"Intentions"</h1>
 
-        <div class="bg-white border border-gray-200 rounded-sm p-4 mb-6 flex flex-col gap-3">
-            <h2 class="text-base font-bold text-gray-900">
+        <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-sm p-4 mb-6 flex flex-col gap-3">
+            <h2 class="text-base font-bold text-gray-900 dark:text-gray-100">
                 {move || if editing_id.get().is_some() { "Modifier l'intention" } else { "Créer une intention" }}
             </h2>
             {move || form_error.get().map(|message| view! {
                 <Alert severity=Severity::Error small=true>{message}</Alert>
             })}
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <Suspense fallback=|| view! { <p class="text-sm text-gray-500">"Chargement…"</p> }>
+                <Suspense fallback=|| view! { <p class="text-sm text-gray-500 dark:text-gray-400">"Chargement…"</p> }>
                     {move || Suspend::new(async move {
                         let options = domains.await.unwrap_or_default();
                         let mut select_options = vec![SelectOption::new("", "— Sélectionner un domaine —")];
@@ -326,7 +326,7 @@ fn IntentionsPanel() -> impl IntoView {
             <Alert severity=Severity::Error small=true class="mb-3">{message}</Alert>
         })}
 
-        <Suspense fallback=|| view! { <p class="text-gray-500">"Chargement des intentions…"</p> }>
+        <Suspense fallback=|| view! { <p class="text-gray-500 dark:text-gray-400">"Chargement des intentions…"</p> }>
             {move || Suspend::new(async move {
                 match intentions.await {
                     Err(error) => view! { <Alert severity=Severity::Error>{error.to_string()}</Alert> }.into_any(),
@@ -344,7 +344,7 @@ fn IntentionsPanel() -> impl IntoView {
                                     <tr>
                                         <td class="px-3 py-2">{intention.domain_name}</td>
                                         <td class="px-3 py-2">{intention.name}</td>
-                                        <td class="px-3 py-2 text-gray-600 max-w-md truncate">{intention.agent_context}</td>
+                                        <td class="px-3 py-2 text-gray-600 dark:text-gray-400 max-w-md truncate">{intention.agent_context}</td>
                                         <td class="px-3 py-2">
                                             <div class="flex gap-2">
                                                 <Button

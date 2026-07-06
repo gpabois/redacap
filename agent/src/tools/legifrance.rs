@@ -1,13 +1,16 @@
 //! Outils `legifrance_search` et `legifrance_fetch`, qui interrogent l'API
-//! officielle Légifrance sur le portail PISTE (`lf-engine-app`, v2).
+//! officielle Légifrance sur le portail PISTE (`lf-engine-app`, v2.4.2).
 //!
 //! L'authentification PISTE est de type OAuth2 `client_credentials` : le
 //! jeton est obtenu auprès de `oauth_token_url` puis mis en cache jusqu'à
 //! son expiration. Les corps de requête (`/search`, `/consult/*`) et leurs
 //! champs suivent le contrat documenté par le Swagger officiel de l'API
-//! Légifrance v2 (DTOs `SearchRequestDTO`, `LegiConsultRequest`,
+//! Légifrance v2.4.2 (DTOs `SearchRequestDTO`, `LegiConsultRequest`,
 //! `CodeConsultRequest`, `JuriConsultRequest`, `JorfConsultRequest`,
-//! `ArticleRequest`).
+//! `ArticleRequest`, `CnilConsultRequest`, `AccoConsultRequest`,
+//! `KaliTextConsultRequest`, `KaliTextConsultArticleRequest`,
+//! `CirculaireConsultRequest`). Les fonds de jurisprudence JURI, CETAT, JUFI
+//! et CONSTIT partagent tous le même point de terminaison `/consult/juri`.
 
 use std::time::{Duration, Instant};
 
@@ -278,14 +281,21 @@ impl Tool for LegifranceSearchTool {
                     "description": "Fonds documentaire à interroger",
                     "enum": [
                         "ALL", "LODA_DATE", "LODA_ETAT", "CODE_DATE", "CODE_ETAT",
-                        "JURI", "JORF", "CETAT", "CONSTIT", "KALI", "CIRC", "CNIL", "ACCO"
+                        "JURI", "JUFI", "JORF", "CETAT", "CONSTIT", "KALI", "CIRC", "CNIL", "ACCO"
                     ],
                     "default": "ALL"
                 },
                 "type_champ": {
                     "type": "string",
                     "description": "Champ dans lequel porte la recherche",
-                    "enum": ["ALL", "TITLE", "TABLE", "NOR", "NUM", "ARTICLE", "NUM_ARTICLE", "VISA", "NOTA", "TEXTE"],
+                    "enum": [
+                        "ALL", "TITLE", "TABLE", "NOR", "NUM", "ADVANCED_TEXTE_ID", "NUM_DELIB",
+                        "NUM_DEC", "NUM_ARTICLE", "ARTICLE", "MINISTERE", "VISA", "NOTICE",
+                        "VISA_NOTICE", "TRAVAUX_PREP", "SIGNATURE", "NOTA", "NUM_AFFAIRE",
+                        "ABSTRATS", "RESUMES", "TEXTE", "ECLI", "NUM_LOI_DEF", "TYPE_DECISION",
+                        "NUMERO_INTERNE", "REF_PUBLI", "RESUME_CIRC", "TEXTE_REF",
+                        "TITRE_LOI_DEF", "RAISON_SOCIALE", "MOTS_CLES", "IDCC"
+                    ],
                     "default": "ALL"
                 },
                 "type_recherche": {
@@ -343,7 +353,8 @@ enum FetchArguments {
     },
     /// `/consult/code` : article ou section d'un code, identifié par le
     /// Chronical ID du code et une date de vigueur ; `sctCid` cible une
-    /// section précise.
+    /// section précise. `abrogated` permet de consulter une version abrogée
+    /// du code.
     #[serde(rename = "code")]
     Code {
         #[serde(rename = "textId")]
@@ -352,9 +363,12 @@ enum FetchArguments {
         date: String,
         #[serde(rename = "sctCid", default)]
         sct_cid: Option<String>,
+        #[serde(default)]
+        abrogated: Option<bool>,
     },
-    /// `/consult/juri` : décision de jurisprudence, identifiée par son
-    /// identifiant `JURITEXT...`.
+    /// `/consult/juri` : décision de jurisprudence (fonds JURI, CETAT, JUFI
+    /// ou CONSTIT, tous servis par ce même point de terminaison), identifiée
+    /// par son identifiant `JURITEXT...`/`CETATTEXT...`.
     #[serde(rename = "juri")]
     Juri {
         #[serde(rename = "textId")]
@@ -371,6 +385,28 @@ enum FetchArguments {
     /// identifiant `LEGIARTI...`.
     #[serde(rename = "getArticle")]
     GetArticle { id: String },
+    /// `/consult/cnil` : délibération CNIL, identifiée par son identifiant
+    /// `CNILTEXT...`.
+    #[serde(rename = "cnil")]
+    Cnil {
+        #[serde(rename = "textId")]
+        text_id: String,
+    },
+    /// `/consult/acco` : accord d'entreprise, identifié par son identifiant
+    /// `ACCOTEXT...`.
+    #[serde(rename = "acco")]
+    Acco { id: String },
+    /// `/consult/kaliText` : convention collective, identifiée par son
+    /// identifiant `KALITEXT...` (ou celui d'un de ses éléments enfants).
+    #[serde(rename = "kaliText")]
+    KaliText { id: String },
+    /// `/consult/kaliArticle` : article d'une convention collective,
+    /// identifié par son identifiant `KALIARTI...`.
+    #[serde(rename = "kaliArticle")]
+    KaliArticle { id: String },
+    /// `/consult/circulaire` : circulaire, identifiée par son identifiant.
+    #[serde(rename = "circulaire")]
+    Circulaire { id: String },
 }
 
 fn build_fetch_request(args: &FetchArguments) -> (&'static str, Value) {
@@ -383,22 +419,25 @@ fn build_fetch_request(args: &FetchArguments) -> (&'static str, Value) {
             text_id,
             date,
             sct_cid,
+            abrogated,
         } => {
             let mut body = json!({ "textId": text_id, "date": date });
             if let Some(sct_cid) = sct_cid {
                 body["sctCid"] = json!(sct_cid);
             }
+            if let Some(abrogated) = abrogated {
+                body["abrogated"] = json!(abrogated);
+            }
             ("/consult/code", body)
         }
-        FetchArguments::Juri { text_id } => {
-            ("/consult/juri", json!({ "textId": text_id }))
-        }
-        FetchArguments::Jorf { text_cid } => {
-            ("/consult/jorf", json!({ "textCid": text_cid }))
-        }
-        FetchArguments::GetArticle { id } => {
-            ("/consult/getArticle", json!({ "id": id }))
-        }
+        FetchArguments::Juri { text_id } => ("/consult/juri", json!({ "textId": text_id })),
+        FetchArguments::Jorf { text_cid } => ("/consult/jorf", json!({ "textCid": text_cid })),
+        FetchArguments::GetArticle { id } => ("/consult/getArticle", json!({ "id": id })),
+        FetchArguments::Cnil { text_id } => ("/consult/cnil", json!({ "textId": text_id })),
+        FetchArguments::Acco { id } => ("/consult/acco", json!({ "id": id })),
+        FetchArguments::KaliText { id } => ("/consult/kaliText", json!({ "id": id })),
+        FetchArguments::KaliArticle { id } => ("/consult/kaliArticle", json!({ "id": id })),
+        FetchArguments::Circulaire { id } => ("/consult/circulaire", json!({ "id": id })),
     }
 }
 
@@ -425,8 +464,11 @@ impl Tool for LegifranceFetchTool {
         "Récupère le contenu complet d'un texte ou d'un article Légifrance par identifiant \
          (résultat de legifrance_search). La route à utiliser dépend du fonds du texte : \
          `legiPart` pour un texte LODA (loi, décret, arrêté), `code` pour un article/section \
-         de code, `juri` pour une décision de jurisprudence, `jorf` pour un texte JORF, \
-         `getArticle` pour un article isolé (identifiant LEGIARTI...)."
+         de code, `juri` pour une décision de jurisprudence (fonds JURI, CETAT, JUFI ou \
+         CONSTIT), `jorf` pour un texte JORF, `getArticle` pour un article isolé (identifiant \
+         LEGIARTI...), `cnil` pour une délibération CNIL, `acco` pour un accord d'entreprise, \
+         `kaliText`/`kaliArticle` pour une convention collective ou l'un de ses articles, \
+         `circulaire` pour une circulaire."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -436,11 +478,14 @@ impl Tool for LegifranceFetchTool {
                 "route": {
                     "type": "string",
                     "description": "Point de terminaison de consultation à utiliser, selon le fonds du texte",
-                    "enum": ["legiPart", "code", "juri", "jorf", "getArticle"]
+                    "enum": [
+                        "legiPart", "code", "juri", "jorf", "getArticle",
+                        "cnil", "acco", "kaliText", "kaliArticle", "circulaire"
+                    ]
                 },
                 "textId": {
                     "type": "string",
-                    "description": "Chronical ID du texte (requis pour les routes legiPart, code, juri)"
+                    "description": "Chronical ID du texte (requis pour les routes legiPart, code, juri, cnil)"
                 },
                 "date": {
                     "type": "string",
@@ -450,13 +495,18 @@ impl Tool for LegifranceFetchTool {
                     "type": "string",
                     "description": "Chronical ID de la section du code à consulter (route code, optionnel)"
                 },
+                "abrogated": {
+                    "type": "boolean",
+                    "description": "Consulte une version abrogée du code (route code, optionnel)"
+                },
                 "textCid": {
                     "type": "string",
                     "description": "Chronical ID du texte JORF (requis pour la route jorf)"
                 },
                 "id": {
                     "type": "string",
-                    "description": "Identifiant de l'article (requis pour la route getArticle, ex: LEGIARTI...)"
+                    "description": "Identifiant du document (requis pour les routes getArticle [LEGIARTI...], \
+                         acco [ACCOTEXT...], kaliText [KALITEXT...], kaliArticle [KALIARTI...], circulaire)"
                 }
             },
             "required": ["route"]
@@ -527,9 +577,12 @@ mod tests {
                 .iter()
                 .any(|filtre| filtre["facette"] == "NATURE" && filtre["valeurs"][0] == "ARRETE")
         );
-        assert!(filtres.iter().any(|filtre| filtre["facette"]
-            == "DATE_SIGNATURE"
-            && filtre["dates"]["start"] == "2020-01-01"));
+        assert!(
+            filtres
+                .iter()
+                .any(|filtre| filtre["facette"] == "DATE_SIGNATURE"
+                    && filtre["dates"]["start"] == "2020-01-01")
+        );
     }
 
     #[test]
@@ -552,12 +605,80 @@ mod tests {
             text_id: "LEGITEXT000006074220".to_string(),
             date: "2021-04-15".to_string(),
             sct_cid: Some("LEGISCTA000006159510".to_string()),
+            abrogated: None,
         };
 
         let (path, body) = build_fetch_request(&args);
 
         assert_eq!(path, "/consult/code");
         assert_eq!(body["sctCid"], "LEGISCTA000006159510");
+        assert!(body.get("abrogated").is_none());
+    }
+
+    #[test]
+    fn fetch_request_dispatches_code_route_with_abrogated_flag() {
+        let args = FetchArguments::Code {
+            text_id: "LEGITEXT000006074220".to_string(),
+            date: "2021-04-15".to_string(),
+            sct_cid: None,
+            abrogated: Some(true),
+        };
+
+        let (path, body) = build_fetch_request(&args);
+
+        assert_eq!(path, "/consult/code");
+        assert_eq!(body["abrogated"], true);
+    }
+
+    #[test]
+    fn fetch_request_dispatches_cnil_route() {
+        let args = FetchArguments::Cnil {
+            text_id: "CNILTEXT000017652361".to_string(),
+        };
+
+        let (path, body) = build_fetch_request(&args);
+
+        assert_eq!(path, "/consult/cnil");
+        assert_eq!(body["textId"], "CNILTEXT000017652361");
+    }
+
+    #[test]
+    fn fetch_request_dispatches_acco_route() {
+        let args = FetchArguments::Acco {
+            id: "ACCOTEXT000037731479".to_string(),
+        };
+
+        let (path, body) = build_fetch_request(&args);
+
+        assert_eq!(path, "/consult/acco");
+        assert_eq!(body["id"], "ACCOTEXT000037731479");
+    }
+
+    #[test]
+    fn fetch_request_dispatches_kali_text_and_article_routes() {
+        let (path, body) = build_fetch_request(&FetchArguments::KaliText {
+            id: "KALITEXT000005677408".to_string(),
+        });
+        assert_eq!(path, "/consult/kaliText");
+        assert_eq!(body["id"], "KALITEXT000005677408");
+
+        let (path, body) = build_fetch_request(&FetchArguments::KaliArticle {
+            id: "KALIARTI000005833238".to_string(),
+        });
+        assert_eq!(path, "/consult/kaliArticle");
+        assert_eq!(body["id"], "KALIARTI000005833238");
+    }
+
+    #[test]
+    fn fetch_request_dispatches_circulaire_route() {
+        let args = FetchArguments::Circulaire {
+            id: "44128".to_string(),
+        };
+
+        let (path, body) = build_fetch_request(&args);
+
+        assert_eq!(path, "/consult/circulaire");
+        assert_eq!(body["id"], "44128");
     }
 
     #[test]

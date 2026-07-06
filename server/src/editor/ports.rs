@@ -10,7 +10,8 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use agent::ToolError;
 use agent::ports::{
-    LegalActEditorPort, Question, QuestionAnswer, UserInteractionPort, ValidationReport,
+    IntentionPort, IntentionSummary, LegalActEditorPort, Question, QuestionAnswer,
+    UserInteractionPort, ValidationReport,
 };
 use agent::{AgentObserver, ToolCall};
 use legal_act::{BodyNodeId, BodyRead, BodyWrite, NodeKind, NodeSpec, YrsBody};
@@ -217,6 +218,115 @@ impl LegalActEditorPort for WsLegalActEditor {
             body.set_title(title);
         }
         self.broadcast_diff(&before).await;
+        Ok(())
+    }
+}
+
+/// Implémentation de [`IntentionPort`] qui associe/retire des intentions du
+/// domaine au projet `legal_act_id`, en journalisant chaque changement de la
+/// même façon que le panneau « Paramètres » de l'éditeur (voir
+/// `app::pages::project_intentions`) : seules les intentions du domaine du
+/// projet peuvent lui être associées.
+pub struct WsIntentions {
+    pool: storage::Pool,
+    legal_act_id: ID,
+    author_id: ID,
+}
+
+impl WsIntentions {
+    #[must_use]
+    pub fn new(pool: storage::Pool, legal_act_id: ID, author_id: ID) -> Self {
+        Self {
+            pool,
+            legal_act_id,
+            author_id,
+        }
+    }
+
+    async fn audit(&self, action: &str, intention_id: ID) {
+        let _ = storage::audit_log::record_audit_event(
+            &self.pool,
+            shared::model::CreateAuditEvent {
+                actor_id: Some(self.author_id),
+                actor_ip: None,
+                action: action.to_string(),
+                resource_type: "legal_act_intention".to_string(),
+                resource_id: Some(intention_id),
+                details: None,
+            },
+        )
+        .await;
+    }
+}
+
+#[async_trait::async_trait]
+impl IntentionPort for WsIntentions {
+    async fn list(&self) -> Result<Vec<IntentionSummary>, ToolError> {
+        let legal_act = storage::legal_act::get_legal_act(&self.pool, &self.legal_act_id)
+            .await
+            .map_err(|error| ToolError::Other(error.to_string()))?;
+        let domain_intentions =
+            storage::intention::list_intentions_by_domain(&self.pool, &legal_act.domain_id)
+                .await
+                .map_err(|error| ToolError::Other(error.to_string()))?;
+        let attached =
+            storage::intention::list_intentions_for_legal_act(&self.pool, &self.legal_act_id)
+                .await
+                .map_err(|error| ToolError::Other(error.to_string()))?;
+        let attached_ids: std::collections::HashSet<ID> =
+            attached.into_iter().map(|intention| intention.id).collect();
+
+        Ok(domain_intentions
+            .into_iter()
+            .map(|intention| IntentionSummary {
+                attached: attached_ids.contains(&intention.id),
+                id: intention.id.to_string(),
+                name: intention.name,
+            })
+            .collect())
+    }
+
+    async fn add(&self, intention_id: &str) -> Result<(), ToolError> {
+        let intention_id: ID = intention_id.parse().map_err(|_| {
+            ToolError::InvalidArguments("identifiant d'intention invalide".to_string())
+        })?;
+
+        let legal_act = storage::legal_act::get_legal_act(&self.pool, &self.legal_act_id)
+            .await
+            .map_err(|error| ToolError::Other(error.to_string()))?;
+        let intention = storage::intention::get_intention(&self.pool, &intention_id)
+            .await
+            .map_err(|_| ToolError::InvalidArguments("intention introuvable".to_string()))?;
+        if intention.domain_id != legal_act.domain_id {
+            return Err(ToolError::InvalidArguments(
+                "cette intention n'appartient pas au domaine du projet".to_string(),
+            ));
+        }
+
+        storage::intention::add_intention_to_legal_act(
+            &self.pool,
+            &self.legal_act_id,
+            &intention_id,
+        )
+        .await
+        .map_err(|error| ToolError::Other(error.to_string()))?;
+        self.audit("add", intention_id).await;
+        Ok(())
+    }
+
+    async fn remove(&self, intention_id: &str) -> Result<(), ToolError> {
+        let intention_id: ID = intention_id.parse().map_err(|_| {
+            ToolError::InvalidArguments("identifiant d'intention invalide".to_string())
+        })?;
+
+        storage::intention::remove_intention_from_legal_act(
+            &self.pool,
+            &self.legal_act_id,
+            &intention_id,
+        )
+        .await
+        .map_err(|error| ToolError::Other(error.to_string()))?;
+        self.audit("remove", intention_id).await;
         Ok(())
     }
 }
