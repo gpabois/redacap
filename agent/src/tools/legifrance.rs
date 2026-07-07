@@ -97,10 +97,20 @@ impl LegifranceClient {
                 ("scope", "openid"),
             ])
             .send()
-            .await?
-            .error_for_status()?
-            .json::<OAuthTokenResponse>()
             .await?;
+
+        let status = response.status();
+        let body = response.text().await?;
+        if !status.is_success() {
+            return Err(ToolError::Other(format!(
+                "échec de l'authentification PISTE ({status}) : {body}"
+            )));
+        }
+        let response: OAuthTokenResponse = serde_json::from_str(&body).map_err(|error| {
+            ToolError::Other(format!(
+                "réponse OAuth PISTE invalide ({error}) : {body}"
+            ))
+        })?;
 
         // Marge de sécurité pour éviter d'utiliser un jeton expirant pendant la requête suivante.
         let expires_at =
@@ -123,12 +133,21 @@ impl LegifranceClient {
             .bearer_auth(access_token)
             .json(body)
             .send()
-            .await?
-            .error_for_status()?
-            .json::<Value>()
             .await?;
 
-        Ok(response)
+        let status = response.status();
+        let text = response.text().await?;
+        if !status.is_success() {
+            return Err(ToolError::Other(format!(
+                "échec de la requête Légifrance {path} ({status}) : {text}\ncorps envoyé : {body}"
+            )));
+        }
+
+        serde_json::from_str(&text).map_err(|error| {
+            ToolError::Other(format!(
+                "réponse Légifrance invalide pour {path} ({error}) : {text}"
+            ))
+        })
     }
 }
 
@@ -194,6 +213,23 @@ fn default_page_number() -> u32 {
 
 fn default_page_size() -> u32 {
     10
+}
+
+/// Fonds pour lesquels la facette `NATURE` est significative (nomenclature
+/// LODA : `LOI`, `ORDONNANCE`, `DECRET`, `ARRETE`...). Sur les autres fonds
+/// (notamment l'index fédéré `ALL`), cette facette n'existe pas et son envoi
+/// déclenche une exception non gérée côté PISTE (500 sans détail).
+const NATURE_FILTER_COMPATIBLE_FONDS: [&str; 2] = ["LODA_DATE", "LODA_ETAT"];
+
+fn validate_search_arguments(args: &SearchArguments) -> Result<(), ToolError> {
+    if !args.nature.is_empty() && !NATURE_FILTER_COMPATIBLE_FONDS.contains(&args.fond.as_str()) {
+        return Err(ToolError::InvalidArguments(format!(
+            "le filtre `nature` n'est disponible que pour les fonds {NATURE_FILTER_COMPATIBLE_FONDS:?} \
+             (fond demandé : `{}`) ; retirer `nature` ou choisir un de ces fonds",
+            args.fond
+        )));
+    }
+    Ok(())
 }
 
 fn nature_filter(nature: &[String]) -> Option<Value> {
@@ -316,8 +352,17 @@ impl Tool for LegifranceSearchTool {
                 "page_size": { "type": "integer", "description": "Nombre de résultats par page (max 100)", "default": 10 },
                 "nature": {
                     "type": "array",
-                    "description": "Restreint aux natures de texte indiquées (ex: [\"ARRETE\"])",
-                    "items": { "type": "string" }
+                    "description": "Restreint aux natures de texte indiquées (ex: [\"ARRETE\"]). \
+                         Nécessite `fond`=\"LODA_DATE\" ou \"LODA_ETAT\" (facette absente des \
+                         autres fonds, y compris \"ALL\")",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "LOI", "ORDONNANCE", "DECRET", "DECRET_LOI", "ARRETE",
+                            "CONSTITUTION", "DECISION", "CONVENTION", "DECLARATION",
+                            "ACCORD_FONCTION_PUBLIQUE"
+                        ]
+                    }
                 },
                 "date_signature_debut": { "type": "string", "description": "Date de signature minimale, format AAAA-MM-JJ" },
                 "date_signature_fin": { "type": "string", "description": "Date de signature maximale, format AAAA-MM-JJ" }
@@ -329,6 +374,7 @@ impl Tool for LegifranceSearchTool {
     async fn call(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
         let args: SearchArguments = serde_json::from_value(arguments)
             .map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
+        validate_search_arguments(&args)?;
 
         let body = build_search_body(&args);
         let response = self.client.post("/search", &body).await?;
@@ -555,10 +601,29 @@ mod tests {
     }
 
     #[test]
+    fn validate_rejects_nature_filter_on_incompatible_fond() {
+        let args = SearchArguments {
+            query: "arrêté bruit".to_string(),
+            fond: "ALL".to_string(),
+            type_champ: default_type_champ(),
+            type_recherche: default_type_recherche(),
+            sort: default_sort(),
+            page_number: default_page_number(),
+            page_size: default_page_size(),
+            nature: vec!["ARRETE".to_string()],
+            date_signature_debut: None,
+            date_signature_fin: None,
+        };
+
+        let error = validate_search_arguments(&args).unwrap_err();
+        assert!(matches!(error, ToolError::InvalidArguments(_)));
+    }
+
+    #[test]
     fn search_body_includes_nature_and_date_filters() {
         let args = SearchArguments {
             query: "seveso".to_string(),
-            fond: default_fond(),
+            fond: "LODA_DATE".to_string(),
             type_champ: default_type_champ(),
             type_recherche: default_type_recherche(),
             sort: default_sort(),
@@ -568,6 +633,8 @@ mod tests {
             date_signature_debut: Some("2020-01-01".to_string()),
             date_signature_fin: None,
         };
+
+        assert!(validate_search_arguments(&args).is_ok());
 
         let body = build_search_body(&args);
         let filtres = body["recherche"]["filtres"].as_array().unwrap();
