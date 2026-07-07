@@ -108,3 +108,45 @@ pub struct LegalActSnapshotConsolidation {
     pub snapshot: Vec<u8>,
     pub seq: i64,
 }
+
+/// Mise à jour incrémentale Yrs journalisée pour les commentaires/notes de
+/// travail (voir `legal_act::Review`) d'un acte légal. Pendant de
+/// [`LegalActUpdate`] pour ce second document Yrs, persisté dans une table
+/// séparée (`legal_act_review_updates`) : les deux CRDT (corps, commentaires)
+/// évoluent indépendamment et ne partagent ni journal ni instantané.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LegalActReviewUpdate {
+    pub legal_act_id: ID,
+    pub seq: i64,
+    pub update: Vec<u8>,
+    pub author_id: ID,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Dernier instantané consolidé des commentaires/notes de travail d'un acte
+/// légal. Pendant de [`LegalActSnapshot`] pour ce second document Yrs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LegalActReviewSnapshot {
+    pub legal_act_id: ID,
+    pub snapshot: Vec<u8>,
+    pub seq: i64,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Attributs nécessaires à la journalisation d'une mise à jour Yrs
+/// incrémentale des commentaires/notes de travail.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CreateLegalActReviewUpdate {
+    pub legal_act_id: ID,
+    pub seq: i64,
+    pub update: Vec<u8>,
+    pub author_id: ID,
+}
+
+/// Contenu consolidé à écrire lors d'une consolidation de snapshot des
+/// commentaires/notes de travail. Voir [`LegalActSnapshotConsolidation`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LegalActReviewSnapshotConsolidation {
+    pub snapshot: Vec<u8>,
+    pub seq: i64,
+}

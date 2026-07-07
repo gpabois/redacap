@@ -125,11 +125,12 @@ fn PageEditorProjet() -> impl IntoView {
                 let current_user_id = identity.as_ref().map(|identity| identity.user_id.clone());
                 // Exclut l'utilisateur courant de la liste (sa propre bulle
                 // d'avatar est déjà affichée séparément, voir `user_initial`).
+                let connected_users_current_user_id = current_user_id.clone();
                 let connected_users = Signal::derive(move || {
                     room.connected_users
                         .get()
                         .into_iter()
-                        .filter(|user| Some(&user.user_id) != current_user_id.as_ref())
+                        .filter(|user| Some(&user.user_id) != connected_users_current_user_id.as_ref())
                         .map(|user| ConnectedUser {
                             user_id: user.user_id,
                             initial: user.initial,
@@ -146,6 +147,17 @@ fn PageEditorProjet() -> impl IntoView {
                         <LegalActEditor
                             autorite="Préfet\nDe Normandie"
                             body=room.body
+                            reviews=room.reviews
+                            current_user=current_user_id.clone()
+                            // TODO(permissions) : tant que le modèle de
+                            // permissions par projet n'est pas branché
+                            // jusqu'ici, tout utilisateur pouvant atteindre
+                            // cette page (déjà authentifié, voir
+                            // `editor_header_identity`) est considéré comme
+                            // rédacteur, au même niveau de confiance que le
+                            // reste de l'éditeur (aucun mode lecture seule
+                            // n'y est encore appliqué non plus).
+                            can_edit=true
                             agent_messages=room.agent_messages
                             agent_pending=room.agent_pending
                             on_agent_send=Callback::new(move |task| room.run_agent(task))

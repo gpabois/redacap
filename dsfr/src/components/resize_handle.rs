@@ -25,15 +25,20 @@ pub fn ResizeHandle(
     // glissement, `None` sinon.
     let drag_origin = RwSignal::<Option<(f64, f64)>>::new(None);
 
-    window_event_listener(leptos::ev::mousemove, move |ev| {
-        if let Some((origin_x, origin_width)) = drag_origin.get_untracked() {
+    let mousemove_handle = window_event_listener(leptos::ev::mousemove, move |ev| {
+        if let Some((origin_x, origin_width)) = drag_origin.try_get_untracked().flatten() {
             let delta = f64::from(ev.client_x()) - origin_x;
             width.set((origin_width - delta).clamp(min_width, max_width));
         }
     });
 
-    window_event_listener(leptos::ev::mouseup, move |_| {
+    let mouseup_handle = window_event_listener(leptos::ev::mouseup, move |_| {
         drag_origin.set(None);
+    });
+
+    on_cleanup(move || {
+        mousemove_handle.remove();
+        mouseup_handle.remove();
     });
 
     view! {

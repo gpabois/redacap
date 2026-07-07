@@ -6,9 +6,10 @@ use dsfr::{BlocMarianneInline, ResizeHandle, TabPanel, Tabs};
 use super::content::ContentSubtree;
 use super::context::{expect_editor_context, provide_editor_context};
 use super::header::{ConnectedUser, EditorHeader};
+use super::review::ReviewPanel;
 use super::widgets::{InlineEditableDiv, TOOLBAR_BTN_CLASS};
 use crate::traits::node::{BodyRead, BodyWrite};
-use crate::{Body, BodyNodeId, NodeKind, NodeSpec};
+use crate::{Body, BodyNodeId, NodeKind, NodeSpec, Review};
 
 /// Largeur initiale du panneau agent IA, en pixels (équivalente à l'ancienne
 /// classe Tailwind fixe `w-80`).
@@ -34,6 +35,21 @@ const AGENT_PANEL_MAX_WIDTH: f64 = 640.0;
 #[component]
 pub fn LegalActEditor(
     body: RwSignal<Body>,
+    /// Commentaires et notes de travail du projet (voir [`crate::Review`]),
+    /// possédés par la page hôte au même titre que `body`, notamment pour
+    /// pouvoir y appliquer des mises à jour Yrs reçues d'un salon de
+    /// collaboration. Un [`Review::direct`] local est créé si absent.
+    #[prop(optional)]
+    reviews: Option<RwSignal<Review>>,
+    /// Identité affichée de l'utilisateur courant : auteur des commentaires
+    /// qu'il crée. `None` (page hôte non authentifiée) masque la création
+    /// de commentaires.
+    current_user: Option<String>,
+    /// `true` si l'utilisateur courant a les droits d'édition sur ce projet
+    /// (voir exigence : un commentaire peut être résolu par son auteur ou
+    /// par un rédacteur).
+    #[prop(optional)]
+    can_edit: bool,
     /// Autorité signataire (ex. « PRÉFET DE LA RÉGION ÎLE-DE-FRANCE »),
     /// affichée dans le bloc-marque en en-tête de la première page. `None`
     /// tant que l'acte n'a pas d'autorité résolue (voir
@@ -98,7 +114,8 @@ pub fn LegalActEditor(
     #[prop(optional)]
     children: Option<ChildrenFn>,
 ) -> impl IntoView {
-    let ctx = provide_editor_context(body);
+    let reviews = reviews.unwrap_or_else(|| RwSignal::new(Review::direct()));
+    let ctx = provide_editor_context(body, reviews, current_user, can_edit);
     if let Some(on_agent_target) = on_agent_target {
         Effect::new(move |_| on_agent_target.run(ctx.agent_target.get()));
     }
@@ -121,7 +138,7 @@ pub fn LegalActEditor(
     let children = StoredValue::new(children);
 
     let has_agent = agent_cfg.is_some();
-    let show_agent = RwSignal::new(true);
+    let show_agent = ctx.side_panel_open;
     let agent_panel_width = RwSignal::new(AGENT_PANEL_DEFAULT_WIDTH);
     let agent_panel_open = Signal::from(show_agent.read_only());
     let on_toggle_agent = Callback::new(move |()| {
@@ -130,7 +147,7 @@ pub fn LegalActEditor(
         }
     });
 
-    let selected_tab = RwSignal::new(0);
+    let selected_tab = ctx.side_panel_tab;
 
     view! {
         <div class="legal-act-editor flex flex-col min-h-screen max-h-screen text-base leading-relaxed">
@@ -148,8 +165,11 @@ pub fn LegalActEditor(
                 <main class="flex-1 overflow-y-auto bg-gray-200 dark:bg-gray-800 print:bg-white print:overflow-visible">
                     // Le papier reste blanc en mode sombre (métaphore de la
                     // feuille imprimée) : seul le plateau qui l'entoure
-                    // bascule en sombre.
-                    <div class="legal-act-page my-4 mx-auto bg-white">
+                    // bascule en sombre. `text-gray-900` fixe la couleur du
+                    // texte indépendamment du thème : sans cela, il hérite
+                    // de `dark:text-gray-100` posé sur `<main>` (voir
+                    // `app::app::App`) et devient illisible sur fond blanc.
+                    <div class="legal-act-page my-4 mx-auto bg-white text-gray-900">
                         {autorite.map(|a| view! {
                             <BlocMarianneInline autorite=a class="mb-8"/>
                         })}
@@ -157,8 +177,7 @@ pub fn LegalActEditor(
                         <EditBody/>
                     </div>
                 </main>
-                {move || (show_agent.get() && has_agent).then(|| {
-                    let (msgs, pending, on_send) = agent_cfg.expect("has_agent est vrai");
+                {move || show_agent.get().then(|| {
                     view! {
                         <div class="no-print contents">
                             <ResizeHandle
@@ -169,20 +188,25 @@ pub fn LegalActEditor(
                             <aside class="shrink-0 overflow-hidden flex flex-col min-h-0" style:width=move || format!("{}px", agent_panel_width.get())>
                                 <Tabs titles=vec!["Marie", "Commentaires", "Paramètres"] selected=selected_tab></Tabs>
                                 <TabPanel index=0 selected=selected_tab class="flex-1 flex flex-col min-h-0">
-                                    <AgentTargetIndicator/>
-                                    <AgentPanel
-                                        messages=msgs
-                                        pending=pending
-                                        on_send=move |text: String| on_send.run(text)
-                                        interaction=agent_interaction
-                                        on_respond=on_agent_respond
-                                        auto_accept=agent_auto_accept
-                                        on_toggle_auto_accept=on_agent_toggle_auto_accept
-                                        on_clear_history=on_agent_clear_history
-                                    />
+                                    {has_agent.then(|| {
+                                        let (msgs, pending, on_send) = agent_cfg.expect("has_agent est vrai");
+                                        view! {
+                                            <AgentTargetIndicator/>
+                                            <AgentPanel
+                                                messages=msgs
+                                                pending=pending
+                                                on_send=move |text: String| on_send.run(text)
+                                                interaction=agent_interaction
+                                                on_respond=on_agent_respond
+                                                auto_accept=agent_auto_accept
+                                                on_toggle_auto_accept=on_agent_toggle_auto_accept
+                                                on_clear_history=on_agent_clear_history
+                                            />
+                                        }.into_any()
+                                    })}
                                 </TabPanel>
-                                <TabPanel index=1 selected=selected_tab class="flex-1 flex flex-col min-h-0">
-                                    <div></div>
+                                <TabPanel index=1 selected=selected_tab class="flex-1 flex flex-col min-h-0 overflow-y-auto">
+                                    <ReviewPanel/>
                                 </TabPanel>
                                 <TabPanel index=2 selected=selected_tab class="flex-1 flex flex-col min-h-0 overflow-y-auto">
                                     {children.get_value().map(|children| children())}
@@ -348,9 +372,7 @@ fn AgentTargetIndicator() -> impl IntoView {
 /// [`super::context::EditorContext::agent_target`]) — évite qu'une cible
 /// reste accrochée à un nœud qui n'existe plus.
 fn remove_targetable_node(ctx: super::context::EditorContext, node_id: BodyNodeId) {
-    ctx.body.update(|b| {
-        let _ = b.remove_node(node_id);
-    });
+    ctx.remove_node_with_comments(node_id);
     if ctx.agent_target.get_untracked() == Some(node_id) {
         ctx.agent_target.set(None);
     }

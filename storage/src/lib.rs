@@ -24,6 +24,7 @@ pub mod external_credentials;
 pub mod group;
 pub mod intention;
 pub mod legal_act;
+pub mod legal_act_review;
 pub mod oidc_provider;
 pub mod permission;
 pub mod session;

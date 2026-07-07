@@ -43,6 +43,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum_extra::extract::PrivateCookieJar;
+use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use legal_act::BodyNodeId;
 use shared::id::ID;
@@ -229,7 +230,29 @@ async fn handle_socket(
         }
     }
 
+    // État complet du document de commentaires/notes de travail (voir
+    // `legal_act::Review`), pendant de la trame binaire `initial_update`
+    // ci-dessus pour le corps de l'acte, mais relayé sur le canal texte
+    // (voir `ClientMessage::ReviewUpdate`/`ServerMessage::ReviewUpdate`).
+    let initial_review_update = {
+        let review = room.review.lock().await;
+        review
+            .doc()
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default())
+    };
+    let review_message = ServerMessage::ReviewUpdate {
+        update: base64::engine::general_purpose::STANDARD.encode(initial_review_update),
+    };
+    if let Ok(text) = serde_json::to_string(&review_message) {
+        if sink.send(Message::Text(text.into())).await.is_err() {
+            broadcast_departure(&room, &room_id, &state, &author_id);
+            return;
+        }
+    }
+
     let mut room_rx = room.updates.subscribe();
+    let mut review_rx = room.review_updates.subscribe();
     let mut presence_rx = room.presence.subscribe();
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<ServerMessage>();
     let (answer_tx, answer_rx) = mpsc::unbounded_channel::<serde_json::Value>();
@@ -240,6 +263,19 @@ async fn handle_socket(
                 update = room_rx.recv() => match update {
                     Ok(bytes) => {
                         if sink.send(Message::Binary(bytes.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                },
+                update = review_rx.recv() => match update {
+                    Ok(bytes) => {
+                        let message = ServerMessage::ReviewUpdate {
+                            update: base64::engine::general_purpose::STANDARD.encode(bytes),
+                        };
+                        let Ok(text) = serde_json::to_string(&message) else { continue };
+                        if sink.send(Message::Text(text.into())).await.is_err() {
                             break;
                         }
                     }
@@ -350,6 +386,11 @@ async fn handle_socket(
                         history.clear();
                     }
                 }
+                Ok(ClientMessage::ReviewUpdate { update }) => {
+                    if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(update) {
+                        apply_and_broadcast_review(&room, &author_id, &bytes).await;
+                    }
+                }
                 Err(_) => {}
             },
             Message::Close(_) => break,
@@ -387,6 +428,22 @@ async fn apply_and_broadcast(room: &Arc<EditorRoom>, author_id: &ID, bytes: &[u8
         }
     }
     room.record_and_broadcast(author_id, bytes.to_vec()).await;
+}
+
+/// Pendant de [`apply_and_broadcast`] pour le document de commentaires/notes
+/// de travail (voir [`ClientMessage::ReviewUpdate`]).
+async fn apply_and_broadcast_review(room: &Arc<EditorRoom>, author_id: &ID, bytes: &[u8]) {
+    let Ok(update) = Update::decode_v1(bytes) else {
+        return;
+    };
+    {
+        let review = room.review.lock().await;
+        if review.doc().transact_mut().apply_update(update).is_err() {
+            return;
+        }
+    }
+    room.record_and_broadcast_review(author_id, bytes.to_vec())
+        .await;
 }
 
 /// Résout le modèle IA actif (voir `/admin/ai-models`,

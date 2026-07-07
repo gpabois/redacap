@@ -1,5 +1,17 @@
 use crate::cursor::{Cursor, Selection};
 
+/// Amorce d'un commentaire en cours de composition dans le panneau latéral
+/// (voir [`super::context::EditorContext::pending_comment`] et
+/// [`super::review::ReviewPanel`]) : `selection`/`excerpt` sont renseignés
+/// quand le commentaire est ancré à un extrait de texte (voir le bouton
+/// "Commenter" de [`super::header::ContentToolbar`]), `None` pour un
+/// commentaire général.
+#[derive(Debug, Clone, Default)]
+pub struct PendingComment {
+    pub selection: Option<Selection>,
+    pub excerpt: Option<String>,
+}
+
 /// Identifiant d'un curseur collaboratif (un par pair connecté).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CursorId(pub u64);

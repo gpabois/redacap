@@ -30,6 +30,10 @@ pub enum ClientMessage {
     /// plutôt que de poursuivre celle en cours (voir
     /// `server::protocol::ClientMessage::ClearHistory`).
     ClearHistory,
+    /// Mise à jour Yrs (base64) du document de commentaires/notes de
+    /// travail, produite par une édition locale (voir
+    /// `server::protocol::ClientMessage::ReviewUpdate`).
+    ReviewUpdate { update: String },
 }
 
 #[derive(Debug, Deserialize)]
@@ -78,6 +82,10 @@ pub enum ServerMessage {
         ok: bool,
         output: String,
     },
+    /// Pendant de [`ClientMessage::ReviewUpdate`] : état complet (à la
+    /// connexion) puis mises à jour incrémentales (base64) du document de
+    /// commentaires/notes de travail.
+    ReviewUpdate { update: String },
 }
 
 /// Identité d'un utilisateur connecté à la salle (voir

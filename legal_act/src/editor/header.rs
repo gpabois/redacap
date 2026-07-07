@@ -266,8 +266,54 @@ fn ContentToolbar() -> impl IntoView {
                     NodeKind::TableCell  => view! { <TableContentToolbar cell_id=node_id/> }.into_any(),
                     _ => unreachable!(),
                 }}
+                <CommentSelectionButton/>
             </span>
         })
+    }
+}
+
+/// Bouton "Commenter" : capture la sélection navigateur courante dans le
+/// nœud de contenu en cours d'édition (voir
+/// [`super::selection_dom::capture_content_selection`]) et ouvre le
+/// compositeur du panneau Commentaires, pré-rempli avec l'extrait
+/// sélectionné le cas échéant. Utilise `mousedown + preventDefault` pour ne
+/// pas interrompre le focus du div en cours d'édition (même idiome que
+/// [`FormatToolbar`]) : c'est ce qui permet de retrouver l'élément focus via
+/// `document().active_element()`.
+#[component]
+fn CommentSelectionButton() -> impl IntoView {
+    let ctx = expect_editor_context();
+
+    view! {
+        <button
+            type="button"
+            title="Commenter la sélection"
+            class="text-xs text-blue-france dark:text-blue-france-925 hover:underline cursor-pointer"
+            on:mousedown=move |ev| {
+                ev.prevent_default();
+                let seed = document()
+                    .active_element()
+                    .and_then(|active| {
+                        ctx.body
+                            .with_untracked(|b| super::selection_dom::capture_content_selection(&active, b))
+                    });
+                ctx.side_panel_open.set(true);
+                ctx.side_panel_tab.set(1);
+                match seed {
+                    Some((selection, excerpt)) => {
+                        ctx.pending_comment.set(Some(super::state::PendingComment {
+                            selection: Some(selection),
+                            excerpt: Some(excerpt),
+                        }));
+                    }
+                    None => {
+                        ctx.pending_comment.set(Some(super::state::PendingComment::default()));
+                    }
+                }
+            }
+        >
+            "💬 Commenter"
+        </button>
     }
 }
 
@@ -346,7 +392,7 @@ fn ListContentToolbar(item_id: BodyNodeId) -> impl IntoView {
                 class="text-xs text-red-500 hover:text-red-700 px-1"
                 on:mousedown=move |ev| {
                     ev.prevent_default();
-                    ctx.body.update(|b| { let _ = b.remove_node(list_id); });
+                    ctx.remove_node_with_comments(list_id);
                 }
             >"× Liste"</button>
         </div>
@@ -501,11 +547,11 @@ fn TableContentToolbar(cell_id: BodyNodeId) -> impl IntoView {
                 class="text-xs text-red-500 hover:text-red-700 px-1"
                 on:mousedown=move |ev| {
                     ev.prevent_default();
-                    ctx.body.update(|b| {
+                    let table_id = ctx.body.with_untracked(|b| {
                         let row_id = b.parent_of(cell_id).unwrap_or(cell_id);
-                        let table_id = b.parent_of(row_id).unwrap_or(row_id);
-                        let _ = b.remove_node(table_id);
+                        b.parent_of(row_id).unwrap_or(row_id)
                     });
+                    ctx.remove_node_with_comments(table_id);
                 }
             >"× Tableau"</button>
         </div>

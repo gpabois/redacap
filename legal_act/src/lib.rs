@@ -15,6 +15,7 @@ mod direct;
 pub mod editor;
 mod id;
 mod kind;
+mod review;
 pub mod traits;
 
 pub use body::Body;
@@ -24,6 +25,7 @@ pub use direct::DirectBody;
 pub use editor::{ConnectedUser, LegalActEditor};
 pub use id::BodyNodeId;
 pub use kind::{Annexe, Article, Chapitre, NodeKind, NodeSpec, Section, Titre};
+pub use review::{DirectReview, Review, YrsReview};
 pub use traits::node::{BodyRead, BodyWrite};
 pub use traits::{
     Comment, CommentId, LegalActId, LegalActKind, LegalActMeta, LegalActRead, LegalActWrite,

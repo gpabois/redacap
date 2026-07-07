@@ -192,7 +192,8 @@ fn render_panel_entry(entry: PanelEntry) -> AnyView {
             .into_any(),
             PanelRole::Assistant => view! {
                 <div
-                    class="markdown-content self-start bg-blue-france-975 text-gray-900 \
+                    class="markdown-content self-start bg-blue-france-975 dark:bg-gray-800 \
+                           text-gray-900 dark:text-gray-100 \
                            max-w-[80%] rounded-sm px-3 py-1.5 text-sm"
                     inner_html=render_markdown(&message.content)
                 ></div>
@@ -203,7 +204,8 @@ fn render_panel_entry(entry: PanelEntry) -> AnyView {
             let done = reasoning.done;
             view! {
                 <div class="self-start max-w-[80%] rounded-sm border border-dashed \
-                            border-gray-300 bg-gray-50 px-3 py-1.5 text-sm italic text-gray-500">
+                            border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 \
+                            px-3 py-1.5 text-sm italic text-gray-500 dark:text-gray-400">
                     {reasoning.content.clone()}
                     {(!done).then(|| view! { <span class="animate-pulse">"▍"</span> })}
                 </div>
@@ -212,7 +214,7 @@ fn render_panel_entry(entry: PanelEntry) -> AnyView {
         }
         PanelEntry::ToolCall(call) => {
             let (status_label, status_class) = match &call.status {
-                PanelToolCallStatus::Running => ("en cours…", "text-gray-500"),
+                PanelToolCallStatus::Running => ("en cours…", "text-gray-500 dark:text-gray-400"),
                 PanelToolCallStatus::Done { .. } => ("terminé", "text-success"),
                 PanelToolCallStatus::Error { .. } => ("erreur", "text-error"),
             };
@@ -223,19 +225,20 @@ fn render_panel_entry(entry: PanelEntry) -> AnyView {
             };
             view! {
                 <details class="self-start w-full max-w-[90%] rounded-sm border \
-                                border-blue-france-925 bg-gray-50 text-xs">
+                                border-blue-france-925 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-xs">
                     <summary class="flex cursor-pointer select-none items-center gap-2 px-2 py-1">
-                        <span class="font-mono font-bold text-gray-700">{call.name.clone()}</span>
+                        <span class="font-mono font-bold text-gray-700 dark:text-gray-200">{call.name.clone()}</span>
                         <span class=format!("italic {status_class}")>{status_label}</span>
                     </summary>
-                    <div class="space-y-1 whitespace-pre-wrap break-words px-2 pb-2 font-mono">
+                    <div class="space-y-1 whitespace-pre-wrap break-words px-2 pb-2 font-mono \
+                                text-gray-900 dark:text-gray-100">
                         <div>
-                            <span class="text-gray-500">"Arguments : "</span>
+                            <span class="text-gray-500 dark:text-gray-400">"Arguments : "</span>
                             {call.arguments.clone()}
                         </div>
                         {output.map(|output| view! {
                             <div>
-                                <span class="text-gray-500">"Résultat : "</span>
+                                <span class="text-gray-500 dark:text-gray-400">"Résultat : "</span>
                                 {output}
                             </div>
                         })}
@@ -251,7 +254,7 @@ fn render_panel_entry(entry: PanelEntry) -> AnyView {
 fn PendingAgent() -> impl IntoView {
     view! {
         <p class="self-start max-w-[80%] rounded-sm px-3 py-1.5 text-sm italic \
-                bg-blue-france-975 text-gray-600">
+                bg-blue-france-975 dark:bg-gray-800 text-gray-600 dark:text-gray-400">
             "L'agent réfléchit…"
         </p>
     }
@@ -329,18 +332,21 @@ pub fn AgentPanel(
     };
 
     view! {
-        <div class="flex flex-col h-full border border-blue-france-925 rounded-sm overflow-hidden">
+        <div class="flex flex-col h-full border border-blue-france-925 dark:border-gray-700 \
+                    bg-white dark:bg-gray-900 rounded-sm overflow-hidden">
 
             // En-tête
-            <div class="px-3 py-2 border-b border-blue-france-925 bg-blue-france-975 flex-shrink-0">
-                <p class="text-sm font-bold text-blue-france flex items-baseline gap-2">
+            <div class="px-3 py-2 border-b border-blue-france-925 dark:border-gray-700 \
+                        bg-blue-france-975 dark:bg-gray-800 flex-shrink-0">
+                <p class="text-sm font-bold text-blue-france dark:text-blue-france-925 flex items-baseline gap-2">
                     <span class="flex-1 uppercase">Marie</span>
                     <Badge severity=Severity::Info>IA</Badge>
                     {on_clear_history.map(|on_clear| view! {
                         <button
                             type="button"
                             title="Effacer l'historique de la conversation"
-                            class="text-xs font-normal normal-case text-gray-500 hover:text-blue-france \
+                            class="text-xs font-normal normal-case text-gray-500 dark:text-gray-400 \
+                                   hover:text-blue-france dark:hover:text-blue-france-925 \
                                    underline-offset-2 hover:underline cursor-pointer disabled:cursor-not-allowed \
                                    disabled:opacity-40 disabled:hover:no-underline"
                             disabled=move || pending.get() || messages.get().is_empty()
@@ -353,7 +359,7 @@ pub fn AgentPanel(
                 {move || {
                     match (auto_accept, on_toggle_auto_accept) {
                         (Some(auto_accept), Some(on_toggle)) => Some(view! {
-                            <label class="flex items-center gap-2 mt-1 text-xs text-gray-700 cursor-pointer">
+                            <label class="flex items-center gap-2 mt-1 text-xs text-gray-700 dark:text-gray-200 cursor-pointer">
                                 <input
                                     type="checkbox"
                                     class="size-4 accent-blue-france cursor-pointer"
@@ -389,12 +395,13 @@ pub fn AgentPanel(
                         let send = make_send();
                         let send_on_click = make_send();
                         view! {
-                            <div class="flex gap-2 items-center px-3 py-2 border-t border-blue-france-925 flex-shrink-0">
+                            <div class="flex gap-2 items-center px-3 py-2 border-t border-blue-france-925 dark:border-gray-700 flex-shrink-0">
                                 <input
                                     type="text"
                                     class="flex-1 shadow-[inset_0_0_0_1px] shadow-gray-400 \
                                            focus:shadow-[inset_0_0_0_2px] focus:shadow-blue-france \
-                                           bg-gray-100 px-3 py-2 outline-none disabled:opacity-50"
+                                           bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100 \
+                                           px-3 py-2 outline-none disabled:opacity-50"
                                     placeholder="Demander à l'agent…"
                                     prop:value=draft
                                     prop:disabled=move || pending.get()
@@ -452,7 +459,7 @@ pub fn AgentPanel(
 
                         view! {
                             <div class="flex flex-col gap-1">
-                                <label class="text-sm font-bold text-gray-900" for=field_id.clone()>
+                                <label class="text-sm font-bold text-gray-900 dark:text-gray-100" for=field_id.clone()>
                                     {q_label}
                                 </label>
                                 {if let Some(opts) = q_opts {
@@ -461,7 +468,8 @@ pub fn AgentPanel(
                                             id=field_id
                                             class="shadow-[inset_0_0_0_1px] shadow-gray-400 \
                                                    focus:shadow-[inset_0_0_0_2px] focus:shadow-blue-france \
-                                                   bg-gray-100 px-3 py-2 outline-none disabled:opacity-50 w-full"
+                                                   bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100 \
+                                                   px-3 py-2 outline-none disabled:opacity-50 w-full"
                                             prop:value=value
                                             prop:disabled=move || pending.get()
                                             on:change=move |ev| set_value(event_target_value(&ev))
@@ -489,14 +497,15 @@ pub fn AgentPanel(
                                             type="text"
                                             class="shadow-[inset_0_0_0_1px] shadow-gray-400 \
                                                    focus:shadow-[inset_0_0_0_2px] focus:shadow-blue-france \
-                                                   bg-gray-100 px-3 py-2 outline-none disabled:opacity-50 w-full"
+                                                   bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100 \
+                                                   px-3 py-2 outline-none disabled:opacity-50 w-full"
                                             prop:value=value
                                             prop:disabled=move || pending.get()
                                             on:input=move |ev| set_value_ev(event_target_value(&ev))
                                         />
                                     }.into_any()
                                 }}
-                                <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer"
+                                <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200 cursor-pointer"
                                     for=unsat_id.clone()>
                                     <input
                                         id=unsat_id.clone()
@@ -510,14 +519,15 @@ pub fn AgentPanel(
                                 </label>
                                 {move || unsat().then(|| view! {
                                     <div class="flex flex-col gap-1">
-                                        <label class="text-sm font-bold text-gray-900" for=reason_id.clone()>
+                                        <label class="text-sm font-bold text-gray-900 dark:text-gray-100" for=reason_id.clone()>
                                             "Précisez pourquoi"
                                         </label>
                                         <textarea
                                             id=reason_id.clone()
                                             class="shadow-[inset_0_0_0_1px] shadow-gray-400 \
                                                    focus:shadow-[inset_0_0_0_2px] focus:shadow-blue-france \
-                                                   bg-gray-100 px-3 py-2 outline-none disabled:opacity-50 \
+                                                   bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100 \
+                                                   px-3 py-2 outline-none disabled:opacity-50 \
                                                    w-full resize-none"
                                             rows="2"
                                             prop:value=reason
@@ -554,10 +564,10 @@ pub fn AgentPanel(
                             />
                             <div
                                 class="shrink-0 overflow-y-auto p-3 flex flex-col gap-3 \
-                                       border-l border-blue-france-925"
+                                       border-l border-blue-france-925 dark:border-gray-700"
                                 style:width=move || format!("{}px", interaction_panel_width.get())
                             >
-                                <p class="text-sm italic text-gray-600">{prompt}</p>
+                                <p class="text-sm italic text-gray-600 dark:text-gray-400">{prompt}</p>
                                 {fields}
                                 <div class="flex justify-end">
                                     <button

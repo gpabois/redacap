@@ -5,7 +5,7 @@
   "main": "tailwind.config.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build:css": "@tailwindcss/cli -i style/input.css -o style/output.css --minify",
+    "build:css": "npx @tailwindcss/cli -i style/input.css -o style/output.css --minify",
     "watch": "npx @tailwindcss/cli -i style/input.css -o style/output.css --minify & cargo leptos watch"
   },
   "keywords": [],

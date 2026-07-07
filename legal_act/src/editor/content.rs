@@ -1,8 +1,11 @@
+use std::collections::HashMap;
+
 use leptos::prelude::*;
 
 use super::context::expect_editor_context;
 use super::widgets::RichEditableDiv;
 use crate::traits::node::{BodyRead, BodyWrite};
+use crate::traits::review::ReviewRead;
 use crate::{Body, BodyNodeId, NodeKind, NodeSpec};
 
 // ─── Sérialisation HTML ───────────────────────────────────────────────────────
@@ -13,14 +16,66 @@ fn html_escape(text: &str) -> String {
         .replace('>', "&gt;")
 }
 
-fn node_to_inline_html(body: &impl BodyRead, id: BodyNodeId) -> String {
+/// Auteurs des commentaires non résolus référençant chaque feuille `Plain`,
+/// pour surligner dans l'éditeur les zones du corps qu'un commentaire
+/// recouvre (voir exigence : « aucun signe ne permet de savoir qu'une zone
+/// a été référencée dans un commentaire »). Une feuille absente de la map
+/// n'est référencée par aucun commentaire non résolu.
+fn commented_leaf_authors(
+    body: &impl BodyRead,
+    reviews: &impl ReviewRead,
+) -> HashMap<BodyNodeId, Vec<String>> {
+    let mut authors_by_leaf: HashMap<BodyNodeId, Vec<String>> = HashMap::new();
+    for comment in reviews.comments() {
+        if comment.resolved {
+            continue;
+        }
+        let Some(selection) = comment.selection else {
+            continue;
+        };
+        for leaf in selection.covered_leafs(body) {
+            let authors = authors_by_leaf.entry(leaf).or_default();
+            if !authors.contains(&comment.author) {
+                authors.push(comment.author.clone());
+            }
+        }
+    }
+    authors_by_leaf
+}
+
+fn node_to_inline_html(
+    body: &impl BodyRead,
+    id: BodyNodeId,
+    commented: &HashMap<BodyNodeId, Vec<String>>,
+) -> String {
     match body.kind_of(id) {
-        NodeKind::Plain => html_escape(&body.text_of(id)),
+        // L'enveloppe `data-plain-id` permet de retracer une sélection
+        // navigateur jusqu'au nœud `Plain` et à l'offset qui la porte (voir
+        // `super::selection_dom::capture_content_selection`), pour ancrer un
+        // commentaire à un extrait de texte. Transparente pour
+        // `parse_inline_html` (balise `span` inconnue de son vocabulaire de
+        // mise en forme : son contenu est réinjecté directement sous le
+        // parent, voir la branche `else` de la boucle) ; il en va de même
+        // pour `class`/`title`, posés ci-dessous quand `commented` couvre
+        // cette feuille.
+        NodeKind::Plain => {
+            let marker = match commented.get(&id) {
+                Some(authors) => format!(
+                    r#" class="bg-yellow-100 dark:bg-yellow-900/40 rounded-sm" title="Commenté par {}""#,
+                    html_escape(&authors.join(", "))
+                ),
+                None => String::new(),
+            };
+            format!(
+                r#"<span data-plain-id="{id}"{marker}>{}</span>"#,
+                html_escape(&body.text_of(id))
+            )
+        }
         NodeKind::Span => {
             let inner: String = body
                 .children_of(id)
                 .into_iter()
-                .map(|c| node_to_inline_html(body, c))
+                .map(|c| node_to_inline_html(body, c, commented))
                 .collect();
             if let NodeSpec::Span(span) = body.spec_of(id) {
                 let mut s = inner;
@@ -45,10 +100,29 @@ fn node_to_inline_html(body: &impl BodyRead, id: BodyNodeId) -> String {
     }
 }
 
-fn build_inline_html(body: &impl BodyRead, node_id: BodyNodeId) -> String {
+fn build_inline_html(
+    body: &impl BodyRead,
+    node_id: BodyNodeId,
+    commented: &HashMap<BodyNodeId, Vec<String>>,
+) -> String {
     body.children_of(node_id)
         .into_iter()
-        .map(|id| node_to_inline_html(body, id))
+        .map(|id| node_to_inline_html(body, id, commented))
+        .collect()
+}
+
+/// Concatène le texte brut (sans balisage) des enfants inline de `node_id`,
+/// pour tester la vacuité réelle du contenu indépendamment de l'enveloppe
+/// `data-plain-id` posée par [`node_to_inline_html`] (qui rend `build_inline_html`
+/// toujours non-vide, même pour un `Plain` vide).
+fn inline_text_of(body: &impl BodyRead, node_id: BodyNodeId) -> String {
+    body.children_of(node_id)
+        .into_iter()
+        .map(|id| match body.kind_of(id) {
+            NodeKind::Plain => body.text_of(id),
+            NodeKind::Span => inline_text_of(body, id),
+            _ => String::new(),
+        })
         .collect()
 }
 
@@ -87,7 +161,10 @@ fn find_matching_close(html: &str, tag_name: &str) -> Option<usize> {
             }
             pos += 1;
         } else {
-            pos += 1;
+            // Avance d'un caractère (pas d'un octet) : le texte peut contenir
+            // des caractères multi-octets (ex. accents), et indexer une
+            // chaîne au milieu de l'un d'eux panique.
+            pos += rest.chars().next().map(char::len_utf8).unwrap_or(1);
         }
     }
     None
@@ -186,6 +263,102 @@ fn save_rich_content(body: &mut Body, node_id: BodyNodeId, html: &str) -> anyhow
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::direct::DirectBody;
+    use crate::kind::Article;
+
+    fn new_paragraph() -> (Body, BodyNodeId) {
+        let mut body = Body::from(DirectBody::new());
+        let article = body
+            .append_node(body.root(), NodeSpec::Article(Article::default()))
+            .unwrap();
+        let article_body = body
+            .children_of(article)
+            .into_iter()
+            .find(|&c| body.kind_of(c) == NodeKind::ArticleBody)
+            .unwrap();
+        let paragraphe = body
+            .children_of(article_body)
+            .into_iter()
+            .find(|&c| body.kind_of(c) == NodeKind::Paragraphe)
+            .unwrap();
+        (body, paragraphe)
+    }
+
+    /// Régression : l'enveloppe `data-plain-id` posée par
+    /// `node_to_inline_html` sur chaque feuille (pour ancrer les
+    /// commentaires) fait passer par `find_matching_close` sur
+    /// pratiquement tout texte français au moindre blur ; ce texte contient
+    /// presque toujours des caractères accentués, qui ne doivent pas faire
+    /// paniquer l'indexation par octet.
+    #[test]
+    fn test_round_trip_accented_text_does_not_panic() {
+        let (mut body, paragraphe) = new_paragraph();
+        let plain = body.first_child_of(paragraphe).unwrap();
+        body.insert_text(plain, 0, "Arrêté préfectoral à Orléans");
+
+        let html = build_inline_html(&body, paragraphe, &HashMap::new());
+        assert!(html.contains("data-plain-id"));
+        save_rich_content(&mut body, paragraphe, &html).unwrap();
+
+        assert_eq!(
+            inline_text_of(&body, paragraphe),
+            "Arrêté préfectoral à Orléans"
+        );
+    }
+
+    /// Même risque déjà présent (avant l'enveloppe `data-plain-id`) pour du
+    /// texte accentué mis en forme (gras/italique/souligné/barré).
+    #[test]
+    fn test_round_trip_accented_text_inside_formatting() {
+        let (mut body, paragraphe) = new_paragraph();
+        save_rich_content(&mut body, paragraphe, "<strong>Arrêté préfectoral</strong>").unwrap();
+        assert_eq!(inline_text_of(&body, paragraphe), "Arrêté préfectoral");
+    }
+
+    /// Un commentaire non résolu ancré sur la feuille rendue doit faire
+    /// apparaître le surlignage (classe + `title`) dans le HTML produit ;
+    /// un commentaire résolu, ou sans sélection, ne doit rien surligner.
+    #[test]
+    fn test_commented_leaf_is_highlighted() {
+        use crate::cursor::{Cursor, Selection};
+        use crate::review::DirectReview;
+        use crate::traits::review::{Comment, ReviewWrite};
+
+        let (mut body, paragraphe) = new_paragraph();
+        let plain = body.first_child_of(paragraphe).unwrap();
+        body.insert_text(plain, 0, "hello world");
+
+        let selection = Selection {
+            anchor: Cursor {
+                node_id: plain,
+                offset: 0,
+            },
+            focus: Cursor {
+                node_id: plain,
+                offset: 5,
+            },
+        };
+
+        let mut reviews = DirectReview::new();
+        reviews.add_comment(Comment::new("alice", "à revoir").with_selection(selection, "hello"));
+        let commented = commented_leaf_authors(&body, &reviews);
+        assert_eq!(commented.get(&plain).map(Vec::as_slice), Some(&["alice".to_string()][..]));
+
+        let html = build_inline_html(&body, paragraphe, &commented);
+        assert!(html.contains("bg-yellow-100"));
+        assert!(html.contains("Commenté par alice"));
+
+        // Résolu : ne doit plus être surligné.
+        let resolved_id = reviews.comments()[0].id;
+        reviews.resolve_comment(resolved_id).unwrap();
+        let commented_after_resolve = commented_leaf_authors(&body, &reviews);
+        assert!(commented_after_resolve.is_empty());
+    }
+}
+
 // ─── ContentSubtree ───────────────────────────────────────────────────────────
 
 /// Dispatcher des nœuds de contenu d'un nœud (Paragraphe, Table, List…).
@@ -228,7 +401,12 @@ pub fn ContentSubtree(node_id: BodyNodeId) -> impl IntoView {
 fn EditParagraph(node_id: BodyNodeId) -> impl IntoView {
     let ctx = expect_editor_context();
 
-    let html = Signal::derive(move || ctx.body.with(|b| build_inline_html(b, node_id)));
+    let html = Signal::derive(move || {
+        ctx.body.with(|b| {
+            ctx.reviews
+                .with(|r| build_inline_html(b, node_id, &commented_leaf_authors(b, r)))
+        })
+    });
 
     let on_enter = Callback::new(move |()| {
         let new_id = ctx
@@ -330,7 +508,12 @@ fn EditList(node_id: BodyNodeId) -> impl IntoView {
 fn EditListItem(node_id: BodyNodeId, list_id: BodyNodeId) -> impl IntoView {
     let ctx = expect_editor_context();
 
-    let html = Signal::derive(move || ctx.body.with(|b| build_inline_html(b, node_id)));
+    let html = Signal::derive(move || {
+        ctx.body.with(|b| {
+            ctx.reviews
+                .with(|r| build_inline_html(b, node_id, &commented_leaf_authors(b, r)))
+        })
+    });
 
     let on_enter = Callback::new(move |()| {
         let new_id = ctx
@@ -351,7 +534,7 @@ fn EditListItem(node_id: BodyNodeId, list_id: BodyNodeId) -> impl IntoView {
     let on_backspace_start = Callback::new(move |()| {
         let is_empty = ctx
             .body
-            .with_untracked(|b| build_inline_html(b, node_id).is_empty());
+            .with_untracked(|b| inline_text_of(b, node_id).is_empty());
 
         if is_empty {
             // Élément vide : supprimer et focaliser le précédent/suivant
@@ -360,9 +543,7 @@ fn EditListItem(node_id: BodyNodeId, list_id: BodyNodeId) -> impl IntoView {
                     .or_else(|| b.next_sibling_of(node_id))
                     .or_else(|| b.prev_sibling_of(list_id))
             });
-            ctx.body.update(|b| {
-                let _ = b.remove_node(node_id);
-            });
+            ctx.remove_node_with_comments(node_id);
             if let Some(id) = focus_id {
                 ctx.request_focus(id, true);
             }
@@ -416,9 +597,7 @@ fn EditListItem(node_id: BodyNodeId, list_id: BodyNodeId) -> impl IntoView {
                 </div>
                 <button
                     class="no-print opacity-0 group-hover/item:opacity-100 text-red-400 hover:text-red-600 text-xs"
-                    on:click=move |_| {
-                        ctx.body.update(|b| { let _ = b.remove_node(node_id); });
-                    }
+                    on:click=move |_| ctx.remove_node_with_comments(node_id)
                 >"×"</button>
             </div>
         </li>
@@ -512,9 +691,11 @@ fn EditTableCell(node_id: BodyNodeId, row_id: BodyNodeId, table_id: BodyNodeId) 
 
     let html = Signal::derive(move || {
         ctx.body.with(|b| {
-            para_id
-                .map(|pid| build_inline_html(b, pid))
-                .unwrap_or_default()
+            ctx.reviews.with(|r| {
+                para_id
+                    .map(|pid| build_inline_html(b, pid, &commented_leaf_authors(b, r)))
+                    .unwrap_or_default()
+            })
         })
     });
 

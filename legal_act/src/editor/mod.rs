@@ -4,6 +4,7 @@ pub mod context;
 mod events;
 mod header;
 mod review;
+mod selection_dom;
 mod state;
 mod widgets;
 
@@ -13,4 +14,4 @@ pub use context::{EditorContext, PortalAction, expect_editor_context, provide_ed
 pub use events::EditorEvent;
 pub use header::{ConnectedUser, EditorHeader};
 pub use review::{CommentThread, ReviewPanel};
-pub use state::{CursorId, EditorCursor, EditorSelection, SelectionState};
+pub use state::{CursorId, EditorCursor, EditorSelection, PendingComment, SelectionState};

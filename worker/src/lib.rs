@@ -6,6 +6,7 @@
 //! faire.
 
 mod legal_act;
+mod legal_act_review;
 
 use std::time::Duration;
 
@@ -33,6 +34,11 @@ pub async fn run() -> anyhow::Result<()> {
             _ = interval.tick() => {
                 if let Err(error) = legal_act::consolidate_pending(&store).await {
                     eprintln!("échec de la consolidation périodique des snapshots : {error}");
+                }
+                if let Err(error) = legal_act_review::consolidate_pending(&store).await {
+                    eprintln!(
+                        "échec de la consolidation périodique des snapshots de commentaires : {error}"
+                    );
                 }
             }
             _ = tokio::signal::ctrl_c() => break,

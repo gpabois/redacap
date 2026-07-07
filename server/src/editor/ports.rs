@@ -602,7 +602,10 @@ mod tests {
         let article = body
             .append_node(root, NodeSpec::Article(legal_act::Article::default()))
             .unwrap();
-        (EditorRoom::new(test_pool(), None, body, 1), article)
+        (
+            EditorRoom::new(test_pool(), None, body, 1, legal_act::YrsReview::new(), 1),
+            article,
+        )
     }
 
     /// Construit un éditeur sans nœud sélectionné, pour les tests qui

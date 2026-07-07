@@ -160,6 +160,7 @@ dependencies = [
  "anyhow",
  "axum",
  "axum-extra",
+ "base64 0.22.1",
  "content",
  "dsfr",
  "legal_act",

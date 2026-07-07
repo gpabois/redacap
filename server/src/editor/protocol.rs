@@ -34,6 +34,14 @@ pub enum ClientMessage {
     /// de poursuivre celle en cours. Ignoré si une tâche agent est en cours
     /// d'exécution sur cette connexion.
     ClearHistory,
+    /// Mise à jour Yrs (encodée base64) du document de commentaires/notes de
+    /// travail (voir `legal_act::Review`), produite par une édition locale
+    /// (nouveau commentaire, résolution, suppression...). Contrairement aux
+    /// mises à jour du corps de l'acte, elle transite par ce protocole texte
+    /// plutôt que par une trame binaire dédiée : le volume est bien plus
+    /// faible et cela évite de dupliquer le multiplexage binaire de
+    /// [`crate::ws`] pour un second document Yrs.
+    ReviewUpdate { update: String },
 }
 
 #[derive(Debug, Serialize)]
@@ -87,6 +95,11 @@ pub enum ServerMessage {
         ok: bool,
         output: String,
     },
+    /// Pendant de [`ClientMessage::ReviewUpdate`] : mise à jour Yrs (base64)
+    /// du document de commentaires/notes de travail, envoyée à la connexion
+    /// à l'ouverture (état complet, voir `crate::ws::handle_socket`) puis à
+    /// chaque changement (la sienne comme celles rediffusées des autres pairs).
+    ReviewUpdate { update: String },
 }
 
 /// Identité d'un utilisateur connecté à la salle, telle qu'affichée par une

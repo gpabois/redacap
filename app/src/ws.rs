@@ -10,7 +10,13 @@
 //! - des trames **texte** JSON ([`ClientMessage`]/[`ServerMessage`]), qui
 //!   pilotent la boucle agentique (`run_agent`) et relaient les
 //!   interactions qu'elle déclenche (`ask_user`, `ask_questions`...) vers
-//!   le [`agent::AgentPanel`] affiché par [`legal_act::LegalActEditor`].
+//!   le [`agent::AgentPanel`] affiché par [`legal_act::LegalActEditor`] ;
+//!   elles portent aussi (voir [`ClientMessage::ReviewUpdate`]/
+//!   [`ServerMessage::ReviewUpdate`]) les mises à jour Yrs (base64) du
+//!   second document Yrs des commentaires/notes de travail
+//!   ([`legal_act::Review`]), pour ne pas dupliquer le multiplexage des
+//!   trames binaires pour un document dont le volume est bien plus faible
+//!   (voir [`handle_review_update`]).
 //!
 //! [`LegalActEditor`] est un composant contrôlé : `body` (ainsi que les
 //! signaux `agent_*`) sont possédés par [`RoomHandle`], pas par le
@@ -21,7 +27,8 @@ use agent::{
     InteractionRequest, InteractionResponse, PanelEntry, PanelQuestion, PanelReasoning,
     PanelToolCall, PanelToolCallStatus,
 };
-use legal_act::{Body, BodyNodeId, DirectBody, YrsBody};
+use base64::Engine;
+use legal_act::{Body, BodyNodeId, DirectBody, Review, YrsBody, YrsReview};
 use leptos::prelude::*;
 use web_sys::wasm_bindgen::JsCast;
 use web_sys::wasm_bindgen::closure::Closure;
@@ -77,6 +84,11 @@ pub struct RoomHandle {
     /// Corps de l'acte, `Body::Direct` vide tant que la première
     /// synchronisation n'est pas arrivée, `Body::Yrs` ensuite.
     pub body: RwSignal<Body>,
+    /// Commentaires et notes de travail du projet (voir [`legal_act::Review`]),
+    /// `Review::Direct` vide tant que l'état initial n'est pas arrivé
+    /// (voir [`ServerMessage::ReviewUpdate`]), `Review::Yrs` ensuite —
+    /// pendant de [`Self::body`] pour ce second document Yrs.
+    pub reviews: RwSignal<Review>,
     /// `true` dès que le corps ci-dessus reflète l'état du serveur : la
     /// page hôte doit attendre ce signal avant de monter
     /// [`legal_act::LegalActEditor`] (voir `super::app::PageEditorProjet`).
@@ -210,6 +222,7 @@ pub fn connect_room(room_id: impl Into<String>) -> RoomHandle {
     let room_id = room_id.into();
     let handle = RoomHandle {
         body: RwSignal::new(Body::from(DirectBody::new())),
+        reviews: RwSignal::new(Review::direct()),
         ready: RwSignal::new(false),
         agent_messages: RwSignal::new(Vec::new()),
         agent_pending: RwSignal::new(false),
@@ -436,6 +449,74 @@ fn handle_text_frame(handle: RoomHandle, text: &str) {
         ServerMessage::Presence { users } => {
             handle.connected_users.set(users);
         }
+        ServerMessage::ReviewUpdate { update } => {
+            handle_review_update(handle, &update);
+        }
+    }
+}
+
+/// Applique une mise à jour Yrs (base64) du document de commentaires/notes
+/// de travail. Pendant de [`handle_binary_frame`] pour ce second document,
+/// relayé sur le canal texte plutôt que binaire (voir
+/// `server::editor::protocol::ClientMessage::ReviewUpdate`) : la première
+/// mise à jour reçue est l'état complet du document (construit à partir
+/// d'un [`Doc`] vide) ; les suivantes sont des mises à jour incrémentales,
+/// appliquées directement au document existant.
+fn handle_review_update(handle: RoomHandle, update_b64: &str) {
+    let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(update_b64) else {
+        return;
+    };
+    let Ok(update) = YrsUpdate::decode_v1(&bytes) else {
+        return;
+    };
+
+    let already_yrs = handle.reviews.with_untracked(|r| matches!(r, Review::Yrs(_)));
+    if !already_yrs {
+        let doc = Doc::new();
+        if doc.transact_mut().apply_update(update).is_err() {
+            return;
+        }
+        let review_map = doc.get_or_insert_map("review");
+        let Ok(yrs_review) = YrsReview::open(doc, review_map) else {
+            return;
+        };
+
+        // Retransmet au serveur chaque mise à jour locale (nouveau
+        // commentaire, résolution, suppression...), en ignorant celles
+        // provenant de l'application d'une trame reçue du réseau (même
+        // idiome que `handle_binary_frame` pour le corps de l'acte).
+        if let Some(socket) = handle.socket.get_untracked() {
+            let outbound = socket;
+            let subscription = yrs_review.doc().clone().observe_update_v1(move |txn, event| {
+                let is_remote = txn
+                    .origin()
+                    .map(|o| o.as_ref() == REMOTE_ORIGIN.as_bytes())
+                    .unwrap_or(false);
+                if is_remote {
+                    return;
+                }
+                let message = ClientMessage::ReviewUpdate {
+                    update: base64::engine::general_purpose::STANDARD.encode(&event.update),
+                };
+                if let Ok(text) = serde_json::to_string(&message) {
+                    let _ = outbound.send_with_str(&text);
+                }
+            });
+            if let Ok(subscription) = subscription {
+                std::mem::forget(subscription);
+            }
+        }
+
+        handle.reviews.set(Review::Yrs(yrs_review));
+    } else {
+        handle.reviews.update(|r| {
+            if let Review::Yrs(yrs_review) = r {
+                let _ = yrs_review
+                    .doc()
+                    .transact_mut_with(REMOTE_ORIGIN)
+                    .apply_update(update);
+            }
+        });
     }
 }
 
