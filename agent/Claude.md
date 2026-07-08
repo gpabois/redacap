@@ -15,5 +15,7 @@ L'agent opère par boucle agentique (ReAct) et dispose des outils suivants :
 | `icpe_query` | Interroge les bases ICPE/AIOT pour les données administratives d'un établissement |
 | `generate_numbering` | Recalcule la numérotation des nœuds après modification structurelle |
 | `validate_structure` | Vérifie que l'acte respecte les invariants structurels avant génération |
+| `delegate_to_expert` | Réservé au Superviseur : délègue une sous-tâche à un profil d'expert nommé du catalogue |
+| `spawn_expert` | Sous-tâche dynamique : confie une sous-tâche à une nouvelle instance du Superviseur, qui choisit lui-même l'expert approprié (voir `agent::orchestration::AgentFrame::nested_supervisor`) — utile à un expert qui identifie, en cours de tâche, un besoin dont il ne sait pas lui-même à quel profil du catalogue le confier |
 
 L'agent peut composer ces outils en séquence pour rédiger tout ou partie d'un arrêté, compléter les visas réglementaires, ou vérifier la conformité des seuils ICPE.

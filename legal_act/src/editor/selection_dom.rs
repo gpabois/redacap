@@ -13,9 +13,9 @@ use leptos::prelude::document;
 use web_sys::Element;
 use web_sys::wasm_bindgen::JsCast;
 
+use crate::BodyNodeId;
 use crate::cursor::{Cursor, Selection};
 use crate::traits::node::BodyRead;
-use crate::BodyNodeId;
 
 /// Capture la sélection navigateur courante si elle est non vide et
 /// entièrement comprise dans `boundary` (la racine DOM du

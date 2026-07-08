@@ -24,8 +24,9 @@
 //! après le montage, à chaque frame reçue du serveur.
 
 use agent::{
-    DocumentRequest, DocumentUpload, InteractionRequest, InteractionResponse, PanelEntry,
-    PanelQuestion, PanelReasoning, PanelToolCall, PanelToolCallStatus,
+    AgentSessionHistory, AgentSessionSummary, DocumentRequest, DocumentUpload, InteractionRequest,
+    InteractionResponse, PanelEntry, PanelQuestion, PanelReasoning, PanelToolCall,
+    PanelToolCallStatus, SupervisorContextEntry, SupervisorContextToolCall,
 };
 use base64::Engine;
 use legal_act::{Body, BodyNodeId, DirectBody, Review, YrsBody, YrsReview};
@@ -41,7 +42,8 @@ use yrs::Update as YrsUpdate;
 use yrs::{Doc, Transact};
 
 use crate::protocol::{
-    ClientMessage, DocumentUploadWire, InteractionAnswerWire, PresenceUser, ServerMessage,
+    AgentSessionEntryWire, AgentSessionWire, ClientMessage, DocumentUploadWire,
+    InteractionAnswerWire, PresenceUser, ServerMessage, SupervisorContextEntryWire,
 };
 
 /// Origine posée sur les transactions Yrs appliquées depuis le réseau, pour
@@ -119,6 +121,20 @@ pub struct RoomHandle {
     /// `server::protocol::ServerMessage::Presence`), pour l'affichage des
     /// pastilles de présence dans l'en-tête de l'éditeur.
     pub connected_users: RwSignal<Vec<PresenceUser>>,
+    /// Sessions de conversation passées de l'utilisateur courant pour cette
+    /// salle (voir [`Self::list_agent_sessions`]), affichées par
+    /// [`agent::AgentPanel`]'s `sessions`.
+    pub agent_sessions: RwSignal<Vec<AgentSessionSummary>>,
+    /// Transcript d'une session passée en cours de consultation (voir
+    /// [`Self::open_agent_session`]), affiché par [`agent::AgentPanel`]'s
+    /// `session_history` en recouvrement de `agent_messages` sans jamais le
+    /// modifier.
+    pub agent_session_history: RwSignal<Option<AgentSessionHistory>>,
+    /// Contexte brut du Superviseur en cours de consultation (voir
+    /// [`Self::view_supervisor_context`]), affiché par [`agent::AgentPanel`]'s
+    /// `supervisor_context` en recouvrement de `agent_messages`, sans jamais
+    /// le modifier.
+    pub supervisor_context: RwSignal<Option<Vec<SupervisorContextEntry>>>,
     pending_kind: RwSignal<Option<PendingInteractionKind>>,
     socket: RwSignal<Option<WasmSend<WebSocket>>>,
 }
@@ -168,6 +184,42 @@ impl RoomHandle {
         self.interaction.set(None);
         self.pending_kind.set(None);
         self.send(&ClientMessage::ClearHistory);
+    }
+
+    /// Demande la liste des sessions de conversation passées de l'utilisateur
+    /// courant pour cette salle (voir [`ServerMessage::AgentSessions`], qui
+    /// alimente [`Self::agent_sessions`]).
+    pub fn list_agent_sessions(&self) {
+        self.send(&ClientMessage::ListAgentSessions);
+    }
+
+    /// Demande la reconstruction en lecture seule du transcript de la session
+    /// passée `session_id` (voir [`ServerMessage::AgentSessionHistory`], qui
+    /// alimente [`Self::agent_session_history`]) : sans effet sur la
+    /// conversation en cours (`agent_messages`).
+    pub fn open_agent_session(&self, session_id: String) {
+        self.send(&ClientMessage::GetAgentSessionHistory { session_id });
+    }
+
+    /// Ferme la consultation d'une session passée : restaure l'affichage de
+    /// la conversation en cours, inchangée entre-temps.
+    pub fn close_agent_session_history(&self) {
+        self.agent_session_history.set(None);
+    }
+
+    /// Demande le contexte brut (historique `agent::ChatMessage`, système
+    /// compris) effectivement envoyé au modèle par le frame Superviseur du
+    /// run le plus récent de cette salle (voir
+    /// [`ServerMessage::SupervisorContext`], qui alimente
+    /// [`Self::supervisor_context`]).
+    pub fn view_supervisor_context(&self) {
+        self.send(&ClientMessage::GetSupervisorContext);
+    }
+
+    /// Ferme la consultation du contexte du Superviseur : restaure
+    /// l'affichage de la conversation en cours, inchangée entre-temps.
+    pub fn close_supervisor_context(&self) {
+        self.supervisor_context.set(None);
     }
 
     /// Répond au formulaire d'interaction affiché par [`agent::AgentPanel`].
@@ -252,6 +304,9 @@ pub fn connect_room(room_id: impl Into<String>) -> RoomHandle {
         open_message: RwSignal::new(None),
         auto_accept: RwSignal::new(false),
         connected_users: RwSignal::new(Vec::new()),
+        agent_sessions: RwSignal::new(Vec::new()),
+        agent_session_history: RwSignal::new(None),
+        supervisor_context: RwSignal::new(None),
         pending_kind: RwSignal::new(None),
         socket: RwSignal::new(None),
     };
@@ -382,10 +437,18 @@ fn handle_text_frame(handle: RoomHandle, text: &str) {
             handle.agent_pending.set(false);
         }
         ServerMessage::AgentReasoningDelta { agent_label, delta } => {
+            // Positionné défensivement à chaque fragment reçu, pas seulement
+            // au démarrage local de la tâche (voir `RoomHandle::run`) : cette
+            // trame peut provenir d'une tâche démarrée depuis un autre onglet
+            // ou par un autre collaborateur de la salle (voir
+            // `server::editor::state::EditorRoom::agent_events`), que cette
+            // connexion n'a donc jamais vu démarrer.
+            handle.agent_pending.set(true);
             append_reasoning_delta(handle, agent_label, delta);
         }
-        ServerMessage::AgentContentDelta { delta, .. } => {
-            append_content_delta(handle, delta);
+        ServerMessage::AgentContentDelta { agent_label, delta } => {
+            handle.agent_pending.set(true);
+            append_content_delta(handle, agent_label, delta);
         }
         ServerMessage::AgentStepFinished => {
             if let Some(idx) = handle.open_reasoning.get_untracked() {
@@ -406,6 +469,7 @@ fn handle_text_frame(handle: RoomHandle, text: &str) {
         } => {
             let arguments =
                 serde_json::to_string_pretty(&arguments).unwrap_or_else(|_| arguments.to_string());
+            handle.agent_pending.set(true);
             handle.agent_messages.update(|entries| {
                 entries.push(PanelEntry::ToolCall(PanelToolCall {
                     id,
@@ -426,7 +490,10 @@ fn handle_text_frame(handle: RoomHandle, text: &str) {
                 set_tool_call_status(entries, &id, status);
             });
         }
-        ServerMessage::InteractionAsk { agent_label, question } => {
+        ServerMessage::InteractionAsk {
+            agent_label,
+            question,
+        } => {
             handle.agent_pending.set(false);
             handle.pending_kind.set(Some(PendingInteractionKind::Ask));
             handle.interaction.set(Some(InteractionRequest {
@@ -439,7 +506,10 @@ fn handle_text_frame(handle: RoomHandle, text: &str) {
                 }],
             }));
         }
-        ServerMessage::InteractionConfirm { agent_label, message } => {
+        ServerMessage::InteractionConfirm {
+            agent_label,
+            message,
+        } => {
             handle.agent_pending.set(false);
             handle
                 .pending_kind
@@ -454,7 +524,11 @@ fn handle_text_frame(handle: RoomHandle, text: &str) {
                 }],
             }));
         }
-        ServerMessage::InteractionQuestions { agent_label, prompt, questions } => {
+        ServerMessage::InteractionQuestions {
+            agent_label,
+            prompt,
+            questions,
+        } => {
             handle.agent_pending.set(false);
             handle
                 .pending_kind
@@ -490,6 +564,135 @@ fn handle_text_frame(handle: RoomHandle, text: &str) {
         ServerMessage::ReviewUpdate { update } => {
             handle_review_update(handle, &update);
         }
+        ServerMessage::AgentSessions { sessions } => {
+            let sessions = sessions.into_iter().map(session_wire_to_summary).collect();
+            handle.agent_sessions.set(sessions);
+        }
+        ServerMessage::AgentSessionHistory {
+            session_id,
+            entries,
+        } => {
+            let entries = entries
+                .into_iter()
+                .enumerate()
+                .map(|(index, entry)| session_entry_to_panel_entry(index, entry))
+                .collect();
+            handle.agent_session_history.set(Some(AgentSessionHistory {
+                session_id,
+                entries,
+            }));
+        }
+        ServerMessage::SupervisorContext { entries } => {
+            let entries = entries.into_iter().map(context_wire_to_entry).collect();
+            handle.supervisor_context.set(Some(entries));
+        }
+        ServerMessage::AgentActiveSession { entries } => {
+            // Ne remplace `agent_messages` que s'il est encore vide : ce
+            // message n'arrive qu'une fois, juste après l'ouverture de la
+            // connexion (voir `server::editor::ws::restore_active_session`),
+            // avant qu'aucun échange de cette page n'ait pu y être ajouté.
+            if handle.agent_messages.get_untracked().is_empty() {
+                let restored = entries
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, entry)| session_entry_to_panel_entry(index, entry))
+                    .collect();
+                handle.agent_messages.set(restored);
+            }
+        }
+        ServerMessage::AgentRunInProgress => {
+            handle.agent_pending.set(true);
+        }
+    }
+}
+
+/// Met en forme l'horodatage RFC 3339 d'une session en libellé lisible
+/// (`AAAA-MM-JJ HH:MM`), sans dépendre d'une bibliothèque de dates côté
+/// wasm : une troncature de la représentation ISO 8601 suffit à cet usage
+/// d'affichage, la page hôte n'a jamais besoin de la reparser.
+fn format_session_timestamp(rfc3339: &str) -> String {
+    rfc3339
+        .get(0..16)
+        .map(|prefix| prefix.replace('T', " "))
+        .unwrap_or_else(|| rfc3339.to_string())
+}
+
+fn session_wire_to_summary(wire: AgentSessionWire) -> AgentSessionSummary {
+    let mut label = format_session_timestamp(&wire.created_at);
+    if wire.status == "active" {
+        label.push_str(" — en cours");
+    } else if let Some(archived_at) = &wire.archived_at {
+        label.push_str(&format!(
+            " — archivée le {}",
+            format_session_timestamp(archived_at)
+        ));
+    }
+    AgentSessionSummary {
+        id: wire.id,
+        label,
+        preview: wire.preview,
+    }
+}
+
+/// Convertit une entrée de transcript reconstruit en [`PanelEntry`] affichable
+/// (voir `agent::render_panel_entry`, invoqué par `agent::AgentPanel` pour son
+/// recouvrement en lecture seule) : `index` sert uniquement à donner un
+/// identifiant stable à une trace d'appel d'outil, jamais réutilisé pour
+/// répondre au serveur (contrairement à `AgentToolCallStarted::id`, propre
+/// aux appels de la conversation en cours).
+fn session_entry_to_panel_entry(index: usize, entry: AgentSessionEntryWire) -> PanelEntry {
+    match entry {
+        AgentSessionEntryWire::User { content } => PanelEntry::user(content),
+        AgentSessionEntryWire::Assistant { content } => PanelEntry::assistant(content),
+        AgentSessionEntryWire::ToolCall {
+            name,
+            arguments,
+            output,
+        } => {
+            let arguments =
+                serde_json::to_string_pretty(&arguments).unwrap_or_else(|_| arguments.to_string());
+            PanelEntry::ToolCall(PanelToolCall {
+                id: format!("session-entry-{index}"),
+                agent_label: String::new(),
+                name,
+                arguments,
+                status: PanelToolCallStatus::Done { output },
+            })
+        }
+    }
+}
+
+/// Convertit un message brut de contexte reçu du serveur en
+/// [`SupervisorContextEntry`] affichable (voir `agent::render_panel_entry`'s
+/// pendant `render_supervisor_context_entry`, invoqué par `agent::AgentPanel`
+/// pour son recouvrement en lecture seule).
+fn context_wire_to_entry(entry: SupervisorContextEntryWire) -> SupervisorContextEntry {
+    match entry {
+        SupervisorContextEntryWire::System { content } => {
+            SupervisorContextEntry::System { content }
+        }
+        SupervisorContextEntryWire::User { content } => SupervisorContextEntry::User { content },
+        SupervisorContextEntryWire::Assistant {
+            content,
+            tool_calls,
+        } => SupervisorContextEntry::Assistant {
+            content,
+            tool_calls: tool_calls
+                .into_iter()
+                .map(|call| SupervisorContextToolCall {
+                    id: call.id,
+                    name: call.name,
+                    arguments: call.arguments,
+                })
+                .collect(),
+        },
+        SupervisorContextEntryWire::ToolResult {
+            tool_call_id,
+            content,
+        } => SupervisorContextEntry::ToolResult {
+            tool_call_id,
+            content,
+        },
     }
 }
 
@@ -508,7 +711,9 @@ fn handle_review_update(handle: RoomHandle, update_b64: &str) {
         return;
     };
 
-    let already_yrs = handle.reviews.with_untracked(|r| matches!(r, Review::Yrs(_)));
+    let already_yrs = handle
+        .reviews
+        .with_untracked(|r| matches!(r, Review::Yrs(_)));
     if !already_yrs {
         let doc = Doc::new();
         if doc.transact_mut().apply_update(update).is_err() {
@@ -525,21 +730,24 @@ fn handle_review_update(handle: RoomHandle, update_b64: &str) {
         // idiome que `handle_binary_frame` pour le corps de l'acte).
         if let Some(socket) = handle.socket.get_untracked() {
             let outbound = socket;
-            let subscription = yrs_review.doc().clone().observe_update_v1(move |txn, event| {
-                let is_remote = txn
-                    .origin()
-                    .map(|o| o.as_ref() == REMOTE_ORIGIN.as_bytes())
-                    .unwrap_or(false);
-                if is_remote {
-                    return;
-                }
-                let message = ClientMessage::ReviewUpdate {
-                    update: base64::engine::general_purpose::STANDARD.encode(&event.update),
-                };
-                if let Ok(text) = serde_json::to_string(&message) {
-                    let _ = outbound.send_with_str(&text);
-                }
-            });
+            let subscription = yrs_review
+                .doc()
+                .clone()
+                .observe_update_v1(move |txn, event| {
+                    let is_remote = txn
+                        .origin()
+                        .map(|o| o.as_ref() == REMOTE_ORIGIN.as_bytes())
+                        .unwrap_or(false);
+                    if is_remote {
+                        return;
+                    }
+                    let message = ClientMessage::ReviewUpdate {
+                        update: base64::engine::general_purpose::STANDARD.encode(&event.update),
+                    };
+                    if let Ok(text) = serde_json::to_string(&message) {
+                        let _ = outbound.send_with_str(&text);
+                    }
+                });
             if let Ok(subscription) = subscription {
                 std::mem::forget(subscription);
             }
@@ -585,7 +793,7 @@ fn append_reasoning_delta(handle: RoomHandle, agent_label: String, delta: String
 
 /// Même principe que [`append_reasoning_delta`], pour le message assistant
 /// (contenu final ou narration) du tour courant.
-fn append_content_delta(handle: RoomHandle, delta: String) {
+fn append_content_delta(handle: RoomHandle, agent_label: String, delta: String) {
     if let Some(idx) = handle.open_message.get_untracked() {
         handle.agent_messages.update(|entries| {
             if let Some(PanelEntry::Message(message)) = entries.get_mut(idx) {
@@ -596,7 +804,7 @@ fn append_content_delta(handle: RoomHandle, delta: String) {
     }
     let mut new_idx = 0;
     handle.agent_messages.update(|entries| {
-        entries.push(PanelEntry::assistant(delta));
+        entries.push(PanelEntry::assistant_from(agent_label, delta));
         new_idx = entries.len() - 1;
     });
     handle.open_message.set(Some(new_idx));

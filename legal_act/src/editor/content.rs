@@ -345,7 +345,10 @@ mod tests {
         let mut reviews = DirectReview::new();
         reviews.add_comment(Comment::new("alice", "à revoir").with_selection(selection, "hello"));
         let commented = commented_leaf_authors(&body, &reviews);
-        assert_eq!(commented.get(&plain).map(Vec::as_slice), Some(&["alice".to_string()][..]));
+        assert_eq!(
+            commented.get(&plain).map(Vec::as_slice),
+            Some(&["alice".to_string()][..])
+        );
 
         let html = build_inline_html(&body, paragraphe, &commented);
         assert!(html.contains("bg-yellow-100"));

@@ -148,9 +148,10 @@ pub fn CommentThread(comment: Comment) -> impl IntoView {
     };
     let can_resolve = move || {
         !resolved
-            && ctx.current_user.get().is_some_and(|user| {
-                user == author_for_resolve || ctx.can_edit.get()
-            })
+            && ctx
+                .current_user
+                .get()
+                .is_some_and(|user| user == author_for_resolve || ctx.can_edit.get())
     };
 
     let replies = Signal::derive(move || ctx.reviews.with(|r| r.replies_to(comment_id)));

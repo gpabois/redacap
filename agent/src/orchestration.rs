@@ -33,8 +33,16 @@ use crate::{
     model::{ChatMessage, LanguageModel, Role, StreamEvent, ToolCall, ToolDefinition},
     observer::AgentObserver,
     ports::{DocumentRef, QuestionAnswer},
-    tool::{PauseRequest, ToolRegistry},
+    tool::{DelegateRequest, DelegateTarget, PauseRequest, ToolRegistry},
 };
+
+/// Profondeur maximale de la pile d'orchestration (Superviseur racine +
+/// délégations imbriquées) : l'outil `spawn_expert` (voir
+/// `agent::tools::SpawnExpertTool`) permet à un Superviseur imbriqué de se
+/// redéléguer à lui-même de façon dynamique, sans profil ni catalogue pour
+/// le borner naturellement ; cette limite fait échouer proprement une
+/// délégation en trop plutôt que de laisser la pile croître sans limite.
+const MAX_STACK_DEPTH: usize = 8;
 
 /// Un frame de la pile d'orchestration : le Superviseur (`profile_id: None`)
 /// ou un agent expert éphémère instancié depuis un [`AgentProfile`]. Sa
@@ -107,6 +115,25 @@ impl AgentFrame {
             profile.system_prompt.clone(),
             profile.tool_names.clone(),
             profile.max_steps,
+            task,
+        )
+    }
+
+    /// Frame d'un Superviseur imbriqué, instancié par l'outil `spawn_expert`
+    /// (voir `agent::tools::SpawnExpertTool`) : reprend la configuration de
+    /// `template` (prompt système, outils, budget de tours) — toujours le
+    /// frame racine (`run.stack[0]`, seul frame garanti être le Superviseur)
+    /// — pour que cette instance dispose des mêmes capacités de délégation
+    /// que lui, mais démarre avec son propre historique et son propre
+    /// compteur de tours, indépendants de `template`.
+    #[must_use]
+    fn nested_supervisor(template: &AgentFrame, task: &str) -> Self {
+        Self::new(
+            template.agent_label.clone(),
+            None,
+            template.system_prompt.clone(),
+            template.tool_names.clone(),
+            template.max_steps,
             task,
         )
     }
@@ -247,6 +274,22 @@ impl PartialToolCall {
     }
 }
 
+/// Concatène, dans leur ordre d'émission, le contenu textuel de tous les
+/// tours assistant d'un historique de frame (séparés par une ligne vide) :
+/// sert à reconstituer la réponse complète d'un frame éphémère (expert
+/// délégué) qui aurait réparti sa synthèse entre plusieurs tours plutôt que
+/// de tout dire dans son dernier — voir l'appelant dans
+/// [`Orchestrator::drive`].
+fn frame_answer_text(history: &[ChatMessage]) -> String {
+    history
+        .iter()
+        .filter(|message| message.role == Role::Assistant)
+        .filter_map(|message| message.content.as_deref())
+        .filter(|content| !content.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 /// Orchestrateur hiérarchique : construit une fois par connexion/session
 /// (voir `server::editor::ws`), il pilote autant de [`OrchestrationRun`]
 /// qu'il en reçoit, sans conserver lui-même d'état entre deux appels.
@@ -305,13 +348,22 @@ impl Orchestrator {
             }
 
             if run.stack[frame_index].steps_taken >= run.stack[frame_index].max_steps {
-                return Err(AgentError::MaxStepsExceeded(run.stack[frame_index].max_steps));
+                return Err(AgentError::MaxStepsExceeded(
+                    run.stack[frame_index].max_steps,
+                ));
             }
 
             let agent_label = run.stack[frame_index].agent_label.clone();
-            let tool_definitions = self.tools.subset(&run.stack[frame_index].tool_names).definitions();
+            let tool_definitions = self
+                .tools
+                .subset(&run.stack[frame_index].tool_names)
+                .definitions();
             let response = self
-                .run_turn(&agent_label, &run.stack[frame_index].history, &tool_definitions)
+                .run_turn(
+                    &agent_label,
+                    &run.stack[frame_index].history,
+                    &tool_definitions,
+                )
                 .await?;
             self.observer.on_turn_finished(&agent_label).await;
             run.stack[frame_index].steps_taken += 1;
@@ -321,7 +373,6 @@ impl Orchestrator {
             run.stack[frame_index].history.push(response);
 
             if tool_calls.is_empty() {
-                let text = final_content.unwrap_or_default();
                 if frame_index == 0 {
                     // Le Superviseur a terminé : contrairement à un frame
                     // expert, on ne le dépile pas — son historique complet
@@ -330,21 +381,37 @@ impl Orchestrator {
                     // elle s'est arrêtée (voir `server::editor::ws`, qui
                     // réhydrate un nouveau run à partir de ce frame plutôt
                     // que de repartir d'une conversation vide).
+                    let text = final_content.unwrap_or_default();
                     run.status = RunStatus::Done;
                     run.final_answer = Some(text.clone());
                     return Ok(RunOutcome::Done(text));
                 }
 
+                // Contrairement au Superviseur, un frame expert est
+                // éphémère (une seule tâche, jamais repris) : son
+                // historique complet ne couvre que la délégation en cours,
+                // donc reprendre tous ses tours narrés plutôt que le seul
+                // dernier ne risque pas de remonter du contenu d'une tâche
+                // précédente. Nécessaire car un expert peut répartir sa
+                // synthèse entre plusieurs tours (narration en marge
+                // d'appels d'outils) avant de conclure par un dernier tour
+                // parfois minimal (« Terminé. ») : se limiter à ce dernier
+                // tour tronquait la réponse bubblée au Superviseur, alors
+                // même que chaque tour restait visible séparément dans le
+                // panneau (voir `agent::panel`).
+                let text = frame_answer_text(&run.stack[frame_index].history);
+
                 run.stack.pop();
                 let parent_index = frame_index - 1;
                 let parent_label = run.stack[parent_index].agent_label.clone();
                 let awaiting = {
-                    let pending = run.stack[parent_index]
-                        .pending
-                        .as_mut()
-                        .expect("un frame enfant ne se termine que si son parent est en attente de lui");
+                    let pending = run.stack[parent_index].pending.as_mut().expect(
+                        "un frame enfant ne se termine que si son parent est en attente de lui",
+                    );
                     debug_assert!(matches!(pending.reason, PauseReason::Delegating));
-                    pending.resolved.insert(pending.awaiting.clone(), text.clone());
+                    pending
+                        .resolved
+                        .insert(pending.awaiting.clone(), text.clone());
                     pending.awaiting.clone()
                 };
                 self.observer
@@ -353,7 +420,9 @@ impl Orchestrator {
                 continue;
             }
 
-            let resolution = self.resolve_turn(run, frame_index, tool_calls, HashMap::new()).await?;
+            let resolution = self
+                .resolve_turn(run, frame_index, tool_calls, HashMap::new())
+                .await?;
             if let Some(outcome) = self.apply_resolution(run, frame_index, resolution) {
                 return Ok(outcome);
             }
@@ -370,7 +439,11 @@ impl Orchestrator {
         run: &mut OrchestrationRun,
         answer: PauseAnswer,
     ) -> Result<RunOutcome, AgentError> {
-        let frame_index = run.stack.len().checked_sub(1).ok_or(AgentError::NotPaused)?;
+        let frame_index = run
+            .stack
+            .len()
+            .checked_sub(1)
+            .ok_or(AgentError::NotPaused)?;
 
         let (agent_label, awaiting, content) = {
             let frame = &mut run.stack[frame_index];
@@ -379,7 +452,9 @@ impl Orchestrator {
                 return Err(AgentError::NotPaused);
             };
             let content = Self::render_pause_answer(request, &answer)?;
-            pending.resolved.insert(pending.awaiting.clone(), content.clone());
+            pending
+                .resolved
+                .insert(pending.awaiting.clone(), content.clone());
             (frame.agent_label.clone(), pending.awaiting.clone(), content)
         };
 
@@ -399,11 +474,16 @@ impl Orchestrator {
         resolution: TurnResolution,
     ) -> Option<RunOutcome> {
         match resolution {
-            TurnResolution::Completed { tool_calls, resolved } => {
+            TurnResolution::Completed {
+                tool_calls,
+                resolved,
+            } => {
                 let frame = &mut run.stack[frame_index];
                 for call in &tool_calls {
                     let content = resolved.get(&call.id).cloned().unwrap_or_default();
-                    frame.history.push(ChatMessage::tool_result(call.id.clone(), content));
+                    frame
+                        .history
+                        .push(ChatMessage::tool_result(call.id.clone(), content));
                 }
                 None
             }
@@ -411,6 +491,38 @@ impl Orchestrator {
             TurnResolution::Paused(outcome) => {
                 run.status = RunStatus::Paused;
                 Some(outcome)
+            }
+        }
+    }
+
+    /// Résout la cible d'une [`DelegateRequest`] en un nouveau frame à
+    /// empiler : un profil nommé du catalogue (`delegate_to_expert`), ou une
+    /// instance imbriquée du Superviseur qui choisit elle-même l'expert
+    /// approprié (`spawn_expert`, voir [`AgentFrame::nested_supervisor`]).
+    /// Refuse la délégation (message d'erreur, à faire remonter au modèle
+    /// comme résultat d'outil plutôt que d'interrompre toute l'exécution) si
+    /// la pile a déjà atteint [`MAX_STACK_DEPTH`] — ce qui borne notamment un
+    /// Superviseur imbriqué qui se redéléguerait indéfiniment à lui-même via
+    /// `spawn_expert`.
+    async fn resolve_delegate_target(
+        &self,
+        run: &OrchestrationRun,
+        request: &DelegateRequest,
+    ) -> Result<AgentFrame, String> {
+        if run.stack.len() >= MAX_STACK_DEPTH {
+            return Err(format!(
+                "profondeur maximale de délégation atteinte ({MAX_STACK_DEPTH}) : réponds \
+                 directement avec ce que tu sais déjà plutôt que de déléguer à nouveau"
+            ));
+        }
+        match &request.target {
+            DelegateTarget::Profile(profile_id) => match self.catalog.get(profile_id).await {
+                Ok(Some(profile)) => Ok(AgentFrame::from_profile(&profile, &request.task)),
+                Ok(None) => Err(format!("expert inconnu : « {profile_id} »")),
+                Err(error) => Err(error.to_string()),
+            },
+            DelegateTarget::Supervisor => {
+                Ok(AgentFrame::nested_supervisor(&run.stack[0], &request.task))
             }
         }
     }
@@ -436,7 +548,9 @@ impl Orchestrator {
             if resolved.contains_key(&call.id) {
                 continue;
             }
-            self.observer.on_tool_call_started(&agent_label, &call).await;
+            self.observer
+                .on_tool_call_started(&agent_label, &call)
+                .await;
 
             let Some(tool) = tools.get(&call.name) else {
                 let message = format!("outil inconnu : « {} »", call.name);
@@ -449,9 +563,8 @@ impl Orchestrator {
 
             match tool.delegate_request(&call.arguments) {
                 Ok(Some(request)) => {
-                    match self.catalog.get(&request.profile_id).await {
-                        Ok(Some(profile)) => {
-                            let child = AgentFrame::from_profile(&profile, &request.task);
+                    match self.resolve_delegate_target(run, &request).await {
+                        Ok(child) => {
                             run.stack.push(child);
                             run.stack[frame_index].pending = Some(PendingTurn {
                                 tool_calls: tool_calls.clone(),
@@ -461,17 +574,13 @@ impl Orchestrator {
                             });
                             return Ok(TurnResolution::Delegated);
                         }
-                        Ok(None) => {
-                            let message = format!("expert inconnu : « {} »", request.profile_id);
+                        Err(message) => {
                             self.observer
-                                .on_tool_call_finished(&agent_label, &call.id, &Err(message.clone()))
-                                .await;
-                            resolved.insert(call.id.clone(), format!("erreur : {message}"));
-                        }
-                        Err(error) => {
-                            let message = error.to_string();
-                            self.observer
-                                .on_tool_call_finished(&agent_label, &call.id, &Err(message.clone()))
+                                .on_tool_call_finished(
+                                    &agent_label,
+                                    &call.id,
+                                    &Err(message.clone()),
+                                )
                                 .await;
                             resolved.insert(call.id.clone(), format!("erreur : {message}"));
                         }
@@ -525,7 +634,10 @@ impl Orchestrator {
             }
 
             let result = tool.call(call.arguments.clone()).await;
-            let observed = result.as_ref().map(|output| output.0.clone()).map_err(ToolError::to_string);
+            let observed = result
+                .as_ref()
+                .map(|output| output.0.clone())
+                .map_err(ToolError::to_string);
             self.observer
                 .on_tool_call_finished(&agent_label, &call.id, &observed)
                 .await;
@@ -536,12 +648,18 @@ impl Orchestrator {
             resolved.insert(call.id.clone(), content);
         }
 
-        Ok(TurnResolution::Completed { tool_calls, resolved })
+        Ok(TurnResolution::Completed {
+            tool_calls,
+            resolved,
+        })
     }
 
     /// Convertit une [`PauseAnswer`] en contenu de `tool_result`, en
     /// vérifiant qu'elle correspond bien à la nature de `request`.
-    fn render_pause_answer(request: &PauseRequest, answer: &PauseAnswer) -> Result<String, AgentError> {
+    fn render_pause_answer(
+        request: &PauseRequest,
+        answer: &PauseAnswer,
+    ) -> Result<String, AgentError> {
         match (request, answer) {
             (PauseRequest::Ask { .. }, PauseAnswer::Text(text)) => Ok(text.clone()),
             (PauseRequest::Confirm { .. }, PauseAnswer::Bool(confirmed)) => Ok(if *confirmed {
@@ -642,7 +760,7 @@ mod tests {
     use super::*;
     use crate::observer::NullAgentObserver;
     use crate::tool::{Tool, ToolOutput};
-    use crate::tools::{AskUserTool, DelegateToExpertTool};
+    use crate::tools::{AskUserTool, DelegateToExpertTool, SpawnExpertTool};
     use async_trait::async_trait;
     use serde_json::{Value, json};
     use tokio::sync::mpsc;
@@ -731,7 +849,11 @@ mod tests {
             id: "expert_a".to_string(),
             display_name: "Expert A".to_string(),
             system_prompt: "Tu es l'expert A.".to_string(),
-            tool_names: vec!["ask_user".to_string(), "loop_tool".to_string()],
+            tool_names: vec![
+                "ask_user".to_string(),
+                "loop_tool".to_string(),
+                "spawn_expert".to_string(),
+            ],
             max_steps,
         }
     }
@@ -761,6 +883,7 @@ mod tests {
         let profiles = catalog.0.clone();
         let mut tools = ToolRegistry::new();
         tools.register(Box::new(DelegateToExpertTool::new(&profiles)));
+        tools.register(Box::new(SpawnExpertTool));
         tools.register(Box::new(AskUserTool));
         tools.register(Box::new(LoopTool));
         Orchestrator::new(
@@ -792,13 +915,69 @@ mod tests {
             "rédige l'acte",
         ));
 
-        let outcome = orchestrator.drive(&mut run).await.expect("exécution réussie");
+        let outcome = orchestrator
+            .drive(&mut run)
+            .await
+            .expect("exécution réussie");
         assert!(matches!(outcome, RunOutcome::Done(text) if text == "terminé"));
         assert_eq!(run.status, RunStatus::Done);
         assert_eq!(
             run.stack.len(),
             1,
             "le frame expert doit avoir été dépilé, mais pas le superviseur (historique conservé)"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_delegated_expert_s_narration_spread_over_several_turns_is_not_truncated() {
+        // L'expert répartit sa synthèse sur deux tours narrés en marge d'un
+        // appel d'outil, avant de conclure par un dernier tour minimal : la
+        // réponse bubblée au Superviseur doit reprendre l'ensemble, pas
+        // seulement ce dernier tour (voir `frame_answer_text`).
+        let model = ScriptedModel::new(vec![
+            tool_call(
+                "call_1",
+                "delegate_to_expert",
+                json!({ "expert_id": "expert_a", "task": "fais x" }),
+            ),
+            ChatMessage {
+                role: Role::Assistant,
+                content: Some("première partie de la réponse".to_string()),
+                tool_calls: vec![ToolCall {
+                    id: "call_2".to_string(),
+                    name: "loop_tool".to_string(),
+                    arguments: json!({}),
+                }],
+                tool_call_id: None,
+            },
+            final_answer("terminé."),
+            final_answer("terminé"),
+        ]);
+        let orchestrator = orchestrator(model, StaticCatalog(vec![expert_a_profile(8)]));
+
+        let mut run = OrchestrationRun::new(AgentFrame::supervisor(
+            "tu es le superviseur",
+            vec!["delegate_to_expert".to_string()],
+            8,
+            "rédige l'acte",
+        ));
+
+        orchestrator
+            .drive(&mut run)
+            .await
+            .expect("exécution réussie");
+
+        let bubbled = run.stack[0]
+            .history
+            .iter()
+            .find_map(|message| match &message.tool_call_id {
+                Some(id) if id == "call_1" => message.content.clone(),
+                _ => None,
+            })
+            .expect("résultat de l'appel delegate_to_expert absent de l'historique");
+        assert_eq!(
+            bubbled, "première partie de la réponse\n\nterminé.",
+            "la réponse bubblée doit reprendre tous les tours narrés de l'expert, pas seulement le dernier"
         );
     }
 
@@ -810,7 +989,11 @@ mod tests {
                 "delegate_to_expert",
                 json!({ "expert_id": "expert_a", "task": "fais x" }),
             ),
-            tool_call("call_2", "ask_user", json!({ "question": "quelle valeur ?" })),
+            tool_call(
+                "call_2",
+                "ask_user",
+                json!({ "question": "quelle valeur ?" }),
+            ),
             final_answer("42 reçu"),
             final_answer("terminé"),
         ]);
@@ -823,7 +1006,10 @@ mod tests {
             "rédige l'acte",
         ));
 
-        let outcome = orchestrator.drive(&mut run).await.expect("exécution réussie");
+        let outcome = orchestrator
+            .drive(&mut run)
+            .await
+            .expect("exécution réussie");
         let (agent_label, question) = match outcome {
             RunOutcome::Paused {
                 agent_label,
@@ -842,7 +1028,11 @@ mod tests {
             .expect("reprise réussie");
         assert!(matches!(outcome, RunOutcome::Done(text) if text == "terminé"));
         assert_eq!(run.status, RunStatus::Done);
-        assert_eq!(run.stack.len(), 1, "seul le superviseur reste, son historique conservé");
+        assert_eq!(
+            run.stack.len(),
+            1,
+            "seul le superviseur reste, son historique conservé"
+        );
     }
 
     #[tokio::test]
@@ -867,13 +1057,19 @@ mod tests {
             "rédige l'acte",
         ));
 
-        let error = orchestrator.drive(&mut run).await.expect_err("doit échouer");
+        let error = orchestrator
+            .drive(&mut run)
+            .await
+            .expect_err("doit échouer");
         assert!(matches!(error, AgentError::MaxStepsExceeded(1)));
     }
 
     #[tokio::test]
     async fn a_finished_supervisor_frame_can_be_resumed_as_a_new_task_with_its_history_kept() {
-        let model = ScriptedModel::new(vec![final_answer("première réponse"), final_answer("seconde réponse")]);
+        let model = ScriptedModel::new(vec![
+            final_answer("première réponse"),
+            final_answer("seconde réponse"),
+        ]);
         let orchestrator = orchestrator(model, StaticCatalog(Vec::new()));
 
         let mut run = OrchestrationRun::new(AgentFrame::supervisor(
@@ -882,15 +1078,125 @@ mod tests {
             8,
             "premier message",
         ));
-        orchestrator.drive(&mut run).await.expect("exécution réussie");
+        orchestrator
+            .drive(&mut run)
+            .await
+            .expect("exécution réussie");
         assert_eq!(run.status, RunStatus::Done);
 
-        let root = run.stack.pop().expect("le superviseur terminé reste sur la pile");
+        let root = run
+            .stack
+            .pop()
+            .expect("le superviseur terminé reste sur la pile");
         let mut run = OrchestrationRun::new(root.resume_as_new_task("second message"));
-        let outcome = orchestrator.drive(&mut run).await.expect("exécution réussie");
+        let outcome = orchestrator
+            .drive(&mut run)
+            .await
+            .expect("exécution réussie");
 
         assert!(matches!(outcome, RunOutcome::Done(text) if text == "seconde réponse"));
         // système + 1er message + 1ère réponse + 2e message + 2e réponse
         assert_eq!(run.stack[0].history.len(), 5);
+    }
+
+    #[test]
+    fn nested_supervisor_copies_template_config_with_fresh_history_and_steps() {
+        let template = AgentFrame::supervisor(
+            "tu es le superviseur",
+            vec!["delegate_to_expert".to_string()],
+            8,
+            "tâche initiale",
+        );
+
+        let nested = AgentFrame::nested_supervisor(&template, "sous-tâche");
+
+        assert_eq!(nested.agent_label, "Superviseur");
+        assert_eq!(nested.profile_id, None);
+        assert_eq!(nested.system_prompt, template.system_prompt);
+        assert_eq!(nested.tool_names, template.tool_names);
+        assert_eq!(nested.max_steps, template.max_steps);
+        assert_eq!(nested.steps_taken, 0);
+        assert!(nested.pending.is_none());
+        // système + tâche : historique propre, indépendant de `template`.
+        assert_eq!(nested.history.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn resolve_delegate_target_allows_delegation_below_max_stack_depth() {
+        let orchestrator = orchestrator(ScriptedModel::new(Vec::new()), StaticCatalog(Vec::new()));
+        let root = AgentFrame::supervisor("tu es le superviseur", Vec::new(), 8, "tâche");
+        let run = OrchestrationRun::new(root);
+
+        let request = DelegateRequest {
+            target: DelegateTarget::Supervisor,
+            task: "sous-tâche".to_string(),
+        };
+        let child = orchestrator
+            .resolve_delegate_target(&run, &request)
+            .await
+            .expect("la délégation doit réussir sous la profondeur maximale");
+
+        assert_eq!(child.agent_label, "Superviseur");
+        assert_eq!(child.profile_id, None);
+    }
+
+    #[tokio::test]
+    async fn resolve_delegate_target_rejects_once_max_stack_depth_is_reached() {
+        let orchestrator = orchestrator(ScriptedModel::new(Vec::new()), StaticCatalog(Vec::new()));
+        let root = AgentFrame::supervisor("tu es le superviseur", Vec::new(), 8, "tâche");
+        let mut run = OrchestrationRun::new(root.clone());
+        for _ in 1..MAX_STACK_DEPTH {
+            run.stack.push(root.clone());
+        }
+        assert_eq!(run.stack.len(), MAX_STACK_DEPTH);
+
+        let request = DelegateRequest {
+            target: DelegateTarget::Supervisor,
+            task: "encore".to_string(),
+        };
+        let error = orchestrator
+            .resolve_delegate_target(&run, &request)
+            .await
+            .expect_err("la profondeur maximale doit être refusée");
+        assert!(error.contains("profondeur maximale"));
+    }
+
+    #[tokio::test]
+    async fn spawn_expert_creates_a_nested_supervisor_whose_answer_bubbles_back_to_the_caller() {
+        // Superviseur -> délègue à Expert A -> Expert A confie une sous-tâche
+        // dynamique via `spawn_expert` -> le Superviseur imbriqué répond
+        // directement (sans redéléguer) -> sa réponse remonte à Expert A ->
+        // la réponse d'Expert A remonte au Superviseur racine.
+        let model = ScriptedModel::new(vec![
+            tool_call(
+                "call_1",
+                "delegate_to_expert",
+                json!({ "expert_id": "expert_a", "task": "fais x" }),
+            ),
+            tool_call("call_2", "spawn_expert", json!({ "task": "fais y" })),
+            final_answer("réponse du superviseur imbriqué"),
+            final_answer("réponse de l'expert A"),
+            final_answer("terminé"),
+        ]);
+        let orchestrator = orchestrator(model, StaticCatalog(vec![expert_a_profile(8)]));
+
+        let mut run = OrchestrationRun::new(AgentFrame::supervisor(
+            "tu es le superviseur",
+            vec!["delegate_to_expert".to_string()],
+            8,
+            "rédige l'acte",
+        ));
+
+        let outcome = orchestrator
+            .drive(&mut run)
+            .await
+            .expect("exécution réussie");
+        assert!(matches!(outcome, RunOutcome::Done(text) if text == "terminé"));
+        assert_eq!(run.status, RunStatus::Done);
+        assert_eq!(
+            run.stack.len(),
+            1,
+            "les frames expert et superviseur imbriqué doivent tous deux avoir été dépilés"
+        );
     }
 }

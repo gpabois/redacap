@@ -1,8 +1,8 @@
 use leptos::prelude::*;
 
 use agent::{
-    AgentPanel, DocumentRequest, DocumentUpload, InteractionRequest, InteractionResponse,
-    PanelEntry,
+    AgentPanel, AgentSessionHistory, AgentSessionSummary, DocumentRequest, DocumentUpload,
+    InteractionRequest, InteractionResponse, PanelEntry, SupervisorContextEntry,
 };
 use dsfr::{BlocMarianneInline, ResizeHandle, TabPanel, Tabs};
 
@@ -96,6 +96,37 @@ pub fn LegalActEditor(
     /// `agent_document_request`.
     #[prop(optional)]
     on_agent_document_response: Option<Callback<DocumentUpload>>,
+    /// Sessions de conversation passées de l'utilisateur courant pour ce
+    /// projet (voir [`AgentPanel`]'s `sessions`).
+    #[prop(optional, into)]
+    agent_sessions: Option<Signal<Vec<AgentSessionSummary>>>,
+    /// Appelé lorsque l'utilisateur ouvre la liste des sessions passées.
+    #[prop(optional)]
+    on_list_agent_sessions: Option<Callback<()>>,
+    /// Appelé avec l'identifiant de la session choisie par l'utilisateur.
+    #[prop(optional)]
+    on_open_agent_session: Option<Callback<String>>,
+    /// Transcript d'une session passée à afficher en lecture seule (voir
+    /// [`AgentPanel`]'s `session_history`).
+    #[prop(optional, into)]
+    agent_session_history: Option<Signal<Option<AgentSessionHistory>>>,
+    /// Appelé lorsque l'utilisateur ferme la consultation d'une session
+    /// passée.
+    #[prop(optional)]
+    on_close_agent_session_history: Option<Callback<()>>,
+    /// Contexte brut (historique `agent::ChatMessage`, système compris) du
+    /// frame Superviseur en cours de consultation (voir [`AgentPanel`]'s
+    /// `supervisor_context`).
+    #[prop(optional, into)]
+    agent_supervisor_context: Option<Signal<Option<Vec<SupervisorContextEntry>>>>,
+    /// Appelé lorsque l'utilisateur demande à visualiser le contexte du
+    /// Superviseur.
+    #[prop(optional)]
+    on_view_agent_supervisor_context: Option<Callback<()>>,
+    /// Appelé lorsque l'utilisateur ferme la consultation du contexte du
+    /// Superviseur.
+    #[prop(optional)]
+    on_close_agent_supervisor_context: Option<Callback<()>>,
     /// Appelé à chaque changement du nœud ciblé pour l'agent IA (bouton
     /// « Cibler », voir [`super::context::EditorContext::agent_target`]),
     /// pour que la page hôte le transmette au serveur (voir `app::ws::
@@ -135,8 +166,7 @@ pub fn LegalActEditor(
         _ => None,
     };
     let agent_interaction = agent_interaction.unwrap_or_else(|| Signal::derive(|| None));
-    let agent_document_request =
-        agent_document_request.unwrap_or_else(|| Signal::derive(|| None));
+    let agent_document_request = agent_document_request.unwrap_or_else(|| Signal::derive(|| None));
     let connected_users = connected_users.unwrap_or_else(|| Signal::derive(Vec::new));
     let on_agent_respond = on_agent_respond.unwrap_or_else(|| Callback::new(|_| {}));
     let agent_auto_accept = agent_auto_accept.unwrap_or_else(|| Signal::derive(|| false));
@@ -145,6 +175,18 @@ pub fn LegalActEditor(
     let on_agent_clear_history = on_agent_clear_history.unwrap_or_else(|| Callback::new(|_| {}));
     let on_agent_document_response =
         on_agent_document_response.unwrap_or_else(|| Callback::new(|_| {}));
+    let agent_sessions = agent_sessions.unwrap_or_else(|| Signal::derive(Vec::new));
+    let on_list_agent_sessions = on_list_agent_sessions.unwrap_or_else(|| Callback::new(|_| {}));
+    let on_open_agent_session = on_open_agent_session.unwrap_or_else(|| Callback::new(|_| {}));
+    let agent_session_history = agent_session_history.unwrap_or_else(|| Signal::derive(|| None));
+    let on_close_agent_session_history =
+        on_close_agent_session_history.unwrap_or_else(|| Callback::new(|_| {}));
+    let agent_supervisor_context =
+        agent_supervisor_context.unwrap_or_else(|| Signal::derive(|| None));
+    let on_view_agent_supervisor_context =
+        on_view_agent_supervisor_context.unwrap_or_else(|| Callback::new(|_| {}));
+    let on_close_agent_supervisor_context =
+        on_close_agent_supervisor_context.unwrap_or_else(|| Callback::new(|_| {}));
 
     // `StoredValue` (Copy) plutôt qu'une capture directe de `children` (non
     // `Copy`, `Rc<dyn Fn...>`) : le bloc réactif ci-dessous s'exécute à
@@ -217,6 +259,14 @@ pub fn LegalActEditor(
                                                 on_clear_history=on_agent_clear_history
                                                 document_request=agent_document_request
                                                 on_document_response=on_agent_document_response
+                                                sessions=agent_sessions
+                                                on_list_sessions=on_list_agent_sessions
+                                                on_open_session=on_open_agent_session
+                                                session_history=agent_session_history
+                                                on_close_session_history=on_close_agent_session_history
+                                                supervisor_context=agent_supervisor_context
+                                                on_view_supervisor_context=on_view_agent_supervisor_context
+                                                on_close_supervisor_context=on_close_agent_supervisor_context
                                             />
                                         }.into_any()
                                     })}
@@ -427,7 +477,10 @@ fn TargetButton(node_id: BodyNodeId) -> impl IntoView {
 
 fn plain_text_signal(node_id: BodyNodeId) -> Signal<String> {
     let ctx = expect_editor_context();
-    Signal::derive(move || ctx.body.with(|b| super::content::inline_text_of(b, node_id)))
+    Signal::derive(move || {
+        ctx.body
+            .with(|b| super::content::inline_text_of(b, node_id))
+    })
 }
 
 /// Remplace le contenu texte de `node_id` par `new_text` : réutilise l'unique

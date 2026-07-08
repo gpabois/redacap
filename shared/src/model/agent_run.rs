@@ -19,6 +19,11 @@ pub struct AgentRun {
     /// `server::editor::state::EditorRoom`) ; au plus un run `running`/
     /// `paused` par salle (voir `agent_runs_active_per_room_idx`).
     pub room_id: String,
+    /// Session de conversation à laquelle ce run appartient (voir
+    /// [`crate::model::AgentSession`]) : plusieurs runs successifs
+    /// (`resume_as_new_task`) partagent la même session tant qu'elle n'a pas
+    /// été archivée.
+    pub session_id: ID,
     pub author_id: ID,
     /// `"running" | "paused" | "done" | "failed"` (voir
     /// `agent::orchestration::RunStatus`).

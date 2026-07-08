@@ -177,10 +177,10 @@ impl Selection {
 mod tests {
     use super::*;
     use crate::NodeKind;
+    use crate::NodeSpec;
     use crate::direct::DirectBody;
     use crate::kind::Article;
     use crate::traits::node::{BodyRead, BodyWrite};
-    use crate::NodeSpec;
 
     fn paragraph_plain(body: &mut DirectBody) -> BodyNodeId {
         let article = body

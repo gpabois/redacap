@@ -25,15 +25,29 @@ pub enum ClientMessage {
     /// viser via le mot-clé `"selection"` sans jamais avoir à connaître son
     /// identifiant technique (voir `server::protocol::ClientMessage::SetSelection`).
     SetSelection { node_id: Option<String> },
-    /// Efface l'historique de la conversation avec l'agent pour cette
-    /// connexion : la prochaine `RunAgent` repart d'une conversation vide
-    /// plutôt que de poursuivre celle en cours (voir
-    /// `server::protocol::ClientMessage::ClearHistory`).
+    /// Archive la session de conversation active avec l'agent pour cette
+    /// connexion : la prochaine `RunAgent` ouvre une nouvelle session plutôt
+    /// que de poursuivre celle en cours, qui reste consultable en lecture
+    /// seule (voir `server::editor::protocol::ClientMessage::ClearHistory`).
     ClearHistory,
+    /// Demande la liste des sessions de conversation passées de
+    /// l'utilisateur courant pour cette salle, la plus récente en premier
+    /// (voir `server::editor::protocol::ClientMessage::ListAgentSessions`).
+    ListAgentSessions,
+    /// Demande la reconstruction en lecture seule du transcript d'une
+    /// session passée, sans affecter la session active ni la conversation
+    /// actuellement affichée (voir
+    /// `server::editor::protocol::ClientMessage::GetAgentSessionHistory`).
+    GetAgentSessionHistory { session_id: String },
     /// Mise à jour Yrs (base64) du document de commentaires/notes de
     /// travail, produite par une édition locale (voir
     /// `server::protocol::ClientMessage::ReviewUpdate`).
     ReviewUpdate { update: String },
+    /// Demande le contexte brut (historique `agent::ChatMessage`, système
+    /// compris) effectivement envoyé au modèle par le frame Superviseur du
+    /// run le plus récent de cette salle (voir
+    /// `server::editor::protocol::ClientMessage::GetSupervisorContext`).
+    GetSupervisorContext,
 }
 
 #[derive(Debug, Deserialize)]
@@ -49,9 +63,15 @@ pub enum ServerMessage {
     /// L'agent pose une question ouverte (outil `ask_user`). `agent_label`
     /// identifie le frame à l'origine de la question (`"Superviseur"` ou le
     /// libellé d'un expert délégué).
-    InteractionAsk { agent_label: String, question: String },
+    InteractionAsk {
+        agent_label: String,
+        question: String,
+    },
     /// L'agent demande une confirmation oui/non avant une action irréversible.
-    InteractionConfirm { agent_label: String, message: String },
+    InteractionConfirm {
+        agent_label: String,
+        message: String,
+    },
     /// L'agent présente un formulaire structuré (outil `ask_questions`).
     InteractionQuestions {
         agent_label: String,
@@ -100,6 +120,99 @@ pub enum ServerMessage {
     /// connexion) puis mises à jour incrémentales (base64) du document de
     /// commentaires/notes de travail.
     ReviewUpdate { update: String },
+    /// Réponse à [`ClientMessage::ListAgentSessions`] : sessions passées
+    /// (actives ou archivées) de l'utilisateur courant pour cette salle, les
+    /// plus récentes en premier.
+    AgentSessions { sessions: Vec<AgentSessionWire> },
+    /// Réponse à [`ClientMessage::GetAgentSessionHistory`] : transcript
+    /// reconstruit (lecture seule) d'une session passée.
+    AgentSessionHistory {
+        session_id: String,
+        entries: Vec<AgentSessionEntryWire>,
+    },
+    /// Envoyé une fois à l'ouverture de la connexion si la salle a une
+    /// session active dont le transcript n'est pas vide : alimente
+    /// directement `RoomHandle::agent_messages`, pour retrouver la
+    /// conversation en cours après un rechargement de page plutôt que de la
+    /// voir vide (voir `server::editor::protocol::ServerMessage::AgentActiveSession`).
+    AgentActiveSession { entries: Vec<AgentSessionEntryWire> },
+    /// Envoyé une fois à l'ouverture de la connexion si la salle a un run
+    /// toujours en cours (voir `server::editor::ws::handle_socket`) : fait
+    /// passer `RoomHandle::agent_pending` à `true` immédiatement, avant même
+    /// que sa prochaine progression n'arrive, pour qu'un rechargement de page
+    /// ou un nouvel onglet ne présente pas la zone de saisie comme
+    /// disponible alors qu'une tâche tourne déjà pour cette salle.
+    AgentRunInProgress,
+    /// Réponse à [`ClientMessage::GetSupervisorContext`] : contexte brut
+    /// (système compris) de l'historique du frame Superviseur du run le plus
+    /// récent de la salle, tel qu'envoyé au modèle.
+    SupervisorContext {
+        entries: Vec<SupervisorContextEntryWire>,
+    },
+}
+
+/// Résumé d'une session de conversation passée (voir
+/// `server::editor::protocol::AgentSessionWire`, son pendant côté serveur).
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgentSessionWire {
+    pub id: String,
+    /// `"active" | "archived"`.
+    pub status: String,
+    /// Horodatage RFC 3339 : le client se charge de sa mise en forme.
+    pub created_at: String,
+    pub archived_at: Option<String>,
+    pub preview: Option<String>,
+}
+
+/// Élément du transcript reconstruit d'une session passée (voir
+/// `server::editor::protocol::AgentSessionEntryWire`, son pendant côté
+/// serveur).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AgentSessionEntryWire {
+    User {
+        content: String,
+    },
+    Assistant {
+        content: String,
+    },
+    ToolCall {
+        name: String,
+        arguments: serde_json::Value,
+        output: String,
+    },
+}
+
+/// Message brut du contexte du Superviseur (voir
+/// `server::editor::protocol::SupervisorContextEntryWire`, son pendant côté
+/// serveur) : contrairement à [`AgentSessionEntryWire`], le message système
+/// est conservé et un appel d'outil n'est jamais fusionné avec son résultat.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SupervisorContextEntryWire {
+    System {
+        content: String,
+    },
+    User {
+        content: String,
+    },
+    Assistant {
+        content: Option<String>,
+        tool_calls: Vec<SupervisorContextToolCallWire>,
+    },
+    ToolResult {
+        tool_call_id: String,
+        content: String,
+    },
+}
+
+/// Appel d'outil porté par un message assistant du contexte brut (voir
+/// [`SupervisorContextEntryWire::Assistant`]).
+#[derive(Debug, Clone, Deserialize)]
+pub struct SupervisorContextToolCallWire {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
 }
 
 /// Identité d'un utilisateur connecté à la salle (voir

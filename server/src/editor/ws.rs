@@ -43,12 +43,12 @@ use agent::tools::{
     GenerateNumberingTool, GeorisquesClient, GeorisquesConfig, GeorisquesQueryTool, IcpeQueryTool,
     InsertNodeTool, LegifranceClient, LegifranceConfig, LegifranceFetchTool, LegifranceSearchTool,
     ListIntentionsTool, ReadDocumentTool, ReadStructureTool, ReadTitleTool, RemoveIntentionTool,
-    RemoveNodeTool, RequestDocumentTool, SetTitleTool, ValidateStructureTool,
+    RemoveNodeTool, RequestDocumentTool, SetTitleTool, SpawnExpertTool, ValidateStructureTool,
 };
 use agent::{
-    AgentCatalog, AgentFrame, AgentObserver, LanguageModel, OpenAiCompatibleModel,
+    AgentCatalog, AgentFrame, AgentObserver, ChatMessage, LanguageModel, OpenAiCompatibleModel,
     OpenAiCompatibleModelConfig, OrchestrationRun, Orchestrator, PauseAnswer, PauseReason,
-    PauseRequest, RunOutcome, RunStatus, ToolRegistry,
+    PauseRequest, Role, RunOutcome, RunStatus, ToolRegistry,
 };
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
@@ -65,7 +65,11 @@ use yrs::{ReadTxn, StateVector, Transact, Update};
 
 use super::ports::{StorageAgentCatalog, WsIntentions, WsLegalActEditor, WsUserInteraction};
 use super::presence::{color_for_id, display_initial};
-use super::protocol::{ClientMessage, DocumentUploadWire, InteractionAnswerWire, InteractionQuestionWire, PresenceUser, ServerMessage};
+use super::protocol::{
+    AgentSessionEntryWire, AgentSessionWire, ClientMessage, DocumentUploadWire,
+    InteractionAnswerWire, InteractionQuestionWire, PresenceUser, ServerMessage,
+    SupervisorContextEntryWire, SupervisorContextToolCallWire,
+};
 use super::state::{EditorRoom, Presence};
 use crate::auth::session::COOKIE_NAME;
 use crate::state::{AppState, SessionKey};
@@ -283,7 +287,18 @@ async fn handle_socket(
     let mut room_rx = room.updates.subscribe();
     let mut review_rx = room.review_updates.subscribe();
     let mut presence_rx = room.presence.subscribe();
+    // Progression de l'agent (voir `super::state::EditorRoom::agent_events`) :
+    // diffusée à toute la salle plutôt que réservée à la connexion qui a
+    // démarré la tâche, pour qu'un rechargement de page ou un second onglet
+    // continue de suivre une tâche déjà en cours (voir
+    // `super::ports::WsUserInteraction`).
+    let mut agent_rx = room.agent_events.subscribe();
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<ServerMessage>();
+    // Clones dédiés à la reconciliation après un décrochage de `agent_rx`
+    // (voir `reconcile_agent_lag`) : `state`/`room_id` sont encore utilisés
+    // après ce point par la boucle de lecture principale ci-dessous.
+    let agent_lag_state = state.clone();
+    let agent_lag_room_id = room_id.clone();
 
     let send_task = tokio::spawn(async move {
         loop {
@@ -321,6 +336,30 @@ async fn handle_socket(
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 },
+                text = agent_rx.recv() => match text {
+                    Ok(text) => {
+                        if sink.send(Message::Text(text.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        // Le message terminal (`AgentDone`/`AgentError`/pause)
+                        // peut avoir été perdu avec les fragments
+                        // intermédiaires sautés par ce décrochage, laissant le
+                        // client bloqué sur « l'agent réfléchit » alors que la
+                        // tâche est en fait déjà terminée côté serveur :
+                        // interroge directement l'état persisté pour le
+                        // débloquer (voir `reconcile_agent_lag`).
+                        if let Some(message) =
+                            reconcile_agent_lag(&agent_lag_state.store, &agent_lag_room_id).await
+                            && let Ok(text) = serde_json::to_string(&message)
+                            && sink.send(Message::Text(text.into())).await.is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                },
                 message = out_rx.recv() => match message {
                     Some(message) => {
                         let Ok(text) = serde_json::to_string(&message) else { continue };
@@ -346,9 +385,12 @@ async fn handle_socket(
     ));
     // Une seule instance concrète, utilisée à la fois comme port de lecture
     // de document et comme observateur de l'orchestration : les deux rôles
-    // relaient vers le même client websocket (voir `WsUserInteraction` dans
-    // `super::ports`).
-    let ws_interaction = Arc::new(WsUserInteraction::new(out_tx.clone(), state.store.clone()));
+    // relaient à tous les pairs de la salle (voir `WsUserInteraction` dans
+    // `super::ports`, et `EditorRoom::agent_events`).
+    let ws_interaction = Arc::new(WsUserInteraction::new(
+        room.agent_events.clone(),
+        state.store.clone(),
+    ));
     let document_content: Arc<dyn DocumentContentPort> = ws_interaction.clone();
     let agent_observer: Arc<dyn AgentObserver> = ws_interaction;
     // Propre à cette connexion : voir la note sur son pendant, `selection`,
@@ -357,14 +399,29 @@ async fn handle_socket(
     // risque (au pire, une confirmation de plus est demandée).
     let auto_accept = Arc::new(AtomicBool::new(false));
 
-    // Rejoue la question en attente si la salle a un run en pause (voir
-    // module doc) : une connexion qui arrive (nouvel onglet, reconnexion
-    // après coupure...) doit voir immédiatement où l'orchestration s'est
-    // arrêtée, plutôt que de paraître silencieusement bloquée.
+    // Une connexion qui arrive (nouvel onglet, reconnexion après coupure...)
+    // doit voir immédiatement où l'orchestration en est, plutôt que de
+    // paraître silencieusement bloquée : soit une question en attente (run
+    // `paused`), soit un simple indicateur que la tâche est toujours en
+    // cours (run `running`, dont la progression continuera d'arriver via
+    // `EditorRoom::agent_events`, voir la boucle `send_task` ci-dessus).
     if let Ok(Some(run)) = storage::agent_run::get_active_run_for_room(&state.store, &room_id).await
-        && run.status == "paused"
-        && let Some(message) = replay_pending_interaction(&run)
     {
+        if run.status == "paused" {
+            if let Some(message) = replay_pending_interaction(&run) {
+                let _ = out_tx.send(message);
+            }
+        } else {
+            let _ = out_tx.send(ServerMessage::AgentRunInProgress);
+        }
+    }
+
+    // Restaure le transcript de la session active pour que l'inspecteur
+    // reprenne sa conversation là où il l'avait laissée après un
+    // rechargement de page (voir [`restore_active_session`]), plutôt que de
+    // retrouver un panneau vide et ne pouvoir consulter cette session que
+    // depuis la liste, en lecture seule.
+    if let Ok(Some(message)) = restore_active_session(&state.store, &room_id).await {
         let _ = out_tx.send(message);
     }
 
@@ -373,18 +430,19 @@ async fn handle_socket(
             Message::Binary(bytes) => apply_and_broadcast(&room, &author_id, &bytes).await,
             Message::Text(text) => match serde_json::from_str::<ClientMessage>(&text) {
                 Ok(ClientMessage::RunAgent { task }) => {
-                    let already_active = storage::agent_run::get_active_run_for_room(&state.store, &room_id)
-                        .await
-                        .ok()
-                        .flatten()
-                        .is_some();
+                    let already_active =
+                        storage::agent_run::get_active_run_for_room(&state.store, &room_id)
+                            .await
+                            .ok()
+                            .flatten()
+                            .is_some();
                     if !already_active {
                         spawn_agent_run(
                             state.clone(),
                             editor.clone(),
                             document_content.clone(),
                             agent_observer.clone(),
-                            out_tx.clone(),
+                            room.agent_events.clone(),
                             auto_accept.clone(),
                             room_id.clone(),
                             room.legal_act_id(),
@@ -394,18 +452,19 @@ async fn handle_socket(
                     }
                 }
                 Ok(ClientMessage::InteractionAnswer { value }) => {
-                    let paused = storage::agent_run::get_active_run_for_room(&state.store, &room_id)
-                        .await
-                        .ok()
-                        .flatten()
-                        .is_some_and(|run| run.status == "paused");
+                    let paused =
+                        storage::agent_run::get_active_run_for_room(&state.store, &room_id)
+                            .await
+                            .ok()
+                            .flatten()
+                            .is_some_and(|run| run.status == "paused");
                     if paused {
                         spawn_agent_run(
                             state.clone(),
                             editor.clone(),
                             document_content.clone(),
                             agent_observer.clone(),
-                            out_tx.clone(),
+                            room.agent_events.clone(),
                             auto_accept.clone(),
                             room_id.clone(),
                             room.legal_act_id(),
@@ -424,18 +483,42 @@ async fn handle_socket(
                     *selection.lock().expect("verrou non empoisonné") = parsed;
                 }
                 Ok(ClientMessage::ClearHistory) => {
-                    let active = storage::agent_run::get_active_run_for_room(&state.store, &room_id)
-                        .await
-                        .ok()
-                        .flatten()
-                        .is_some();
+                    let active =
+                        storage::agent_run::get_active_run_for_room(&state.store, &room_id)
+                            .await
+                            .ok()
+                            .flatten()
+                            .is_some();
                     if !active {
-                        let _ = storage::agent_run::clear_room_history(&state.store, &room_id).await;
+                        let _ = storage::agent_session::archive_active_session_for_room(
+                            &state.store,
+                            &room_id,
+                        )
+                        .await;
+                    }
+                }
+                Ok(ClientMessage::ListAgentSessions) => {
+                    if let Ok(message) =
+                        list_agent_sessions(&state.store, &room_id, &author_id).await
+                    {
+                        let _ = out_tx.send(message);
+                    }
+                }
+                Ok(ClientMessage::GetAgentSessionHistory { session_id }) => {
+                    if let Ok(message) =
+                        get_agent_session_history(&state.store, &room_id, session_id).await
+                    {
+                        let _ = out_tx.send(message);
                     }
                 }
                 Ok(ClientMessage::ReviewUpdate { update }) => {
                     if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(update) {
                         apply_and_broadcast_review(&room, &author_id, &bytes).await;
+                    }
+                }
+                Ok(ClientMessage::GetSupervisorContext) => {
+                    if let Ok(message) = get_supervisor_context(&state.store, &room_id).await {
+                        let _ = out_tx.send(message);
                     }
                 }
                 Err(_) => {}
@@ -586,8 +669,14 @@ enum AgentInput {
 /// frame qui l'a posée (Superviseur ou expert délégué).
 fn pause_request_to_server_message(agent_label: String, request: PauseRequest) -> ServerMessage {
     match request {
-        PauseRequest::Ask { question } => ServerMessage::InteractionAsk { agent_label, question },
-        PauseRequest::Confirm { message } => ServerMessage::InteractionConfirm { agent_label, message },
+        PauseRequest::Ask { question } => ServerMessage::InteractionAsk {
+            agent_label,
+            question,
+        },
+        PauseRequest::Confirm { message } => ServerMessage::InteractionConfirm {
+            agent_label,
+            message,
+        },
         PauseRequest::AskQuestions { prompt, questions } => ServerMessage::InteractionQuestions {
             agent_label,
             prompt,
@@ -628,6 +717,313 @@ fn replay_pending_interaction(run: &shared::model::AgentRun) -> Option<ServerMes
     ))
 }
 
+/// Reconstitue un message de synchronisation à envoyer au client lorsque son
+/// abonnement à [`super::state::EditorRoom::agent_events`] a décroché
+/// (`RecvError::Lagged`, voir [`handle_socket`]) : un burst de fragments de
+/// réflexion/contenu peut dépasser la capacité du canal de diffusion, auquel
+/// cas le message terminal (`AgentDone`/`AgentError`/pause) qu'il portait a
+/// pu être perdu avec les fragments intermédiaires sautés, laissant le client
+/// bloqué indéfiniment sur « l'agent réfléchit » alors que la tâche est en
+/// fait déjà terminée côté serveur. Les fragments perdus eux-mêmes ne sont
+/// pas récupérables (non journalisés) ; interroge directement l'état persisté
+/// pour au moins débloquer l'indicateur d'attente et, le cas échéant, rejouer
+/// une interaction en attente. `None` si rien de pertinent n'est à renvoyer
+/// (run toujours `running` : la suite continuera d'arriver normalement).
+async fn reconcile_agent_lag(pool: &storage::Pool, room_id: &str) -> Option<ServerMessage> {
+    match storage::agent_run::get_active_run_for_room(pool, room_id)
+        .await
+        .ok()?
+    {
+        Some(run) if run.status == "paused" => replay_pending_interaction(&run),
+        Some(_running) => None,
+        None => {
+            let session = storage::agent_session::get_active_session_for_room(pool, room_id)
+                .await
+                .ok()??;
+            let run = storage::agent_run::get_latest_run_for_session(pool, &session.id)
+                .await
+                .ok()??;
+            Some(if run.status == "failed" {
+                ServerMessage::AgentError {
+                    message: "une erreur est survenue pendant le traitement de la tâche"
+                        .to_string(),
+                }
+            } else {
+                ServerMessage::AgentDone
+            })
+        }
+    }
+}
+
+/// Tronque `s` à `max` caractères (sur les `char`, pas les octets) pour
+/// l'aperçu d'une session dans la liste (voir [`list_agent_sessions`]), avec
+/// une ellipse si nécessaire.
+fn truncate_preview(s: &str, max: usize) -> String {
+    if s.chars().count() > max {
+        format!("{}…", s.chars().take(max).collect::<String>())
+    } else {
+        s.to_string()
+    }
+}
+
+/// Premier message utilisateur de l'historique du frame Superviseur, tronqué
+/// pour servir d'aperçu à une session dans la liste (voir
+/// [`list_agent_sessions`]) : `None` si l'historique n'en contient aucun (ne
+/// devrait pas arriver, tout frame racine démarre par un message utilisateur,
+/// voir `agent::orchestration::AgentFrame::new`).
+fn first_user_message_preview(history: &[ChatMessage]) -> Option<String> {
+    history
+        .iter()
+        .find(|message| message.role == Role::User)
+        .and_then(|message| message.content.as_deref())
+        .map(|content| truncate_preview(content, 80))
+}
+
+/// Construit la réponse à [`ClientMessage::ListAgentSessions`] : les sessions
+/// de `author_id` pour `room_id`, chacune accompagnée d'un aperçu de son
+/// premier message (voir [`first_user_message_preview`]) quand son run le
+/// plus ancien reste interprétable.
+async fn list_agent_sessions(
+    pool: &storage::Pool,
+    room_id: &str,
+    author_id: &ID,
+) -> Result<ServerMessage, storage::StorageError> {
+    let sessions = storage::agent_session::list_sessions_for_room(pool, room_id, author_id).await?;
+    let mut wire = Vec::with_capacity(sessions.len());
+    for session in sessions {
+        let preview = storage::agent_run::get_earliest_run_for_session(pool, &session.id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|run| serde_json::from_value::<Vec<AgentFrame>>(run.stack).ok())
+            .and_then(|stack| {
+                stack
+                    .first()
+                    .and_then(|frame| first_user_message_preview(&frame.history))
+            });
+        wire.push(AgentSessionWire {
+            id: session.id.to_string(),
+            status: session.status,
+            created_at: session.created_at.to_rfc3339(),
+            archived_at: session.archived_at.map(|at| at.to_rfc3339()),
+            preview,
+        });
+    }
+    Ok(ServerMessage::AgentSessions { sessions: wire })
+}
+
+/// Traduit l'historique `agent::ChatMessage` du frame Superviseur en
+/// transcript affichable (voir [`AgentSessionEntryWire`]) : les messages
+/// `system` sont omis (détail d'implémentation, jamais montré à
+/// l'inspecteur), un message assistant sans contenu textuel (appel d'outil
+/// pur) n'a pas d'entrée propre — c'est le résultat d'outil qui en porte une,
+/// une fois son appel d'origine retrouvé par `tool_call_id`.
+fn agent_session_history_from_chat_messages(history: &[ChatMessage]) -> Vec<AgentSessionEntryWire> {
+    let mut pending_calls: std::collections::HashMap<String, (String, serde_json::Value)> =
+        std::collections::HashMap::new();
+    let mut entries = Vec::new();
+
+    for message in history {
+        match message.role {
+            Role::System => {}
+            Role::User => {
+                if let Some(content) = &message.content {
+                    entries.push(AgentSessionEntryWire::User {
+                        content: content.clone(),
+                    });
+                }
+            }
+            Role::Assistant => {
+                if let Some(content) = &message.content {
+                    entries.push(AgentSessionEntryWire::Assistant {
+                        content: content.clone(),
+                    });
+                }
+                for call in &message.tool_calls {
+                    pending_calls
+                        .insert(call.id.clone(), (call.name.clone(), call.arguments.clone()));
+                }
+            }
+            Role::Tool => {
+                let Some(call_id) = &message.tool_call_id else {
+                    continue;
+                };
+                let Some((name, arguments)) = pending_calls.remove(call_id) else {
+                    continue;
+                };
+                entries.push(AgentSessionEntryWire::ToolCall {
+                    name,
+                    arguments,
+                    output: message.content.clone().unwrap_or_default(),
+                });
+            }
+        }
+    }
+
+    entries
+}
+
+/// Traduit l'historique complet `agent::ChatMessage` du frame Superviseur en
+/// contexte brut affichable (voir [`ServerMessage::SupervisorContext`]) :
+/// contrairement à [`agent_session_history_from_chat_messages`], le message
+/// système est conservé et un appel d'outil n'est jamais fusionné avec son
+/// résultat — chaque message de l'historique produit sa propre entrée, dans
+/// l'ordre, pour refléter tel quel ce que le Superviseur envoie effectivement
+/// au modèle.
+fn supervisor_context_from_chat_messages(
+    history: &[ChatMessage],
+) -> Vec<SupervisorContextEntryWire> {
+    history
+        .iter()
+        .map(|message| match message.role {
+            Role::System => SupervisorContextEntryWire::System {
+                content: message.content.clone().unwrap_or_default(),
+            },
+            Role::User => SupervisorContextEntryWire::User {
+                content: message.content.clone().unwrap_or_default(),
+            },
+            Role::Assistant => SupervisorContextEntryWire::Assistant {
+                content: message.content.clone(),
+                tool_calls: message
+                    .tool_calls
+                    .iter()
+                    .map(|call| SupervisorContextToolCallWire {
+                        id: call.id.clone(),
+                        name: call.name.clone(),
+                        arguments: serde_json::to_string_pretty(&call.arguments)
+                            .unwrap_or_else(|_| call.arguments.to_string()),
+                    })
+                    .collect(),
+            },
+            Role::Tool => SupervisorContextEntryWire::ToolResult {
+                tool_call_id: message.tool_call_id.clone().unwrap_or_default(),
+                content: message.content.clone().unwrap_or_default(),
+            },
+        })
+        .collect()
+}
+
+/// Construit la réponse à [`ClientMessage::GetSupervisorContext`] : contexte
+/// brut de l'historique du frame Superviseur du run le plus récent de
+/// `room_id` (actif s'il y en a un, sinon celui de la session active) — ce
+/// contexte n'a de sens que pour la conversation la plus récente, celle que
+/// l'inspecteur peut effectivement influencer, contrairement aux sessions
+/// archivées consultables via [`ClientMessage::GetAgentSessionHistory`].
+/// Renvoie une liste vide si la salle n'a encore aucun run.
+async fn get_supervisor_context(
+    pool: &storage::Pool,
+    room_id: &str,
+) -> Result<ServerMessage, String> {
+    let run = match storage::agent_run::get_active_run_for_room(pool, room_id)
+        .await
+        .map_err(|error| error.to_string())?
+    {
+        Some(run) => Some(run),
+        None => match storage::agent_session::get_active_session_for_room(pool, room_id)
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            Some(session) => storage::agent_run::get_latest_run_for_session(pool, &session.id)
+                .await
+                .map_err(|error| error.to_string())?,
+            None => None,
+        },
+    };
+
+    let entries = match run {
+        Some(run) => {
+            let stack: Vec<AgentFrame> =
+                serde_json::from_value(run.stack).map_err(|error| error.to_string())?;
+            stack
+                .first()
+                .map(|frame| supervisor_context_from_chat_messages(&frame.history))
+                .unwrap_or_default()
+        }
+        None => Vec::new(),
+    };
+
+    Ok(ServerMessage::SupervisorContext { entries })
+}
+
+/// Reconstruit le transcript de la session active de `room_id` (s'il y en a
+/// une), pour le renvoyer à une connexion qui vient de s'ouvrir (voir
+/// [`handle_socket`]) : contrairement à [`get_agent_session_history`], ce
+/// transcript alimente la conversation affichée elle-même
+/// (`ServerMessage::AgentActiveSession`), pas un recouvrement en lecture
+/// seule — c'est ce qui permet à l'inspecteur de reprendre sa conversation
+/// après un rechargement de page plutôt que de la retrouver vide, la session
+/// active n'étant autrement consultable qu'en lecture seule via
+/// [`ClientMessage::GetAgentSessionHistory`].
+async fn restore_active_session(
+    pool: &storage::Pool,
+    room_id: &str,
+) -> Result<Option<ServerMessage>, String> {
+    let Some(session) = storage::agent_session::get_active_session_for_room(pool, room_id)
+        .await
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(None);
+    };
+
+    let entries = match storage::agent_run::get_latest_run_for_session(pool, &session.id)
+        .await
+        .map_err(|error| error.to_string())?
+    {
+        Some(run) => {
+            let stack: Vec<AgentFrame> =
+                serde_json::from_value(run.stack).map_err(|error| error.to_string())?;
+            stack
+                .first()
+                .map(|frame| agent_session_history_from_chat_messages(&frame.history))
+                .unwrap_or_default()
+        }
+        None => Vec::new(),
+    };
+
+    if entries.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(ServerMessage::AgentActiveSession { entries }))
+}
+
+/// Construit la réponse à [`ClientMessage::GetAgentSessionHistory`] : vérifie
+/// que `session_id` appartient bien à `room_id` (une session d'une autre
+/// salle ne doit jamais être consultable depuis celle-ci) avant de
+/// reconstruire son transcript depuis le run le plus récent qui lui est
+/// rattaché.
+async fn get_agent_session_history(
+    pool: &storage::Pool,
+    room_id: &str,
+    session_id: String,
+) -> Result<ServerMessage, String> {
+    let id: ID = session_id.parse().map_err(|error| format!("{error}"))?;
+    let session = storage::agent_session::get_session(pool, &id)
+        .await
+        .map_err(|error| error.to_string())?
+        .filter(|session| session.room_id == room_id)
+        .ok_or_else(|| "session introuvable pour cette salle".to_string())?;
+
+    let entries = match storage::agent_run::get_latest_run_for_session(pool, &session.id)
+        .await
+        .map_err(|error| error.to_string())?
+    {
+        Some(run) => {
+            let stack: Vec<AgentFrame> =
+                serde_json::from_value(run.stack).map_err(|error| error.to_string())?;
+            stack
+                .first()
+                .map(|frame| agent_session_history_from_chat_messages(&frame.history))
+                .unwrap_or_default()
+        }
+        None => Vec::new(),
+    };
+
+    Ok(ServerMessage::AgentSessionHistory {
+        session_id,
+        entries,
+    })
+}
+
 /// Convertit la réponse brute du client (`ClientMessage::InteractionAnswer`)
 /// en [`PauseAnswer`] adaptée à `request`, en persistant au passage les
 /// octets d'un document uploadé (voir `storage::agent_run::store_document`)
@@ -664,9 +1060,8 @@ async fn decode_pause_answer(
             ))
         }
         PauseRequest::RequestDocument { .. } => {
-            let upload: DocumentUploadWire = serde_json::from_value(value).map_err(|error| {
-                format!("réponse invalide à la demande de document : {error}")
-            })?;
+            let upload: DocumentUploadWire = serde_json::from_value(value)
+                .map_err(|error| format!("réponse invalide à la demande de document : {error}"))?;
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(&upload.content_base64)
                 .map_err(|error| format!("contenu du document invalide (base64) : {error}"))?;
@@ -703,9 +1098,10 @@ async fn persist_run_outcome(
 ) -> ServerMessage {
     let message = match drive_result {
         Ok(RunOutcome::Done(_)) => ServerMessage::AgentDone,
-        Ok(RunOutcome::Paused { agent_label, request }) => {
-            pause_request_to_server_message(agent_label, request)
-        }
+        Ok(RunOutcome::Paused {
+            agent_label,
+            request,
+        }) => pause_request_to_server_message(agent_label, request),
         Err(error) => {
             run.status = RunStatus::Failed;
             ServerMessage::AgentError {
@@ -726,8 +1122,15 @@ async fn persist_run_outcome(
         };
     };
 
-    match storage::agent_run::save_run(pool, run_id, version, status, stack, run.final_answer.as_deref())
-        .await
+    match storage::agent_run::save_run(
+        pool,
+        run_id,
+        version,
+        status,
+        stack,
+        run.final_answer.as_deref(),
+    )
+    .await
     {
         Ok(_) => message,
         Err(error) => ServerMessage::AgentError {
@@ -736,12 +1139,22 @@ async fn persist_run_outcome(
     }
 }
 
+/// Démarre l'orchestration sur une tâche Tokio détachée : son issue finale
+/// (`AgentDone`/`AgentError`/pause) est diffusée sur `agent_events` (voir
+/// `EditorRoom::agent_events`) plutôt qu'envoyée à une connexion précise, pour
+/// que tout pair encore connecté à ce moment-là la reçoive — y compris une
+/// connexion qui aurait rejoint la salle après le démarrage de cette tâche
+/// (nouvel onglet, reconnexion après un rechargement de page). Sans effet
+/// visible immédiat si personne n'est connecté à cet instant : l'issue reste
+/// de toute façon persistée (voir [`persist_run_outcome`]) et rejouée à la
+/// prochaine connexion (voir [`restore_active_session`]/
+/// [`replay_pending_interaction`]).
 fn spawn_agent_run(
     state: Arc<AppState>,
     editor: Arc<dyn LegalActEditorPort>,
     document_content: Arc<dyn DocumentContentPort>,
     agent_observer: Arc<dyn AgentObserver>,
-    out_tx: mpsc::UnboundedSender<ServerMessage>,
+    agent_events: tokio::sync::broadcast::Sender<String>,
     auto_accept: Arc<AtomicBool>,
     room_id: String,
     legal_act_id: Option<ID>,
@@ -762,7 +1175,9 @@ fn spawn_agent_run(
         )
         .await
         .unwrap_or_else(|message| ServerMessage::AgentError { message });
-        let _ = out_tx.send(message);
+        if let Ok(text) = serde_json::to_string(&message) {
+            let _ = agent_events.send(text);
+        }
     });
 }
 
@@ -815,7 +1230,9 @@ async fn run_orchestration(
         let georisques_client =
             Arc::new(build_georisques_client(&state.store, secret_key.clone()).await);
         if allowed_tools.contains("georisques_query") {
-            tools.register(Box::new(GeorisquesQueryTool::new(georisques_client.clone())));
+            tools.register(Box::new(GeorisquesQueryTool::new(
+                georisques_client.clone(),
+            )));
         }
         if allowed_tools.contains("icpe_query") {
             tools.register(Box::new(IcpeQueryTool::new(georisques_client)));
@@ -828,7 +1245,9 @@ async fn run_orchestration(
         {
             let legifrance_client = Arc::new(legifrance_client);
             if allowed_tools.contains("legifrance_search") {
-                tools.register(Box::new(LegifranceSearchTool::new(legifrance_client.clone())));
+                tools.register(Box::new(LegifranceSearchTool::new(
+                    legifrance_client.clone(),
+                )));
             }
             if allowed_tools.contains("legifrance_fetch") {
                 tools.register(Box::new(LegifranceFetchTool::new(legifrance_client)));
@@ -839,48 +1258,87 @@ async fn run_orchestration(
     let catalog = StorageAgentCatalog::new(state.store.clone());
     let profiles = catalog.list().await.map_err(|error| error.to_string())?;
     tools.register(Box::new(DelegateToExpertTool::new(&profiles)));
+    // Disponible pour tout profil d'expert dont `tool_names` (voir
+    // `/admin/agent-profiles`) l'inclut : contrairement à
+    // `delegate_to_expert`, réservé au Superviseur (voir
+    // `SUPERVISOR_TOOL_NAMES`), `spawn_expert` permet à un expert en cours de
+    // tâche de confier une sous-tâche dynamique à une nouvelle instance du
+    // Superviseur plutôt que de choisir lui-même un profil du catalogue.
+    tools.register(Box::new(SpawnExpertTool));
 
-    let orchestrator = Orchestrator::new(model, tools, Arc::new(catalog), agent_observer, auto_accept);
+    let orchestrator =
+        Orchestrator::new(model, tools, Arc::new(catalog), agent_observer, auto_accept);
 
     match input {
         AgentInput::Start { task } => {
-            let root = match storage::agent_run::get_latest_run_for_room(&state.store, room_id)
-                .await
-                .ok()
-                .flatten()
-            {
-                Some(previous) if previous.status == "done" => {
-                    let mut stack: Vec<AgentFrame> =
-                        serde_json::from_value(previous.stack).map_err(|error| error.to_string())?;
-                    let root = stack.pop().ok_or_else(|| {
-                        "run précédent terminé sans frame superviseur".to_string()
-                    })?;
-                    root.resume_as_new_task(&task)
-                }
-                _ => AgentFrame::supervisor(
-                    system_prompt,
-                    SUPERVISOR_TOOL_NAMES.iter().map(|name| name.to_string()).collect(),
-                    SUPERVISOR_MAX_STEPS,
-                    &task,
-                ),
-            };
+            let session =
+                match storage::agent_session::get_active_session_for_room(&state.store, room_id)
+                    .await
+                    .map_err(|error| error.to_string())?
+                {
+                    Some(session) => session,
+                    None => {
+                        storage::agent_session::create_session(&state.store, room_id, &author_id)
+                            .await
+                            .map_err(|error| error.to_string())?
+                    }
+                };
+
+            let root =
+                match storage::agent_run::get_latest_run_for_session(&state.store, &session.id)
+                    .await
+                    .ok()
+                    .flatten()
+                {
+                    Some(previous) if previous.status == "done" => {
+                        let mut stack: Vec<AgentFrame> = serde_json::from_value(previous.stack)
+                            .map_err(|error| error.to_string())?;
+                        let root = stack.pop().ok_or_else(|| {
+                            "run précédent terminé sans frame superviseur".to_string()
+                        })?;
+                        root.resume_as_new_task(&task)
+                    }
+                    _ => AgentFrame::supervisor(
+                        system_prompt,
+                        SUPERVISOR_TOOL_NAMES
+                            .iter()
+                            .map(|name| name.to_string())
+                            .collect(),
+                        SUPERVISOR_MAX_STEPS,
+                        &task,
+                    ),
+                };
 
             let mut run = OrchestrationRun::new(root);
-            let initial_stack = serde_json::to_value(&run.stack).map_err(|error| error.to_string())?;
-            let created = storage::agent_run::create_run(&state.store, room_id, &author_id, initial_stack)
-                .await
-                .map_err(|error| error.to_string())?;
+            let initial_stack =
+                serde_json::to_value(&run.stack).map_err(|error| error.to_string())?;
+            let created = storage::agent_run::create_run(
+                &state.store,
+                room_id,
+                &session.id,
+                &author_id,
+                initial_stack,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
 
             let drive_result = orchestrator.drive(&mut run).await;
-            Ok(persist_run_outcome(&state.store, &created.id, created.version, run, drive_result).await)
+            Ok(persist_run_outcome(
+                &state.store,
+                &created.id,
+                created.version,
+                run,
+                drive_result,
+            )
+            .await)
         }
         AgentInput::Resume { value } => {
             let existing = storage::agent_run::get_active_run_for_room(&state.store, room_id)
                 .await
                 .map_err(|error| error.to_string())?
                 .ok_or_else(|| "aucune tâche en attente sur cette salle".to_string())?;
-            let stack: Vec<AgentFrame> =
-                serde_json::from_value(existing.stack.clone()).map_err(|error| error.to_string())?;
+            let stack: Vec<AgentFrame> = serde_json::from_value(existing.stack.clone())
+                .map_err(|error| error.to_string())?;
             let pending_request = stack
                 .last()
                 .and_then(|frame| frame.pending.as_ref())
@@ -890,14 +1348,22 @@ async fn run_orchestration(
                 })
                 .ok_or_else(|| "cette salle n'est pas en attente d'une réponse".to_string())?;
 
-            let answer = decode_pause_answer(&state.store, &existing.id, &pending_request, value).await?;
+            let answer =
+                decode_pause_answer(&state.store, &existing.id, &pending_request, value).await?;
             let mut run = OrchestrationRun {
                 stack,
                 status: RunStatus::Paused,
                 final_answer: None,
             };
             let drive_result = orchestrator.resume(&mut run, answer).await;
-            Ok(persist_run_outcome(&state.store, &existing.id, existing.version, run, drive_result).await)
+            Ok(persist_run_outcome(
+                &state.store,
+                &existing.id,
+                existing.version,
+                run,
+                drive_result,
+            )
+            .await)
         }
     }
 }

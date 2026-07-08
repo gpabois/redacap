@@ -1,6 +1,6 @@
 //! Outil `read_document` : extrait le contenu textuel d'un document externe
-//! (PDF ou ODT), fourni soit par référence (`document_id`, obtenu via
-//! `request_document`), soit par une URL directe.
+//! (PDF, ODT, DOCX, HTML ou texte brut), fourni soit par référence
+//! (`document_id`, obtenu via `request_document`), soit par une URL directe.
 
 use std::io::{Cursor, Read};
 use std::sync::Arc;
@@ -31,6 +31,9 @@ struct ReadDocumentArguments {
 enum DocumentFormat {
     Pdf,
     Odt,
+    Docx,
+    Html,
+    PlainText,
 }
 
 impl DocumentFormat {
@@ -41,6 +44,18 @@ impl DocumentFormat {
             Some(Self::Pdf)
         } else if mime_type.contains("opendocument.text") || file_name.ends_with(".odt") {
             Some(Self::Odt)
+        } else if mime_type.contains("wordprocessingml.document") || file_name.ends_with(".docx") {
+            Some(Self::Docx)
+        } else if mime_type.contains("html")
+            || file_name.ends_with(".html")
+            || file_name.ends_with(".htm")
+        {
+            Some(Self::Html)
+        } else if mime_type.starts_with("text/")
+            || file_name.ends_with(".txt")
+            || file_name.ends_with(".md")
+        {
+            Some(Self::PlainText)
         } else {
             None
         }
@@ -75,9 +90,10 @@ impl Tool for ReadDocumentTool {
     }
 
     fn description(&self) -> &str {
-        "Extrait le texte d'un document externe au format PDF ou ODT, fourni soit par \
-         `document_id` (référence obtenue via un appel précédent à `request_document`), soit \
-         par `url` (lien direct vers le fichier). Pour éviter de renvoyer un texte trop long, le \
+        "Extrait le texte d'un document externe au format PDF, ODT, DOCX, HTML ou texte brut, \
+         fourni soit par `document_id` (référence obtenue via un appel précédent à \
+         `request_document`), soit par `url` (lien direct vers le fichier). Pour éviter de \
+         renvoyer un texte trop long, le \
          résultat peut être filtré avec au plus un des paramètres `grep`, `sed_range` ou `tail` \
          (chaque ligne renvoyée est précédée de son numéro dans le document, pour pouvoir \
          ensuite cibler une plage avec `sed_range`)."
@@ -179,13 +195,16 @@ impl Tool for ReadDocumentTool {
         let format = DocumentFormat::detect(&mime_type, &file_name).ok_or_else(|| {
             ToolError::Other(format!(
                 "format de document non supporté (type MIME : « {mime_type} », fichier : « \
-                 {file_name} ») ; seuls PDF et ODT sont pris en charge"
+                 {file_name} ») ; seuls PDF, ODT, DOCX, HTML et texte brut sont pris en charge"
             ))
         })?;
 
         let text = match format {
             DocumentFormat::Pdf => extract_pdf_text(&bytes).await?,
             DocumentFormat::Odt => extract_odt_text(&bytes)?,
+            DocumentFormat::Docx => extract_docx_text(&bytes)?,
+            DocumentFormat::Html => extract_html_text(&bytes)?,
+            DocumentFormat::PlainText => extract_plain_text(&bytes)?,
         };
 
         let text = if let Some(pattern) = &args.grep {
@@ -263,9 +282,7 @@ fn sed_range_text(text: &str, range: &str) -> Result<String, ToolError> {
                 ))
             })?;
             let end: usize = end.trim().parse().map_err(|_| {
-                ToolError::InvalidArguments(format!(
-                    "numéro de ligne de fin invalide : « {end} »"
-                ))
+                ToolError::InvalidArguments(format!("numéro de ligne de fin invalide : « {end} »"))
             })?;
             Ok((start, end))
         })?;
@@ -328,9 +345,18 @@ async fn extract_pdf_text(bytes: &[u8]) -> Result<String, ToolError> {
         .spawn()
         .map_err(|error| ToolError::Other(format!("échec du lancement de pdftotext : {error}")))?;
 
-    let mut stdin = child.stdin.take().expect("stdin capturé à la création du processus");
-    let mut stdout = child.stdout.take().expect("stdout capturé à la création du processus");
-    let mut stderr = child.stderr.take().expect("stderr capturé à la création du processus");
+    let mut stdin = child
+        .stdin
+        .take()
+        .expect("stdin capturé à la création du processus");
+    let mut stdout = child
+        .stdout
+        .take()
+        .expect("stdout capturé à la création du processus");
+    let mut stderr = child
+        .stderr
+        .take()
+        .expect("stderr capturé à la création du processus");
     let input = bytes.to_vec();
 
     // Écriture et lecture concurrentes : indispensable pour les PDF de plus
@@ -355,14 +381,15 @@ async fn extract_pdf_text(bytes: &[u8]) -> Result<String, ToolError> {
     write_result
         .map_err(|error| ToolError::Other(format!("échec d'écriture vers pdftotext : {error}")))?;
     let output = stdout_result.map_err(|error| {
-        ToolError::Other(format!("échec de lecture de la sortie de pdftotext : {error}"))
+        ToolError::Other(format!(
+            "échec de lecture de la sortie de pdftotext : {error}"
+        ))
     })?;
     let stderr_output = stderr_result.unwrap_or_default();
 
-    let status = child
-        .wait()
-        .await
-        .map_err(|error| ToolError::Other(format!("échec de l'exécution de pdftotext : {error}")))?;
+    let status = child.wait().await.map_err(|error| {
+        ToolError::Other(format!("échec de l'exécution de pdftotext : {error}"))
+    })?;
 
     if !status.success() {
         return Err(ToolError::Other(format!(
@@ -398,9 +425,7 @@ fn extract_odt_text(bytes: &[u8]) -> Result<String, ToolError> {
     let mut content_xml = String::new();
     archive
         .by_name("content.xml")
-        .map_err(|error| {
-            ToolError::Other(format!("content.xml introuvable dans l'ODT : {error}"))
-        })?
+        .map_err(|error| ToolError::Other(format!("content.xml introuvable dans l'ODT : {error}")))?
         .read_to_string(&mut content_xml)
         .map_err(|error| ToolError::Other(format!("échec de lecture de content.xml : {error}")))?;
 
@@ -455,6 +480,244 @@ fn extract_text_from_odt_xml(xml: &str) -> Result<String, ToolError> {
     }
 
     Ok(output)
+}
+
+fn extract_docx_text(bytes: &[u8]) -> Result<String, ToolError> {
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|error| {
+        ToolError::Other(format!("échec de lecture de l'archive DOCX : {error}"))
+    })?;
+    let mut document_xml = String::new();
+    archive
+        .by_name("word/document.xml")
+        .map_err(|error| {
+            ToolError::Other(format!(
+                "word/document.xml introuvable dans le DOCX : {error}"
+            ))
+        })?
+        .read_to_string(&mut document_xml)
+        .map_err(|error| {
+            ToolError::Other(format!("échec de lecture de word/document.xml : {error}"))
+        })?;
+
+    extract_text_from_docx_xml(&document_xml)
+}
+
+/// Extrait le texte visible d'un `word/document.xml` DOCX : seul le contenu
+/// des balises `<w:t>` (véritables runs de texte) est retenu, les
+/// paragraphes et lignes de tableau (`w:p`/`w:tr`) sont séparés par un saut
+/// de ligne, `w:tab`/`w:br` restitués comme tabulation/saut de ligne — le
+/// reste de la mise en forme (styles, sections...) est ignoré.
+fn extract_text_from_docx_xml(xml: &str) -> Result<String, ToolError> {
+    use quick_xml::events::Event;
+    use quick_xml::reader::Reader;
+
+    let mut reader = Reader::from_str(xml);
+    let mut output = String::new();
+    let mut buf = Vec::new();
+    let mut in_run_text = false;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(tag)) if tag.local_name().as_ref() == b"t" => in_run_text = true,
+            Ok(Event::Empty(tag)) => match tag.local_name().as_ref() {
+                b"tab" => output.push('\t'),
+                b"br" | b"cr" => output.push('\n'),
+                _ => {}
+            },
+            Ok(Event::Text(text)) if in_run_text => {
+                let decoded = text
+                    .decode()
+                    .map_err(|error| ToolError::Other(format!("XML DOCX invalide : {error}")))?;
+                let unescaped = quick_xml::escape::unescape(&decoded)
+                    .map_err(|error| ToolError::Other(format!("XML DOCX invalide : {error}")))?;
+                output.push_str(&unescaped);
+            }
+            Ok(Event::End(tag)) => match tag.local_name().as_ref() {
+                b"t" => in_run_text = false,
+                b"p" | b"tr" => output.push('\n'),
+                _ => {}
+            },
+            Ok(Event::Eof) => break,
+            Err(error) => {
+                return Err(ToolError::Other(format!(
+                    "échec du parsing XML DOCX : {error}"
+                )));
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(output)
+}
+
+/// Extrait le texte visible d'une page HTML : le contenu de `<script>` et
+/// `<style>` est ignoré, les éléments de bloc usuels (paragraphes, titres,
+/// listes, lignes de tableau, sauts de ligne) sont séparés par un saut de
+/// ligne. Le nom des balises de fermeture n'est pas vérifié
+/// (`check_end_names = false`), pour tolérer les balises auto-fermantes du
+/// HTML qui ne sont pas fermées explicitement (`<br>`, `<meta>`...) ; les
+/// entités mal formées sont conservées telles quelles plutôt que de faire
+/// échouer l'extraction.
+fn extract_text_from_html(html: &str) -> Result<String, ToolError> {
+    use quick_xml::events::Event;
+    use quick_xml::reader::Reader;
+
+    // Le tokenizer de quick-xml échoue sur une référence d'entité mal formée
+    // (un `&` non suivi d'un nom/code valide terminé par `;`), pourtant
+    // fréquente en HTML « tag soup » : on l'échappe par avance plutôt que de
+    // faire échouer toute l'extraction pour ce détail.
+    let sanitized = sanitize_bare_ampersands(html);
+
+    let mut reader = Reader::from_str(&sanitized);
+    reader.config_mut().check_end_names = false;
+    let mut output = String::new();
+    let mut buf = Vec::new();
+    let mut skip_depth = 0usize;
+
+    const BLOCK_TAGS: &[&[u8]] = &[
+        b"p", b"div", b"h1", b"h2", b"h3", b"h4", b"h5", b"h6", b"li", b"tr",
+    ];
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(tag)) => {
+                let name = tag.local_name().as_ref().to_ascii_lowercase();
+                if name == b"script" || name == b"style" {
+                    skip_depth += 1;
+                } else if skip_depth == 0 && name == b"br" {
+                    output.push('\n');
+                }
+            }
+            Ok(Event::Empty(tag)) => {
+                let name = tag.local_name().as_ref().to_ascii_lowercase();
+                if skip_depth == 0 && name == b"br" {
+                    output.push('\n');
+                }
+            }
+            Ok(Event::Text(text)) if skip_depth == 0 => {
+                let decoded = text
+                    .decode()
+                    .map_err(|error| ToolError::Other(format!("HTML invalide : {error}")))?;
+                match quick_xml::escape::unescape(&decoded) {
+                    Ok(unescaped) => output.push_str(&unescaped),
+                    Err(_) => output.push_str(&decoded),
+                }
+            }
+            // quick-xml tokenise chaque référence d'entité (`&amp;`, `&#233;`...)
+            // comme un événement séparé, distinct du texte qui l'entoure.
+            Ok(Event::GeneralRef(reference)) if skip_depth == 0 => {
+                let decoded = reference
+                    .decode()
+                    .map_err(|error| ToolError::Other(format!("HTML invalide : {error}")))?;
+                match reference.resolve_char_ref().ok().flatten() {
+                    Some(character) => output.push(character),
+                    None => match decoded.as_ref() {
+                        "amp" => output.push('&'),
+                        "lt" => output.push('<'),
+                        "gt" => output.push('>'),
+                        "quot" => output.push('"'),
+                        "apos" => output.push('\''),
+                        // Entité HTML (`&nbsp;`, `&copy;`...) non reconnue par
+                        // les 5 entités prédéfinies XML : conservée telle
+                        // quelle plutôt que perdue silencieusement.
+                        other => {
+                            output.push('&');
+                            output.push_str(other);
+                            output.push(';');
+                        }
+                    },
+                }
+            }
+            Ok(Event::End(tag)) => {
+                let name = tag.local_name().as_ref().to_ascii_lowercase();
+                if name == b"script" || name == b"style" {
+                    skip_depth = skip_depth.saturating_sub(1);
+                } else if skip_depth == 0 && BLOCK_TAGS.contains(&name.as_slice()) {
+                    output.push('\n');
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(error) => {
+                return Err(ToolError::Other(format!("échec du parsing HTML : {error}")));
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(output)
+}
+
+/// Échappe (`&amp;`) tout `&` qui n'introduit pas une référence d'entité
+/// valide (`&nom;`, `&#123;` ou `&#x1F;`), pour que le tokenizer XML de
+/// quick-xml ne rejette pas un `&` isolé, courant dans du HTML réel non
+/// généré par un outil strict.
+fn sanitize_bare_ampersands(html: &str) -> String {
+    let chars: Vec<char> = html.chars().collect();
+    let mut output = String::with_capacity(html.len());
+    let mut index = 0;
+    while index < chars.len() {
+        if chars[index] == '&' {
+            match valid_entity_end(&chars, index) {
+                Some(end) => {
+                    output.extend(&chars[index..=end]);
+                    index = end + 1;
+                }
+                None => {
+                    output.push_str("&amp;");
+                    index += 1;
+                }
+            }
+        } else {
+            output.push(chars[index]);
+            index += 1;
+        }
+    }
+    output
+}
+
+/// Renvoie l'indice (dans `chars`) du `;` terminant une référence d'entité
+/// valide qui commence en `start` (qui doit pointer sur `&`), ou `None` si
+/// ce qui suit `&` n'en forme pas une.
+fn valid_entity_end(chars: &[char], start: usize) -> Option<usize> {
+    let mut index = start + 1;
+    if chars.get(index) == Some(&'#') {
+        index += 1;
+        let is_hex = matches!(chars.get(index), Some('x') | Some('X'));
+        if is_hex {
+            index += 1;
+        }
+        let digits_start = index;
+        while chars.get(index).is_some_and(|character| {
+            if is_hex {
+                character.is_ascii_hexdigit()
+            } else {
+                character.is_ascii_digit()
+            }
+        }) {
+            index += 1;
+        }
+        return (index > digits_start && chars.get(index) == Some(&';')).then_some(index);
+    }
+
+    let name_start = index;
+    while chars.get(index).is_some_and(char::is_ascii_alphanumeric) && index - name_start < 32 {
+        index += 1;
+    }
+    (index > name_start && chars.get(index) == Some(&';')).then_some(index)
+}
+
+/// Décode un document texte brut (`.txt`, `.md`...) : les octets invalides
+/// en UTF-8 sont remplacés plutôt que de faire échouer l'extraction, la
+/// plupart des documents texte récupérés par URL n'ayant pas d'encodage
+/// garanti.
+fn extract_plain_text(bytes: &[u8]) -> Result<String, ToolError> {
+    Ok(String::from_utf8_lossy(bytes).into_owned())
+}
+
+fn extract_html_text(bytes: &[u8]) -> Result<String, ToolError> {
+    extract_text_from_html(&String::from_utf8_lossy(bytes))
 }
 
 #[cfg(test)]
@@ -562,7 +825,26 @@ trailer
             DocumentFormat::detect("", "rapport.odt"),
             Some(DocumentFormat::Odt)
         ));
-        assert!(DocumentFormat::detect("text/plain", "notes.txt").is_none());
+        assert!(matches!(
+            DocumentFormat::detect(
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "rapport"
+            ),
+            Some(DocumentFormat::Docx)
+        ));
+        assert!(matches!(
+            DocumentFormat::detect("", "rapport.docx"),
+            Some(DocumentFormat::Docx)
+        ));
+        assert!(matches!(
+            DocumentFormat::detect("text/html; charset=utf-8", "page"),
+            Some(DocumentFormat::Html)
+        ));
+        assert!(matches!(
+            DocumentFormat::detect("", "notes.txt"),
+            Some(DocumentFormat::PlainText)
+        ));
+        assert!(DocumentFormat::detect("image/png", "logo.png").is_none());
     }
 
     const FIVE_LINES: &str = "un\ndeux\ntrois\nquatre\ncinq";
@@ -640,5 +922,75 @@ trailer
     fn tail_returns_everything_when_n_exceeds_the_line_count() {
         let output = tail_text(FIVE_LINES, 100);
         assert_eq!(output, "1: un\n2: deux\n3: trois\n4: quatre\n5: cinq\n");
+    }
+
+    #[test]
+    fn docx_extraction_keeps_only_run_text_separated_by_paragraphs() {
+        // Comme un vrai `word/document.xml` : seul le texte dans <w:t> doit
+        // être capturé, pas l'espace insignifiant entre les balises de mise
+        // en forme (rPr, pPr...).
+        let xml = "<w:document \
+            xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">\
+            <w:body>\
+            <w:p><w:r><w:rPr/><w:t>Premier paragraphe.</w:t></w:r></w:p>\
+            <w:p><w:r><w:t>Second</w:t></w:r><w:r><w:tab/><w:t>paragraphe.</w:t></w:r></w:p>\
+            </w:body></w:document>";
+
+        let text = extract_text_from_docx_xml(xml).unwrap();
+
+        assert_eq!(text, "Premier paragraphe.\nSecond\tparagraphe.\n");
+    }
+
+    #[test]
+    fn extracts_text_from_a_minimal_docx_archive() {
+        let mut buffer = Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut buffer);
+            writer
+                .start_file::<_, ()>("word/document.xml", zip::write::FileOptions::default())
+                .unwrap();
+            use std::io::Write;
+            writer
+                .write_all(
+                    b"<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">\
+                      <w:body><w:p><w:r><w:t>Bonjour le monde</w:t></w:r></w:p></w:body></w:document>",
+                )
+                .unwrap();
+            writer.finish().unwrap();
+        }
+
+        let text = extract_docx_text(buffer.get_ref()).unwrap();
+
+        assert_eq!(text.trim(), "Bonjour le monde");
+    }
+
+    #[test]
+    fn html_extraction_ignores_script_and_style_and_separates_blocks() {
+        let html = "<html><head><style>p{color:red}</style>\
+            <script>console.log('x')</script></head>\
+            <body><p>Premier paragraphe.</p><p>Second<br>avec saut.</p></body></html>";
+
+        let text = extract_text_from_html(html).unwrap();
+
+        assert_eq!(text, "Premier paragraphe.\nSecond\navec saut.\n");
+    }
+
+    #[test]
+    fn html_extraction_tolerates_unclosed_and_malformed_markup() {
+        // Balises non fermées (<br>, <meta>) et entité mal formée (`&` seul) :
+        // ne doit pas faire échouer l'extraction (check_end_names = false et
+        // repli sur le texte brut en cas d'entité invalide).
+        let html = "<meta><p>Prix: 10 & plus</p>";
+
+        let text = extract_text_from_html(html).unwrap();
+
+        assert_eq!(text, "Prix: 10 & plus\n");
+    }
+
+    #[test]
+    fn plain_text_extraction_replaces_invalid_utf8_instead_of_failing() {
+        let text = extract_plain_text(b"Bonjour \xFF\xFE le monde").unwrap();
+        assert!(text.starts_with("Bonjour "));
+        assert!(text.ends_with(" le monde"));
     }
 }

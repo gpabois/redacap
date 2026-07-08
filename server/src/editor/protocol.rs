@@ -35,12 +35,24 @@ pub enum ClientMessage {
     /// `insert_node`/`remove_node`, sans jamais avoir à connaître ni
     /// demander son identifiant technique (voir `crate::ports::WsLegalActEditor`).
     SetSelection { node_id: Option<String> },
-    /// Efface l'historique de la conversation avec l'agent pour cette salle
-    /// (voir `storage::agent_run`) : la prochaine [`ClientMessage::RunAgent`]
-    /// repart d'une conversation vide plutôt que de poursuivre celle en
-    /// cours. Ignoré si un run est actuellement `running`/`paused` pour
-    /// cette salle.
+    /// Archive la session de conversation active avec l'agent pour cette
+    /// salle (voir `storage::agent_session::archive_active_session_for_room`) :
+    /// la prochaine [`ClientMessage::RunAgent`] ouvre une nouvelle session
+    /// plutôt que de poursuivre celle en cours, qui reste consultable en
+    /// lecture seule (voir [`ClientMessage::ListAgentSessions`]). Ignoré si
+    /// un run est actuellement `running`/`paused` pour cette salle.
     ClearHistory,
+    /// Demande la liste des sessions de conversation passées de
+    /// l'utilisateur courant pour cette salle (voir
+    /// `storage::agent_session::list_sessions_for_room`), la plus récente en
+    /// premier — voir [`ServerMessage::AgentSessions`].
+    ListAgentSessions,
+    /// Demande la reconstruction en lecture seule du transcript d'une session
+    /// passée (voir [`ServerMessage::AgentSessionHistory`]). N'affecte jamais
+    /// la session active ni la conversation actuellement affichée : c'est une
+    /// lecture pure, à afficher séparément par le client (voir
+    /// `agent::AgentPanel`).
+    GetAgentSessionHistory { session_id: String },
     /// Mise à jour Yrs (encodée base64) du document de commentaires/notes de
     /// travail (voir `legal_act::Review`), produite par une édition locale
     /// (nouveau commentaire, résolution, suppression...). Contrairement aux
@@ -49,6 +61,13 @@ pub enum ClientMessage {
     /// faible et cela évite de dupliquer le multiplexage binaire de
     /// [`crate::ws`] pour un second document Yrs.
     ReviewUpdate { update: String },
+    /// Demande le contexte brut (historique `agent::ChatMessage`, système
+    /// compris) effectivement envoyé au modèle par le frame Superviseur du
+    /// run le plus récent de cette salle (voir
+    /// [`ServerMessage::SupervisorContext`]) : outil de diagnostic, distinct
+    /// de [`Self::GetAgentSessionHistory`] qui n'en donne qu'une lecture
+    /// simplifiée destinée à l'inspecteur.
+    GetSupervisorContext,
 }
 
 #[derive(Debug, Serialize)]
@@ -64,9 +83,15 @@ pub enum ServerMessage {
     /// L'agent pose une question ouverte (outil `ask_user`). `agent_label`
     /// identifie le frame à l'origine de la question (`"Superviseur"` ou le
     /// libellé d'un expert délégué, voir `agent::orchestration::AgentFrame`).
-    InteractionAsk { agent_label: String, question: String },
+    InteractionAsk {
+        agent_label: String,
+        question: String,
+    },
     /// L'agent demande une confirmation oui/non avant une action irréversible.
-    InteractionConfirm { agent_label: String, message: String },
+    InteractionConfirm {
+        agent_label: String,
+        message: String,
+    },
     /// L'agent présente un formulaire structuré (outil `ask_questions`).
     InteractionQuestions {
         agent_label: String,
@@ -123,6 +148,114 @@ pub enum ServerMessage {
     /// à l'ouverture (état complet, voir `crate::ws::handle_socket`) puis à
     /// chaque changement (la sienne comme celles rediffusées des autres pairs).
     ReviewUpdate { update: String },
+    /// Réponse à [`ClientMessage::ListAgentSessions`] : sessions passées
+    /// (actives ou archivées) de l'utilisateur courant pour cette salle, les
+    /// plus récentes en premier.
+    AgentSessions { sessions: Vec<AgentSessionWire> },
+    /// Réponse à [`ClientMessage::GetAgentSessionHistory`] : transcript
+    /// reconstruit (lecture seule) d'une session passée.
+    AgentSessionHistory {
+        session_id: String,
+        entries: Vec<AgentSessionEntryWire>,
+    },
+    /// Envoyé une fois à l'ouverture de la connexion si la salle a une
+    /// session active dont le transcript n'est pas vide (voir
+    /// `crate::editor::ws::restore_active_session`) : contrairement à
+    /// [`Self::AgentSessionHistory`], ce transcript alimente directement la
+    /// conversation affichée (`app::ws::RoomHandle::agent_messages`), pas un
+    /// recouvrement en lecture seule — c'est ce qui permet de reprendre une
+    /// conversation après un rechargement de page plutôt que de la retrouver
+    /// vide.
+    AgentActiveSession { entries: Vec<AgentSessionEntryWire> },
+    /// Envoyé une fois à l'ouverture de la connexion si la salle a un run
+    /// `"running"` (voir `crate::editor::ws::handle_socket`) : signale à une
+    /// connexion qui rejoint après coup (nouvel onglet, reconnexion après un
+    /// rechargement de page) qu'une tâche est toujours en cours, avant même
+    /// que sa prochaine progression n'arrive sur `agent_events` — sans ce
+    /// signal, l'inspecteur verrait la zone de saisie disponible alors qu'une
+    /// tâche tourne déjà pour cette salle.
+    AgentRunInProgress,
+    /// Réponse à [`ClientMessage::GetSupervisorContext`] : contexte brut
+    /// (système compris) de l'historique du frame Superviseur du run le plus
+    /// récent de la salle, tel qu'envoyé au modèle. Vide si aucun run n'existe
+    /// encore pour cette salle.
+    SupervisorContext {
+        entries: Vec<SupervisorContextEntryWire>,
+    },
+}
+
+/// Résumé d'une session de conversation passée (voir
+/// `shared::model::AgentSession`), tel qu'affiché dans la liste proposée par
+/// [`ServerMessage::AgentSessions`].
+#[derive(Debug, Serialize)]
+pub struct AgentSessionWire {
+    pub id: String,
+    /// `"active" | "archived"` (voir `shared::model::AgentSession::status`).
+    pub status: String,
+    /// Horodatage RFC 3339 : le client se charge de sa mise en forme.
+    pub created_at: String,
+    pub archived_at: Option<String>,
+    /// Aperçu (tronqué) du premier message envoyé dans cette session, pour
+    /// la distinguer des autres dans la liste sans devoir en charger tout le
+    /// transcript.
+    pub preview: Option<String>,
+}
+
+/// Élément du transcript reconstruit d'une session passée (voir
+/// [`ServerMessage::AgentSessionHistory`]), traduit depuis l'historique
+/// `agent::ChatMessage` du frame Superviseur (voir
+/// `crate::editor::ws::agent_session_history_from_chat_messages`). Volontairement
+/// plus simple que [`AgentToolCallStarted`]/[`AgentToolCallFinished`] au fil
+/// de l'eau : une session passée n'a plus besoin d'être affichée comme
+/// "en cours d'exécution".
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AgentSessionEntryWire {
+    User {
+        content: String,
+    },
+    Assistant {
+        content: String,
+    },
+    ToolCall {
+        name: String,
+        arguments: serde_json::Value,
+        output: String,
+    },
+}
+
+/// Message brut du contexte du Superviseur (voir
+/// [`ServerMessage::SupervisorContext`]), traduit depuis `agent::ChatMessage`
+/// (voir `crate::editor::ws::supervisor_context_from_chat_messages`) :
+/// contrairement à [`AgentSessionEntryWire`], le message système est conservé
+/// et un appel d'outil n'est jamais fusionné avec son résultat, pour refléter
+/// tel quel ce que le Superviseur envoie effectivement au modèle.
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SupervisorContextEntryWire {
+    System {
+        content: String,
+    },
+    User {
+        content: String,
+    },
+    Assistant {
+        content: Option<String>,
+        tool_calls: Vec<SupervisorContextToolCallWire>,
+    },
+    ToolResult {
+        tool_call_id: String,
+        content: String,
+    },
+}
+
+/// Appel d'outil porté par un message assistant du contexte brut (voir
+/// [`SupervisorContextEntryWire::Assistant`]).
+#[derive(Debug, Serialize)]
+pub struct SupervisorContextToolCallWire {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
 }
 
 /// Identité d'un utilisateur connecté à la salle, telle qu'affichée par une

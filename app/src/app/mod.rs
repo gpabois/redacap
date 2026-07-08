@@ -171,6 +171,14 @@ fn PageEditorProjet() -> impl IntoView {
                             on_agent_target=Callback::new(move |node_id| room.set_selection(node_id))
                             agent_document_request=room.document_request
                             on_agent_document_response=Callback::new(move |upload| room.respond_document(upload))
+                            agent_sessions=room.agent_sessions
+                            on_list_agent_sessions=Callback::new(move |()| room.list_agent_sessions())
+                            on_open_agent_session=Callback::new(move |session_id| room.open_agent_session(session_id))
+                            agent_session_history=room.agent_session_history
+                            on_close_agent_session_history=Callback::new(move |()| room.close_agent_session_history())
+                            agent_supervisor_context=room.supervisor_context
+                            on_view_agent_supervisor_context=Callback::new(move |()| room.view_supervisor_context())
+                            on_close_agent_supervisor_context=Callback::new(move |()| room.close_supervisor_context())
                             user_initial=user_initial.clone()
                             is_admin=is_admin
                             connected_users=connected_users

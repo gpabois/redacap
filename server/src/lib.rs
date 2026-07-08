@@ -31,15 +31,12 @@ use crate::editor::state::EditorRooms;
 fn build_secret_encryption_key() -> Option<Vec<u8>> {
     use base64::Engine;
     let encoded = std::env::var("SECRET_ENCRYPTION_KEY")
-    .inspect_err(|err| {
-        error!("Erreur lors de la recherche du SECRET_ENCRYPTION_KEY: {err}")
-    }).ok()?;
+        .inspect_err(|err| error!("Erreur lors de la recherche du SECRET_ENCRYPTION_KEY: {err}"))
+        .ok()?;
 
     let mut bytes = base64::engine::general_purpose::STANDARD
         .decode(encoded.trim())
-        .inspect_err(|err| {
-            error!("Erreur lors du décodage du SECRET_ENCRYPTION_KEY: {err}")
-        })
+        .inspect_err(|err| error!("Erreur lors du décodage du SECRET_ENCRYPTION_KEY: {err}"))
         .ok()?;
 
     if bytes.len() < 32 {
@@ -68,6 +65,18 @@ pub async fn run() -> anyhow::Result<()> {
 
     let database_url = std::env::var("DATABASE_URL")?;
     let store = storage::connect(&database_url).await?;
+
+    // Purge les runs orphelins d'un précédent processus (voir
+    // `Claude.md` § « L'agent IA... » et la doc de
+    // `fail_orphaned_running_runs`) : sans quoi un plantage pendant une tâche
+    // agent bloquerait indéfiniment sa salle, aucun nouveau run ne pouvant
+    // démarrer tant qu'un run `"running"` y reste actif.
+    let orphaned_runs = storage::agent_run::fail_orphaned_running_runs(&store).await?;
+    if orphaned_runs > 0 {
+        log!(
+            "{orphaned_runs} run(s) agent orphelin(s) d'un précédent démarrage marqué(s) en échec"
+        );
+    }
 
     // État bootstrap (voir `Claude.md` § « Ajoute un état bootstrap... ») :
     // évalué une fois au démarrage, puis maintenu en mémoire (voir

@@ -44,14 +44,28 @@ pub enum PauseRequest {
 }
 
 /// Requête de délégation à un agent expert renvoyée par
-/// [`Tool::delegate_request`] (voir `agent::tools::DelegateToExpertTool`) :
-/// comme pour [`PauseRequest`], un outil qui en renvoie une n'est jamais
-/// exécuté via [`Tool::call`] — l'orchestrateur empile un nouveau frame
-/// éphémère pour le profil désigné plutôt que d'exécuter l'outil lui-même.
+/// [`Tool::delegate_request`] (voir `agent::tools::DelegateToExpertTool`,
+/// `agent::tools::SpawnExpertTool`) : comme pour [`PauseRequest`], un outil
+/// qui en renvoie une n'est jamais exécuté via [`Tool::call`] —
+/// l'orchestrateur empile un nouveau frame éphémère pour la cible désignée
+/// plutôt que d'exécuter l'outil lui-même.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DelegateRequest {
-    pub profile_id: String,
+    pub target: DelegateTarget,
     pub task: String,
+}
+
+/// Cible d'une [`DelegateRequest`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum DelegateTarget {
+    /// Profil nommé du catalogue, choisi explicitement par l'appelant
+    /// (`delegate_to_expert`).
+    Profile(String),
+    /// Nouvelle instance du Superviseur, qui choisit lui-même l'expert
+    /// approprié plutôt que de le laisser à la charge de l'appelant
+    /// (`spawn_expert`, sous-tâche dynamique) — voir
+    /// `agent::orchestration::AgentFrame::nested_supervisor`.
+    Supervisor,
 }
 
 /// Une capacité exposée au modèle de langage pendant la boucle agentique

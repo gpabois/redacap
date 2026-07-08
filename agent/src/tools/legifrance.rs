@@ -107,9 +107,7 @@ impl LegifranceClient {
             )));
         }
         let response: OAuthTokenResponse = serde_json::from_str(&body).map_err(|error| {
-            ToolError::Other(format!(
-                "réponse OAuth PISTE invalide ({error}) : {body}"
-            ))
+            ToolError::Other(format!("réponse OAuth PISTE invalide ({error}) : {body}"))
         })?;
 
         // Marge de sécurité pour éviter d'utiliser un jeton expirant pendant la requête suivante.

@@ -1,7 +1,5 @@
 use anyhow::bail;
-use yrs::{
-    Any, Array, ArrayPrelim, ArrayRef, Doc, Map, MapPrelim, MapRef, Out, ReadTxn, Transact,
-};
+use yrs::{Any, Array, ArrayPrelim, ArrayRef, Doc, Map, MapPrelim, MapRef, Out, ReadTxn, Transact};
 
 use crate::BodyNodeId;
 use crate::cursor::{Cursor, Selection};
@@ -224,7 +222,8 @@ impl ReviewWrite for YrsReview {
         let id = comment.id;
         let mut txn = self.doc.transact_mut();
         let len = self.comments.len(&txn);
-        self.comments.insert(&mut txn, len, comment_prelim(&comment));
+        self.comments
+            .insert(&mut txn, len, comment_prelim(&comment));
         id
     }
 
@@ -285,9 +284,8 @@ mod tests {
     #[test]
     fn test_add_resolve_delete_roundtrip() {
         let mut review = YrsReview::new();
-        let id = review.add_comment(
-            Comment::new("alice", "à revoir").with_selection(selection(), "extrait"),
-        );
+        let id = review
+            .add_comment(Comment::new("alice", "à revoir").with_selection(selection(), "extrait"));
         let comment = review.comment(id).unwrap();
         assert_eq!(comment.excerpt.as_deref(), Some("extrait"));
         assert!(!comment.resolved);

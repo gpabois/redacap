@@ -17,7 +17,7 @@ use legal_act::{BodyNodeId, BodyRead, BodyWrite, NodeKind, NodeSpec, YrsBody};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use serde_json::Value;
 use shared::id::ID;
-use tokio::sync::mpsc;
+use tokio::sync::broadcast;
 use yrs::{ReadTxn, Transact};
 
 use super::protocol::ServerMessage;
@@ -539,7 +539,9 @@ fn parse_blocks(body: &mut YrsBody, events: &mut MdEvents) -> Vec<MdBlock> {
                         _ => {}
                     }
                 }
-                blocks.push(MdBlock::Paragraph(vec![body.create_node(NodeSpec::Plain(text))]));
+                blocks.push(MdBlock::Paragraph(vec![
+                    body.create_node(NodeSpec::Plain(text)),
+                ]));
             }
             // Contenu inline directement au niveau bloc : c'est le cas des
             // cellules de tableau GFM, dont le contenu n'est jamais
@@ -866,11 +868,12 @@ fn check_structure(body: &YrsBody, node: BodyNodeId, errors: &mut Vec<String>) {
     }
 }
 
-/// Relaie au client websocket de la salle les réflexions du modèle et les
-/// appels d'outils que l'orchestration déclenche (voir [`AgentObserver`]),
-/// pour affichage dans `agent::AgentPanel` au fil de l'eau plutôt qu'une
-/// fois la tâche entièrement terminée, et lit le contenu des documents
-/// précédemment fournis par l'inspecteur (voir [`DocumentContentPort`]).
+/// Relaie à tous les clients websocket connectés à la salle les réflexions
+/// du modèle et les appels d'outils que l'orchestration déclenche (voir
+/// [`AgentObserver`]), pour affichage dans `agent::AgentPanel` au fil de
+/// l'eau plutôt qu'une fois la tâche entièrement terminée, et lit le contenu
+/// des documents précédemment fournis par l'inspecteur (voir
+/// [`DocumentContentPort`]).
 ///
 /// Contrairement à l'ancienne implémentation, cette struct ne relaie plus
 /// elle-même les questions de l'agent ni n'attend leur réponse en bloquant :
@@ -880,15 +883,34 @@ fn check_structure(body: &YrsBody, node: BodyNodeId, errors: &mut Vec<String>) {
 /// persisté du run (voir `storage::agent_run`) plutôt qu'au travers d'un
 /// canal propre à cette connexion — c'est ce qui permet à une pause de
 /// survivre à une déconnexion ou un redémarrage du serveur.
+///
+/// Diffuse sur `agent_events` (voir [`super::state::EditorRoom::agent_events`])
+/// plutôt que sur un canal propre à la connexion qui a démarré la tâche : une
+/// connexion qui rejoint la salle après coup (nouvel onglet, reconnexion
+/// après un rechargement de page) continue ainsi de recevoir la progression
+/// d'une tâche déjà en cours, plutôt que de la perdre silencieusement.
 pub struct WsUserInteraction {
-    out: mpsc::UnboundedSender<ServerMessage>,
+    agent_events: broadcast::Sender<String>,
     pool: storage::Pool,
 }
 
 impl WsUserInteraction {
     #[must_use]
-    pub fn new(out: mpsc::UnboundedSender<ServerMessage>, pool: storage::Pool) -> Self {
-        Self { out, pool }
+    pub fn new(agent_events: broadcast::Sender<String>, pool: storage::Pool) -> Self {
+        Self { agent_events, pool }
+    }
+
+    /// Sérialise puis diffuse `message` à tous les pairs connectés à la
+    /// salle : silencieux si aucune connexion n'y est actuellement abonnée
+    /// (voir `tokio::sync::broadcast::Sender::send`) ou si la sérialisation
+    /// échoue (ne devrait pas arriver), ce qui est sans conséquence puisque
+    /// l'état de l'orchestration reste de toute façon persisté (voir
+    /// `storage::agent_run`) et rejoué à la prochaine connexion (voir
+    /// `super::ws::restore_active_session`/`replay_pending_interaction`).
+    fn broadcast(&self, message: &ServerMessage) {
+        if let Ok(text) = serde_json::to_string(message) {
+            let _ = self.agent_events.send(text);
+        }
     }
 }
 
@@ -900,7 +922,9 @@ impl DocumentContentPort for WsUserInteraction {
         })?;
         let document = storage::agent_run::fetch_document(&self.pool, &id)
             .await
-            .map_err(|_| ToolError::InvalidArguments(format!("document introuvable : {document_id}")))?;
+            .map_err(|_| {
+                ToolError::InvalidArguments(format!("document introuvable : {document_id}"))
+            })?;
         Ok(DocumentContent {
             bytes: document.bytes,
             mime_type: document.mime_type,
@@ -912,25 +936,25 @@ impl DocumentContentPort for WsUserInteraction {
 #[async_trait::async_trait]
 impl AgentObserver for WsUserInteraction {
     async fn on_reasoning_delta(&self, agent_label: &str, delta: &str) {
-        let _ = self.out.send(ServerMessage::AgentReasoningDelta {
+        self.broadcast(&ServerMessage::AgentReasoningDelta {
             agent_label: agent_label.to_string(),
             delta: delta.to_string(),
         });
     }
 
     async fn on_content_delta(&self, agent_label: &str, delta: &str) {
-        let _ = self.out.send(ServerMessage::AgentContentDelta {
+        self.broadcast(&ServerMessage::AgentContentDelta {
             agent_label: agent_label.to_string(),
             delta: delta.to_string(),
         });
     }
 
     async fn on_turn_finished(&self, _agent_label: &str) {
-        let _ = self.out.send(ServerMessage::AgentStepFinished);
+        self.broadcast(&ServerMessage::AgentStepFinished);
     }
 
     async fn on_tool_call_started(&self, agent_label: &str, call: &ToolCall) {
-        let _ = self.out.send(ServerMessage::AgentToolCallStarted {
+        self.broadcast(&ServerMessage::AgentToolCallStarted {
             agent_label: agent_label.to_string(),
             id: call.id.clone(),
             name: call.name.clone(),
@@ -948,7 +972,7 @@ impl AgentObserver for WsUserInteraction {
             Ok(output) => (true, output.clone()),
             Err(message) => (false, message.clone()),
         };
-        let _ = self.out.send(ServerMessage::AgentToolCallFinished {
+        self.broadcast(&ServerMessage::AgentToolCallFinished {
             agent_label: agent_label.to_string(),
             id: call_id.to_string(),
             ok,
@@ -1116,7 +1140,10 @@ mod tests {
         let editor = new_editor(&room);
 
         editor
-            .fill_section(&article.to_string(), "Du texte **en gras** et *en italique*.")
+            .fill_section(
+                &article.to_string(),
+                "Du texte **en gras** et *en italique*.",
+            )
             .await
             .unwrap();
 
@@ -1130,7 +1157,10 @@ mod tests {
         assert_eq!(body.kind_of(para), NodeKind::Paragraphe);
 
         let children = body.children_of(para);
-        let full_text: String = children.iter().map(|&c| text_of_subtree(&body, c)).collect();
+        let full_text: String = children
+            .iter()
+            .map(|&c| text_of_subtree(&body, c))
+            .collect();
         assert_eq!(full_text, "Du texte en gras et en italique.");
 
         let bold_span = children
@@ -1146,7 +1176,9 @@ mod tests {
 
         let italic_span = children
             .iter()
-            .find(|&&c| body.kind_of(c) == NodeKind::Span && text_of_subtree(&body, c) == "en italique")
+            .find(|&&c| {
+                body.kind_of(c) == NodeKind::Span && text_of_subtree(&body, c) == "en italique"
+            })
             .expect("span en italique introuvable");
         if let NodeSpec::Span(span) = body.spec_of(*italic_span) {
             assert!(span.italic);
@@ -1162,7 +1194,10 @@ mod tests {
         let editor = new_editor(&room);
 
         editor
-            .fill_section(&article.to_string(), "Premier paragraphe.\n\nSecond paragraphe.")
+            .fill_section(
+                &article.to_string(),
+                "Premier paragraphe.\n\nSecond paragraphe.",
+            )
             .await
             .unwrap();
 
@@ -1174,9 +1209,19 @@ mod tests {
             .unwrap();
         let paragraphs = body.children_of(article_body);
         assert_eq!(paragraphs.len(), 2);
-        assert!(paragraphs.iter().all(|&p| body.kind_of(p) == NodeKind::Paragraphe));
-        assert_eq!(body.text_of(body.first_leaf_of(paragraphs[0])), "Premier paragraphe.");
-        assert_eq!(body.text_of(body.first_leaf_of(paragraphs[1])), "Second paragraphe.");
+        assert!(
+            paragraphs
+                .iter()
+                .all(|&p| body.kind_of(p) == NodeKind::Paragraphe)
+        );
+        assert_eq!(
+            body.text_of(body.first_leaf_of(paragraphs[0])),
+            "Premier paragraphe."
+        );
+        assert_eq!(
+            body.text_of(body.first_leaf_of(paragraphs[1])),
+            "Second paragraphe."
+        );
     }
 
     #[tokio::test]
@@ -1211,10 +1256,7 @@ mod tests {
         let editor = new_editor(&room);
 
         editor
-            .fill_section(
-                &article.to_string(),
-                "| A | B |\n| --- | --- |\n| 1 | 2 |",
-            )
+            .fill_section(&article.to_string(), "| A | B |\n| --- | --- |\n| 1 | 2 |")
             .await
             .unwrap();
 
@@ -1263,11 +1305,15 @@ mod tests {
 
         let body = room.body.lock().await;
         let children = body.children_of(visa);
-        assert!(children.iter().all(|&c| matches!(
-            body.kind_of(c),
-            NodeKind::Plain | NodeKind::Span
-        )));
-        let full_text: String = children.iter().map(|&c| text_of_subtree(&body, c)).collect();
+        assert!(
+            children
+                .iter()
+                .all(|&c| matches!(body.kind_of(c), NodeKind::Plain | NodeKind::Span))
+        );
+        let full_text: String = children
+            .iter()
+            .map(|&c| text_of_subtree(&body, c))
+            .collect();
         assert_eq!(full_text, "Vu le code de l'environnement.");
     }
 

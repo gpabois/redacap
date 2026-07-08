@@ -14,6 +14,7 @@ mod id;
 
 pub mod agent_profile;
 pub mod agent_run;
+pub mod agent_session;
 pub mod agent_tool_scope;
 pub mod ai_model;
 pub mod audit_log;

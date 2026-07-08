@@ -50,6 +50,7 @@ fn tool_display_name(name: &str) -> &str {
         "legifrance_fetch" => "Lecture d'un texte Légifrance",
         "georisques_query" => "Interrogation GéoRisques",
         "icpe_query" => "Interrogation de la base ICPE",
+        "spawn_expert" => "Sous-tâche confiée au Superviseur",
         _ => name,
     }
 }
@@ -88,6 +89,7 @@ fn tool_call_summary(name: &str, arguments: &str) -> Option<String> {
         "read_document" => &["document_id", "url"],
         "georisques_query" => &["code_insee", "latlon"],
         "icpe_query" => &["nom_etablissement", "code_insee"],
+        "spawn_expert" => &["task"],
         _ => return None,
     };
     candidates
@@ -124,6 +126,10 @@ pub enum PanelRole {
 pub struct PanelMessage {
     pub role: PanelRole,
     pub content: String,
+    /// Libellé du frame à l'origine de ce message (voir
+    /// [`PanelReasoning::agent_label`]) : vide pour les messages utilisateur,
+    /// ou si l'application hôte ne distingue pas plusieurs agents.
+    pub agent_label: String,
 }
 
 impl PanelMessage {
@@ -132,6 +138,7 @@ impl PanelMessage {
         Self {
             role: PanelRole::User,
             content: content.into(),
+            agent_label: String::new(),
         }
     }
 
@@ -140,6 +147,18 @@ impl PanelMessage {
         Self {
             role: PanelRole::Assistant,
             content: content.into(),
+            agent_label: String::new(),
+        }
+    }
+
+    /// Comme [`Self::assistant`], en précisant le frame (Superviseur ou
+    /// expert délégué) à l'origine du message.
+    #[must_use]
+    pub fn assistant_from(agent_label: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: PanelRole::Assistant,
+            content: content.into(),
+            agent_label: agent_label.into(),
         }
     }
 }
@@ -185,6 +204,71 @@ pub struct PanelToolCall {
     pub status: PanelToolCallStatus,
 }
 
+/// Résumé d'une session de conversation passée, tel que proposé dans la
+/// liste affichée par [`AgentPanel`] (voir `on_list_sessions`/`sessions`).
+/// `label` et `preview` sont déjà mis en forme par la page hôte (date
+/// lisible, aperçu tronqué du premier message) : ce composant reste
+/// agnostique du format d'horodatage transmis par le serveur.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentSessionSummary {
+    pub id: String,
+    pub label: String,
+    pub preview: Option<String>,
+}
+
+/// Transcript reconstruit (lecture seule) d'une session passée, affiché en
+/// recouvrement de l'historique courant sans jamais le modifier (voir
+/// `on_open_session`/`session_history`) : fermer la consultation restaure
+/// l'affichage de `messages` tel quel, intact.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentSessionHistory {
+    pub session_id: String,
+    pub entries: Vec<PanelEntry>,
+}
+
+/// Rôle d'un message du contexte brut envoyé au modèle par le frame
+/// Superviseur (voir [`SupervisorContextEntry`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SupervisorContextRole {
+    System,
+    User,
+    Assistant,
+    Tool,
+}
+
+/// Appel d'outil porté par un message assistant du contexte brut (voir
+/// [`SupervisorContextEntry::Assistant`]).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SupervisorContextToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+}
+
+/// Message brut de l'historique effectivement envoyé au modèle par le frame
+/// Superviseur (voir `agent::orchestration::AgentFrame::history`), système
+/// compris — contrairement à [`AgentSessionHistory`], qui n'en donne qu'une
+/// lecture simplifiée destinée à l'inspecteur, ce type reflète tel quel ce
+/// que le Superviseur envoie effectivement au modèle, pour outiller le
+/// diagnostic d'un comportement inattendu de l'agent.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SupervisorContextEntry {
+    System {
+        content: String,
+    },
+    User {
+        content: String,
+    },
+    Assistant {
+        content: Option<String>,
+        tool_calls: Vec<SupervisorContextToolCall>,
+    },
+    ToolResult {
+        tool_call_id: String,
+        content: String,
+    },
+}
+
 /// Élément de l'historique affiché par [`AgentPanel`] : message texte,
 /// réflexion du modèle, ou trace d'appel d'outil. Contrairement à
 /// [`PanelMessage`], qui ne portait que des échanges texte, [`PanelEntry`]
@@ -211,6 +295,13 @@ impl PanelEntry {
     #[must_use]
     pub fn assistant(content: impl Into<String>) -> Self {
         Self::Message(PanelMessage::assistant(content))
+    }
+
+    /// Comme [`Self::assistant`], en précisant le frame (Superviseur ou
+    /// expert délégué) à l'origine du message.
+    #[must_use]
+    pub fn assistant_from(agent_label: impl Into<String>, content: impl Into<String>) -> Self {
+        Self::Message(PanelMessage::assistant_from(agent_label, content))
     }
 }
 
@@ -285,7 +376,10 @@ pub struct DocumentUpload {
 /// (voir [`DocumentUpload`]) : `FileReader::read_as_data_url` produit
 /// directement une chaîne `data:<mime>;base64,<contenu>`, dont seule la
 /// partie après la virgule nous intéresse.
-fn read_uploaded_file(input: web_sys::HtmlInputElement, on_document_response: Callback<DocumentUpload>) {
+fn read_uploaded_file(
+    input: web_sys::HtmlInputElement,
+    on_document_response: Callback<DocumentUpload>,
+) {
     use wasm_bindgen::closure::Closure;
 
     let Some(files) = input.files() else { return };
@@ -339,31 +433,44 @@ fn render_panel_entry(entry: PanelEntry) -> AnyView {
                 </p>
             }
             .into_any(),
-            PanelRole::Assistant => view! {
-                <div
-                    class="markdown-content self-start bg-blue-france-975 dark:bg-gray-800 \
-                           text-gray-900 dark:text-gray-100 \
-                           max-w-[80%] rounded-sm px-3 py-1.5 text-sm"
-                    inner_html=render_markdown(&message.content)
-                ></div>
+            PanelRole::Assistant => {
+                let agent_label = message.agent_label.clone();
+                view! {
+                    <div class="self-start max-w-[80%] flex flex-col gap-1">
+                        {(!agent_label.is_empty()).then(|| view! {
+                            <Badge severity=Severity::Info small=true>{agent_label}</Badge>
+                        })}
+                        <div
+                            class="markdown-content bg-blue-france-975 dark:bg-gray-800 \
+                                   text-gray-900 dark:text-gray-100 \
+                                   rounded-sm px-3 py-1.5 text-sm"
+                            inner_html=render_markdown(&message.content)
+                        ></div>
+                    </div>
+                }
+                .into_any()
             }
-            .into_any(),
         },
         PanelEntry::Reasoning(reasoning) => {
             let done = reasoning.done;
             let agent_label = reasoning.agent_label.clone();
             view! {
-                <div class="self-start max-w-[80%] rounded-sm border border-dashed \
-                            border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 \
-                            px-3 py-1.5 text-sm italic text-gray-500 dark:text-gray-400">
-                    {(!agent_label.is_empty()).then(|| view! {
-                        <div class="mb-1 not-italic">
+                <details class="self-start max-w-[80%] rounded-sm border border-dashed \
+                                border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 \
+                                text-sm text-gray-500 dark:text-gray-400">
+                    <summary class="flex cursor-pointer select-none items-center gap-2 \
+                                    px-3 py-1.5 italic">
+                        {(!agent_label.is_empty()).then(|| view! {
                             <Badge severity=Severity::Info small=true>{agent_label}</Badge>
-                        </div>
-                    })}
-                    {reasoning.content.clone()}
-                    {(!done).then(|| view! { <span class="animate-pulse">"▍"</span> })}
-                </div>
+                        })}
+                        <span>"Réflexion"</span>
+                        {(!done).then(|| view! { <span class="animate-pulse">"▍"</span> })}
+                    </summary>
+                    <div
+                        class="markdown-content not-italic px-3 pb-1.5"
+                        inner_html=render_markdown(&reasoning.content)
+                    ></div>
+                </details>
             }
             .into_any()
         }
@@ -439,6 +546,97 @@ fn render_panel_entry(entry: PanelEntry) -> AnyView {
     }
 }
 
+/// Libellé humain d'un [`SupervisorContextRole`], affiché en badge devant
+/// chaque message du contexte brut (voir [`render_supervisor_context_entry`]).
+fn supervisor_context_role_label(role: SupervisorContextRole) -> &'static str {
+    match role {
+        SupervisorContextRole::System => "Système",
+        SupervisorContextRole::User => "Utilisateur",
+        SupervisorContextRole::Assistant => "Assistant",
+        SupervisorContextRole::Tool => "Résultat d'outil",
+    }
+}
+
+/// Affiche un message brut du contexte du Superviseur (voir
+/// [`SupervisorContextEntry`]) : rôle en badge, contenu textuel le cas
+/// échéant, et appels d'outils demandés pour un message assistant.
+fn render_supervisor_context_message(
+    role: SupervisorContextRole,
+    content: Option<String>,
+    tool_calls: Vec<SupervisorContextToolCall>,
+) -> AnyView {
+    let severity = match role {
+        SupervisorContextRole::System => Severity::Warning,
+        SupervisorContextRole::User => Severity::Success,
+        SupervisorContextRole::Assistant | SupervisorContextRole::Tool => Severity::Info,
+    };
+    view! {
+        <div class="w-full rounded-sm border border-blue-france-925 dark:border-gray-700 \
+                    bg-gray-50 dark:bg-gray-800 text-xs px-2 py-1.5">
+            <div class="mb-1">
+                <Badge severity=severity small=true>{supervisor_context_role_label(role)}</Badge>
+            </div>
+            {content.map(|content| view! {
+                <div class="whitespace-pre-wrap break-words font-mono \
+                            text-gray-900 dark:text-gray-100">
+                    {content}
+                </div>
+            })}
+            {(!tool_calls.is_empty()).then(|| view! {
+                <div class="mt-1 space-y-1">
+                    {tool_calls.into_iter().map(|call| view! {
+                        <div class="whitespace-pre-wrap break-words font-mono \
+                                    text-gray-500 dark:text-gray-400">
+                            {format!("→ {}({})", call.name, call.arguments)}
+                        </div>
+                    }).collect_view()}
+                </div>
+            })}
+        </div>
+    }
+    .into_any()
+}
+
+/// Affiche une [`SupervisorContextEntry`] du contexte brut consulté via
+/// [`AgentPanel`]'s `supervisor_context`.
+fn render_supervisor_context_entry(entry: SupervisorContextEntry) -> AnyView {
+    match entry {
+        SupervisorContextEntry::System { content } => render_supervisor_context_message(
+            SupervisorContextRole::System,
+            Some(content),
+            Vec::new(),
+        ),
+        SupervisorContextEntry::User { content } => render_supervisor_context_message(
+            SupervisorContextRole::User,
+            Some(content),
+            Vec::new(),
+        ),
+        SupervisorContextEntry::Assistant {
+            content,
+            tool_calls,
+        } => {
+            render_supervisor_context_message(SupervisorContextRole::Assistant, content, tool_calls)
+        }
+        SupervisorContextEntry::ToolResult {
+            tool_call_id,
+            content,
+        } => view! {
+            <div class="w-full rounded-sm border border-blue-france-925 dark:border-gray-700 \
+                        bg-gray-50 dark:bg-gray-800 text-xs px-2 py-1.5">
+                <div class="flex items-center gap-2 mb-1">
+                    <Badge severity=Severity::Info small=true>"Résultat d'outil"</Badge>
+                    <span class="text-gray-500 dark:text-gray-400 font-mono">{tool_call_id}</span>
+                </div>
+                <div class="whitespace-pre-wrap break-words font-mono \
+                            text-gray-900 dark:text-gray-100">
+                    {content}
+                </div>
+            </div>
+        }
+        .into_any(),
+    }
+}
+
 #[component]
 fn PendingAgent() -> impl IntoView {
     view! {
@@ -500,14 +698,58 @@ pub fn AgentPanel(
     /// `document_request` est en cours.
     #[prop(optional)]
     on_document_response: Option<Callback<DocumentUpload>>,
+    /// Sessions de conversation passées de l'utilisateur courant pour ce
+    /// projet (voir [`AgentSessionSummary`]), tenues par la page hôte. Si
+    /// absent, aucun bouton « Sessions » n'est affiché.
+    #[prop(optional, into)]
+    sessions: Option<Signal<Vec<AgentSessionSummary>>>,
+    /// Invoqué lorsque l'utilisateur ouvre la liste des sessions passées, pour
+    /// que la page hôte la (re)charge (voir `app::ws::RoomHandle::list_agent_sessions`).
+    #[prop(optional)]
+    on_list_sessions: Option<Callback<()>>,
+    /// Invoqué avec l'identifiant de la session choisie par l'utilisateur
+    /// dans la liste.
+    #[prop(optional)]
+    on_open_session: Option<Callback<String>>,
+    /// Transcript d'une session passée à afficher en lecture seule,
+    /// recouvrant temporairement l'historique courant sans jamais le modifier
+    /// (voir [`AgentSessionHistory`]) : la conversation en cours (`messages`)
+    /// reste intacte, prête à réapparaître à la fermeture.
+    #[prop(optional, into)]
+    session_history: Option<Signal<Option<AgentSessionHistory>>>,
+    /// Invoqué lorsque l'utilisateur ferme la consultation d'une session
+    /// passée.
+    #[prop(optional)]
+    on_close_session_history: Option<Callback<()>>,
+    /// Contexte brut (historique `agent::ChatMessage`, système compris) que
+    /// le frame Superviseur envoie effectivement au modèle, tel que renvoyé
+    /// par la page hôte après [`Self`]'s `on_view_supervisor_context` :
+    /// `None` tant qu'il n'a pas encore été demandé ou chargé. Affiché en
+    /// recouvrement de l'historique courant, comme `session_history`, sans
+    /// jamais le modifier.
+    #[prop(optional, into)]
+    supervisor_context: Option<Signal<Option<Vec<SupervisorContextEntry>>>>,
+    /// Invoqué lorsque l'utilisateur demande à visualiser le contexte du
+    /// Superviseur, pour que la page hôte le (re)charge. Si absent, aucun
+    /// bouton « Contexte » n'est affiché.
+    #[prop(optional)]
+    on_view_supervisor_context: Option<Callback<()>>,
+    /// Invoqué lorsque l'utilisateur ferme la consultation du contexte du
+    /// Superviseur.
+    #[prop(optional)]
+    on_close_supervisor_context: Option<Callback<()>>,
 ) -> impl IntoView {
     let (draft, set_draft) = signal(String::new());
     let draft_answers = RwSignal::new(Vec::<QuestionDraft>::new());
     let interaction_panel_width = RwSignal::new(INTERACTION_PANEL_DEFAULT_WIDTH);
     let document_panel_width = RwSignal::new(INTERACTION_PANEL_DEFAULT_WIDTH);
+    let sessions_open = RwSignal::new(false);
 
     let interaction = interaction.unwrap_or_else(|| Signal::derive(|| None));
     let document_request = document_request.unwrap_or_else(|| Signal::derive(|| None));
+    let sessions = sessions.unwrap_or_else(|| Signal::derive(Vec::new));
+    let session_history = session_history.unwrap_or_else(|| Signal::derive(|| None));
+    let supervisor_context = supervisor_context.unwrap_or_else(|| Signal::derive(|| None));
 
     // Réinitialise les brouillons quand un nouveau formulaire apparaît.
     Effect::new(move |_| {
@@ -531,20 +773,52 @@ pub fn AgentPanel(
         }
     };
 
+    let has_sessions = on_list_sessions.is_some() && on_open_session.is_some();
+
     view! {
-        <div class="flex flex-col h-full border border-blue-france-925 dark:border-gray-700 \
+        <div class="relative flex flex-col h-full border border-blue-france-925 dark:border-gray-700 \
                     bg-white dark:bg-gray-900 rounded-sm overflow-hidden">
 
             // En-tête
-            <div class="px-3 py-2 border-b border-blue-france-925 dark:border-gray-700 \
+            <div class="relative px-3 py-2 border-b border-blue-france-925 dark:border-gray-700 \
                         bg-blue-france-975 dark:bg-gray-800 flex-shrink-0">
                 <p class="text-sm font-bold text-blue-france dark:text-blue-france-925 flex items-baseline gap-2">
                     <span class="flex-1 uppercase">Marie</span>
                     <Badge severity=Severity::Info>IA</Badge>
+                    {has_sessions.then(|| view! {
+                        <button
+                            type="button"
+                            title="Consulter une conversation passée"
+                            class="text-xs font-normal normal-case text-gray-500 dark:text-gray-400 \
+                                   hover:text-blue-france dark:hover:text-blue-france-925 \
+                                   underline-offset-2 hover:underline cursor-pointer"
+                            on:click=move |_| {
+                                let now_open = !sessions_open.get_untracked();
+                                sessions_open.set(now_open);
+                                if now_open && let Some(on_list) = on_list_sessions {
+                                    on_list.run(());
+                                }
+                            }
+                        >
+                            "Sessions"
+                        </button>
+                    })}
+                    {on_view_supervisor_context.map(|on_view| view! {
+                        <button
+                            type="button"
+                            title="Visualiser le contexte brut envoyé au modèle par le Superviseur"
+                            class="text-xs font-normal normal-case text-gray-500 dark:text-gray-400 \
+                                   hover:text-blue-france dark:hover:text-blue-france-925 \
+                                   underline-offset-2 hover:underline cursor-pointer"
+                            on:click=move |_| on_view.run(())
+                        >
+                            "Contexte"
+                        </button>
+                    })}
                     {on_clear_history.map(|on_clear| view! {
                         <button
                             type="button"
-                            title="Effacer l'historique de la conversation"
+                            title="Archiver la conversation en cours et en commencer une nouvelle"
                             class="text-xs font-normal normal-case text-gray-500 dark:text-gray-400 \
                                    hover:text-blue-france dark:hover:text-blue-france-925 \
                                    underline-offset-2 hover:underline cursor-pointer disabled:cursor-not-allowed \
@@ -552,7 +826,7 @@ pub fn AgentPanel(
                             disabled=move || pending.get() || messages.get().is_empty()
                             on:click=move |_| on_clear.run(())
                         >
-                            "Effacer"
+                            "Nouvelle session"
                         </button>
                     })}
                 </p>
@@ -572,7 +846,124 @@ pub fn AgentPanel(
                         _ => None,
                     }
                 }}
+
+                // Liste déroulante des sessions passées : positionnée sous le
+                // bouton « Sessions », sans effet sur la conversation
+                // affichée tant qu'aucun élément n'est choisi (voir
+                // `on_open_session`).
+                {move || sessions_open.get().then(|| {
+                    let items = sessions.get();
+                    view! {
+                        <div class="absolute right-3 top-full z-20 mt-1 max-h-72 w-72 overflow-y-auto \
+                                    rounded-sm border border-blue-france-925 dark:border-gray-700 \
+                                    bg-white dark:bg-gray-900 shadow-lg text-sm">
+                            {if items.is_empty() {
+                                view! {
+                                    <p class="px-3 py-2 italic text-gray-500 dark:text-gray-400">
+                                        "Aucune session archivée pour l'instant."
+                                    </p>
+                                }.into_any()
+                            } else {
+                                items.into_iter().map(|session| {
+                                    let label = session.label.clone();
+                                    let preview = session.preview.clone();
+                                    let session_id = session.id.clone();
+                                    view! {
+                                        <button
+                                            type="button"
+                                            class="block w-full text-left px-3 py-2 border-b last:border-b-0 \
+                                                   border-blue-france-925 dark:border-gray-700 \
+                                                   hover:bg-blue-france-975 dark:hover:bg-gray-800 cursor-pointer"
+                                            on:click=move |_| {
+                                                sessions_open.set(false);
+                                                if let Some(on_open) = on_open_session {
+                                                    on_open.run(session_id.clone());
+                                                }
+                                            }
+                                        >
+                                            <span class="block font-semibold text-gray-900 dark:text-gray-100">{label}</span>
+                                            {preview.map(|p| view! {
+                                                <span class="block truncate italic text-gray-500 dark:text-gray-400">{p}</span>
+                                            })}
+                                        </button>
+                                    }
+                                }).collect_view().into_any()
+                            }}
+                        </div>
+                    }
+                })}
             </div>
+
+            // Recouvrement en lecture seule du transcript d'une session
+            // passée : `messages`/`pending` restent inchangés en dessous, ils
+            // réapparaissent tels quels à la fermeture (voir
+            // `on_close_session_history`).
+            {move || session_history.get().map(|history| view! {
+                <div class="absolute inset-0 z-10 flex flex-col bg-white dark:bg-gray-900">
+                    <div class="flex items-center gap-2 px-3 py-2 border-b border-blue-france-925 \
+                                dark:border-gray-700 bg-blue-france-975 dark:bg-gray-800 flex-shrink-0">
+                        <Badge severity=Severity::Info small=true>"Lecture seule"</Badge>
+                        <span class="flex-1 text-sm font-bold text-blue-france dark:text-blue-france-925">
+                            "Session archivée"
+                        </span>
+                        <button
+                            type="button"
+                            class="text-xs font-normal text-gray-500 dark:text-gray-400 \
+                                   hover:text-blue-france dark:hover:text-blue-france-925 \
+                                   underline-offset-2 hover:underline cursor-pointer"
+                            on:click=move |_| {
+                                if let Some(on_close) = on_close_session_history {
+                                    on_close.run(());
+                                }
+                            }
+                        >
+                            "Fermer"
+                        </button>
+                    </div>
+                    <div class="flex-1 overflow-y-auto p-3 flex flex-col gap-2">
+                        <For
+                            each=move || history.entries.clone().into_iter().enumerate()
+                            key=|(index, entry)| (*index, entry.clone())
+                            children=move |(_, entry)| render_panel_entry(entry)
+                        />
+                    </div>
+                </div>
+            })}
+
+            // Recouvrement en lecture seule du contexte brut du Superviseur
+            // (voir `supervisor_context`) : même principe que le recouvrement
+            // de session archivée ci-dessus, sans effet sur `messages`.
+            {move || supervisor_context.get().map(|entries| view! {
+                <div class="absolute inset-0 z-10 flex flex-col bg-white dark:bg-gray-900">
+                    <div class="flex items-center gap-2 px-3 py-2 border-b border-blue-france-925 \
+                                dark:border-gray-700 bg-blue-france-975 dark:bg-gray-800 flex-shrink-0">
+                        <Badge severity=Severity::Info small=true>"Lecture seule"</Badge>
+                        <span class="flex-1 text-sm font-bold text-blue-france dark:text-blue-france-925">
+                            "Contexte du Superviseur"
+                        </span>
+                        <button
+                            type="button"
+                            class="text-xs font-normal text-gray-500 dark:text-gray-400 \
+                                   hover:text-blue-france dark:hover:text-blue-france-925 \
+                                   underline-offset-2 hover:underline cursor-pointer"
+                            on:click=move |_| {
+                                if let Some(on_close) = on_close_supervisor_context {
+                                    on_close.run(());
+                                }
+                            }
+                        >
+                            "Fermer"
+                        </button>
+                    </div>
+                    <div class="flex-1 overflow-y-auto p-3 flex flex-col gap-2">
+                        <For
+                            each=move || entries.clone().into_iter().enumerate()
+                            key=|(index, entry)| (*index, entry.clone())
+                            children=move |(_, entry)| render_supervisor_context_entry(entry)
+                        />
+                    </div>
+                </div>
+            })}
 
             <div class="flex-1 flex overflow-hidden min-h-0">
                 // Colonne chat : historique des messages et saisie libre.

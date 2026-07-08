@@ -49,6 +49,15 @@ pub struct EditorRoom {
     /// Diffuse le snapshot complet des utilisateurs présents à chaque
     /// changement (voir [`EditorRooms::get_or_create`]/[`EditorRooms::release`]).
     pub presence: broadcast::Sender<Vec<Presence>>,
+    /// Diffuse les messages de progression de l'agent (réflexion, appels
+    /// d'outils, fin de tâche, interactions...) déjà sérialisés en JSON, à
+    /// tous les pairs connectés à la salle (voir
+    /// [`super::ports::WsUserInteraction`]) : contrairement à un canal propre
+    /// à la connexion qui a démarré la tâche, ce canal de salle permet à une
+    /// connexion qui rejoint après coup (nouvel onglet, reconnexion après un
+    /// rechargement de page) de continuer à suivre une tâche déjà en cours
+    /// plutôt que de perdre tout le fil de l'eau.
+    pub agent_events: broadcast::Sender<String>,
     pool: Pool,
     /// Identifiant de l'acte légal édité, si `room_id` en est un (voir
     /// [`EditorRooms::get_or_create`]) : `None` pour les salons de
@@ -75,12 +84,20 @@ impl EditorRoom {
         let (updates, _) = broadcast::channel(256);
         let (review_updates, _) = broadcast::channel(256);
         let (presence, _) = broadcast::channel(32);
+        // Capacité plus large que les autres canaux : les fragments de
+        // réflexion/contenu de l'agent sont diffusés au grain du modèle
+        // (parfois un mot à la fois), un tour un peu long peut donc en
+        // produire plusieurs centaines avant que la salle ne soit paisible ;
+        // voir `server::editor::ws::reconcile_agent_lag` pour le filet de
+        // sécurité côté serveur si cette capacité était malgré tout dépassée.
+        let (agent_events, _) = broadcast::channel(2048);
         Arc::new(Self {
             body: tokio::sync::Mutex::new(body),
             updates,
             review: tokio::sync::Mutex::new(review),
             review_updates,
             presence,
+            agent_events,
             pool,
             legal_act_id,
             next_seq: AtomicI64::new(next_seq),

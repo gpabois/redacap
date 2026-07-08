@@ -32,9 +32,9 @@ pub(super) fn InlineEditableDiv(
     // Sync signal → DOM uniquement quand le div n'est pas en focus.
     Effect::new(move |_| {
         let t = text.get();
-        if !is_focused.get_untracked() 
-            && let Some(el) = div_ref.get() 
-            && el.inner_text() != t  
+        if !is_focused.get_untracked()
+            && let Some(el) = div_ref.get()
+            && el.inner_text() != t
         {
             el.set_inner_text(&t);
         }
@@ -257,8 +257,8 @@ pub(super) fn RichEditableDiv(
 
     // Focus programmatique via content_focus_request.
     Effect::new(move |_| {
-        if let Some((req_id, at_end)) = ctx.content_focus_request.get() 
-            && Some(req_id) == focus_node_id 
+        if let Some((req_id, at_end)) = ctx.content_focus_request.get()
+            && Some(req_id) == focus_node_id
             && let Some(el) = div_ref.get()
         {
             let _ = el.focus();

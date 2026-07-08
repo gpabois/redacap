@@ -4,7 +4,10 @@
 //! (Visas, Motifs, Articles...) n'est qu'une ligne de cette table, jamais
 //! une struct Rust dédiée, éditable ici sans redéploiement.
 
-use dsfr::{Alert, Badge, Button, ButtonVariant, Input, Severity, Table, Textarea, Toggle};
+use dsfr::{
+    Alert, Badge, Button, ButtonVariant, Input, Select, SelectOption, Severity, Table, Tag,
+    TagGroup, Textarea, Toggle,
+};
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -21,14 +24,27 @@ struct AgentProfileRow {
     enabled: bool,
 }
 
-/// Découpe la zone de texte « un outil par ligne » du formulaire en noms
-/// d'outils, en ignorant les lignes vides et les espaces superflus (accepte
-/// aussi les virgules, pour coller/couper depuis une liste existante).
-fn parse_tool_names(raw: &str) -> Vec<String> {
-    raw.split(|c: char| c == '\n' || c == ',')
-        .map(|name| name.trim().to_string())
-        .filter(|name| !name.is_empty())
-        .collect()
+/// Option du catalogue d'outils assignables à un profil (voir
+/// `agent::tools::AGENT_TOOL_CATALOG`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct ToolOption {
+    name: String,
+    label: String,
+}
+
+#[server]
+async fn list_available_tools_admin() -> Result<Vec<ToolOption>, ServerFnError> {
+    let actor_id = crate::auth::current_user_id().await?;
+    let pool = expect_context::<storage::Pool>();
+    crate::auth::require_admin(&pool, &actor_id).await?;
+
+    Ok(agent::tools::AGENT_TOOL_CATALOG
+        .iter()
+        .map(|(name, label)| ToolOption {
+            name: name.to_string(),
+            label: label.to_string(),
+        })
+        .collect())
 }
 
 #[server]
@@ -60,7 +76,7 @@ async fn create_agent_profile_admin(
     name: String,
     display_name: String,
     system_prompt: String,
-    tool_names: String,
+    tool_names: Vec<String>,
     max_steps: i32,
 ) -> Result<(), ServerFnError> {
     let actor_id = crate::auth::current_user_id().await?;
@@ -81,14 +97,15 @@ async fn create_agent_profile_admin(
             name,
             display_name,
             system_prompt: system_prompt.trim().to_string(),
-            tool_names: parse_tool_names(&tool_names),
+            tool_names,
             max_steps: max_steps.max(1),
         },
     )
     .await
     .map_err(|error| ServerFnError::new(error.to_string()))?;
 
-    super::record_admin_audit_event(&pool, actor_id, "create", "agent_profile", Some(profile.id)).await
+    super::record_admin_audit_event(&pool, actor_id, "create", "agent_profile", Some(profile.id))
+        .await
 }
 
 #[server]
@@ -97,7 +114,7 @@ async fn update_agent_profile_admin(
     name: String,
     display_name: String,
     system_prompt: String,
-    tool_names: String,
+    tool_names: Vec<String>,
     max_steps: i32,
 ) -> Result<(), ServerFnError> {
     let actor_id = crate::auth::current_user_id().await?;
@@ -115,7 +132,7 @@ async fn update_agent_profile_admin(
             name: Some(name.trim().to_string()),
             display_name: Some(display_name.trim().to_string()),
             system_prompt: Some(system_prompt.trim().to_string()),
-            tool_names: Some(parse_tool_names(&tool_names)),
+            tool_names: Some(tool_names),
             max_steps: Some(max_steps.max(1)),
             enabled: None,
         },
@@ -123,11 +140,15 @@ async fn update_agent_profile_admin(
     .await
     .map_err(|error| ServerFnError::new(error.to_string()))?;
 
-    super::record_admin_audit_event(&pool, actor_id, "update", "agent_profile", Some(profile_id)).await
+    super::record_admin_audit_event(&pool, actor_id, "update", "agent_profile", Some(profile_id))
+        .await
 }
 
 #[server]
-async fn set_agent_profile_enabled_admin(profile_id: String, enabled: bool) -> Result<(), ServerFnError> {
+async fn set_agent_profile_enabled_admin(
+    profile_id: String,
+    enabled: bool,
+) -> Result<(), ServerFnError> {
     let actor_id = crate::auth::current_user_id().await?;
     let pool = expect_context::<storage::Pool>();
     crate::auth::require_admin(&pool, &actor_id).await?;
@@ -147,7 +168,8 @@ async fn set_agent_profile_enabled_admin(profile_id: String, enabled: bool) -> R
     .await
     .map_err(|error| ServerFnError::new(error.to_string()))?;
 
-    super::record_admin_audit_event(&pool, actor_id, "update", "agent_profile", Some(profile_id)).await
+    super::record_admin_audit_event(&pool, actor_id, "update", "agent_profile", Some(profile_id))
+        .await
 }
 
 #[server]
@@ -164,7 +186,8 @@ async fn delete_agent_profile_admin(profile_id: String) -> Result<(), ServerFnEr
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
 
-    super::record_admin_audit_event(&pool, actor_id, "delete", "agent_profile", Some(profile_id)).await
+    super::record_admin_audit_event(&pool, actor_id, "delete", "agent_profile", Some(profile_id))
+        .await
 }
 
 #[component]
@@ -195,11 +218,12 @@ fn AgentProfilesPanel() -> impl IntoView {
     let version = RwSignal::new(0u32);
     let bump = move || version.update(|v| *v += 1);
     let profiles = Resource::new(move || version.get(), |_| list_agent_profiles_admin());
+    let available_tools = Resource::new(|| (), |_| list_available_tools_admin());
 
     let (name, set_name) = signal(String::new());
     let (display_name, set_display_name) = signal(String::new());
     let (system_prompt, set_system_prompt) = signal(String::new());
-    let (tool_names, set_tool_names) = signal(String::new());
+    let selected_tools = RwSignal::new(Vec::<String>::new());
     let (max_steps, set_max_steps) = signal("8".to_string());
     let (form_error, set_form_error) = signal(Option::<String>::None);
     let editing_id = RwSignal::new(Option::<String>::None);
@@ -208,13 +232,13 @@ fn AgentProfilesPanel() -> impl IntoView {
         set_name.set(String::new());
         set_display_name.set(String::new());
         set_system_prompt.set(String::new());
-        set_tool_names.set(String::new());
+        selected_tools.set(Vec::new());
         set_max_steps.set("8".to_string());
         set_form_error.set(None);
         editing_id.set(None);
     };
 
-    let create_action = Action::new(move |input: &(String, String, String, String, i32)| {
+    let create_action = Action::new(move |input: &(String, String, String, Vec<String>, i32)| {
         let (name, display_name, system_prompt, tool_names, max_steps) = input.clone();
         create_agent_profile_admin(name, display_name, system_prompt, tool_names, max_steps)
     });
@@ -230,10 +254,12 @@ fn AgentProfilesPanel() -> impl IntoView {
         }
     });
 
-    let update_action = Action::new(move |input: &(String, String, String, String, String, i32)| {
-        let (id, name, display_name, system_prompt, tool_names, max_steps) = input.clone();
-        update_agent_profile_admin(id, name, display_name, system_prompt, tool_names, max_steps)
-    });
+    let update_action = Action::new(
+        move |input: &(String, String, String, String, Vec<String>, i32)| {
+            let (id, name, display_name, system_prompt, tool_names, max_steps) = input.clone();
+            update_agent_profile_admin(id, name, display_name, system_prompt, tool_names, max_steps)
+        },
+    );
     Effect::new(move |_| {
         if let Some(result) = update_action.value().get() {
             match result {
@@ -299,12 +325,85 @@ fn AgentProfilesPanel() -> impl IntoView {
                 value=system_prompt
                 on_input=move |v| set_system_prompt.set(v)
             />
-            <Textarea
-                label="Outils autorisés"
-                hint="Un nom d'outil technique par ligne (ex. read_structure, fill_section, insert_node, legifrance_search, ask_user...)."
-                value=tool_names
-                on_input=move |v| set_tool_names.set(v)
-            />
+            <div class="flex flex-col gap-2">
+                <label class="text-sm font-bold text-gray-900 dark:text-gray-100">"Outils autorisés"</label>
+                <Suspense fallback=|| view! { <p class="text-sm text-gray-500 dark:text-gray-400">"Chargement des outils…"</p> }>
+                    {move || Suspend::new(async move {
+                        let catalog = available_tools.await.unwrap_or_default();
+                        let (pending_tool, set_pending_tool) = signal(String::new());
+                        let catalog_for_add = catalog.clone();
+                        let catalog_for_chips = catalog.clone();
+                        view! {
+                            <div class="flex flex-col gap-2">
+                                {move || {
+                                    let selected = selected_tools.get();
+                                    let options: Vec<SelectOption> = catalog_for_add
+                                        .iter()
+                                        .filter(|tool| !selected.contains(&tool.name))
+                                        .map(|tool| SelectOption::new(tool.name.clone(), tool.label.clone()))
+                                        .collect();
+                                    let has_options = !options.is_empty();
+                                    if has_options && !options.iter().any(|opt| opt.value == pending_tool.get_untracked()) {
+                                        set_pending_tool.set(options[0].value.clone());
+                                    }
+                                    view! {
+                                        <div class="flex gap-2 items-end">
+                                            <Select
+                                                label="Ajouter un outil"
+                                                options=options
+                                                value=pending_tool
+                                                on_change=move |v| set_pending_tool.set(v)
+                                                disabled=!has_options
+                                                class="flex-1"
+                                            />
+                                            <Button
+                                                variant=ButtonVariant::Secondary
+                                                disabled=!has_options
+                                                on_click=move |_| {
+                                                    let tool = pending_tool.get_untracked();
+                                                    if !tool.is_empty() {
+                                                        selected_tools.update(|list| {
+                                                            if !list.contains(&tool) {
+                                                                list.push(tool);
+                                                            }
+                                                        });
+                                                    }
+                                                }
+                                            >
+                                                "Ajouter"
+                                            </Button>
+                                        </div>
+                                    }
+                                }}
+                                <TagGroup>
+                                    {move || selected_tools.get().into_iter().map(|tool_name| {
+                                        let label = catalog_for_chips
+                                            .iter()
+                                            .find(|tool| tool.name == tool_name)
+                                            .map(|tool| tool.label.clone())
+                                            .unwrap_or_else(|| tool_name.clone());
+                                        let tool_name_for_remove = tool_name.clone();
+                                        view! {
+                                            <li>
+                                                <Tag
+                                                    on_click=|_| {}
+                                                    on_dismiss=Callback::new(move |_| {
+                                                        selected_tools.update(|list| {
+                                                            list.retain(|name| name != &tool_name_for_remove);
+                                                        });
+                                                    })
+                                                >
+                                                    {label}
+                                                </Tag>
+                                            </li>
+                                        }
+                                    }).collect::<Vec<_>>()}
+                                </TagGroup>
+                            </div>
+                        }
+                    })}
+                </Suspense>
+            </div>
             <div class="flex gap-2">
                 <Button
                     variant=ButtonVariant::Primary
@@ -322,7 +421,7 @@ fn AgentProfilesPanel() -> impl IntoView {
                                     name.get(),
                                     display_name.get(),
                                     system_prompt.get(),
-                                    tool_names.get(),
+                                    selected_tools.get(),
                                     max_steps,
                                 ));
                             }
@@ -331,7 +430,7 @@ fn AgentProfilesPanel() -> impl IntoView {
                                     name.get(),
                                     display_name.get(),
                                     system_prompt.get(),
-                                    tool_names.get(),
+                                    selected_tools.get(),
                                     max_steps,
                                 ));
                             }
@@ -364,7 +463,7 @@ fn AgentProfilesPanel() -> impl IntoView {
                                     row.name.clone(),
                                     row.display_name.clone(),
                                     row.system_prompt.clone(),
-                                    row.tool_names.join("\n"),
+                                    row.tool_names.clone(),
                                     row.max_steps,
                                 );
                                 let enabled = row.enabled;
@@ -396,7 +495,7 @@ fn AgentProfilesPanel() -> impl IntoView {
                                                         set_name.set(name);
                                                         set_display_name.set(display_name);
                                                         set_system_prompt.set(system_prompt);
-                                                        set_tool_names.set(tool_names);
+                                                        selected_tools.set(tool_names);
                                                         set_max_steps.set(max_steps.to_string());
                                                         set_form_error.set(None);
                                                         editing_id.set(Some(id));

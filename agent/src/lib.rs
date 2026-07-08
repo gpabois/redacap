@@ -62,9 +62,10 @@ pub use orchestration::{
     RunStatus,
 };
 pub use panel::{
-    AgentPanel, DocumentRequest, DocumentUpload, InteractionRequest, InteractionResponse,
-    PanelEntry, PanelMessage, PanelQuestion, PanelQuestionAnswer, PanelReasoning, PanelRole,
-    PanelToolCall, PanelToolCallStatus,
+    AgentPanel, AgentSessionHistory, AgentSessionSummary, DocumentRequest, DocumentUpload,
+    InteractionRequest, InteractionResponse, PanelEntry, PanelMessage, PanelQuestion,
+    PanelQuestionAnswer, PanelReasoning, PanelRole, PanelToolCall, PanelToolCallStatus,
+    SupervisorContextEntry, SupervisorContextRole, SupervisorContextToolCall,
 };
 #[cfg(feature = "server")]
-pub use tool::{DelegateRequest, PauseRequest, Tool, ToolOutput, ToolRegistry};
+pub use tool::{DelegateRequest, DelegateTarget, PauseRequest, Tool, ToolOutput, ToolRegistry};

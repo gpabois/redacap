@@ -5,6 +5,7 @@
 
 pub mod agent_profile;
 pub mod agent_run;
+pub mod agent_session;
 pub mod agent_tool_scope;
 pub mod ai_model;
 pub mod audit_log;
@@ -22,6 +23,7 @@ pub mod user;
 
 pub use agent_profile::*;
 pub use agent_run::*;
+pub use agent_session::*;
 pub use agent_tool_scope::*;
 pub use ai_model::*;
 pub use audit_log::*;
