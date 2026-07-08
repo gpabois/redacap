@@ -6,6 +6,7 @@
 //! Chaque page vérifie l'accès via [`admin_context`] avant d'afficher son
 //! contenu (voir `app::auth::require_admin`).
 
+pub mod agent_profiles;
 pub mod agent_tools;
 pub mod ai_models;
 pub mod audit;
@@ -19,6 +20,7 @@ pub mod oidc;
 pub mod permissions;
 pub mod users;
 
+pub use agent_profiles::PageAdminAgentProfiles;
 pub use agent_tools::PageAdminAgentTools;
 pub use ai_models::PageAdminAiModels;
 pub use audit::PageAdminAudit;
@@ -76,6 +78,7 @@ pub enum AdminSection {
     Domains,
     Intentions,
     AgentTools,
+    AgentProfiles,
     AiModels,
     Oidc,
     Integrations,
@@ -128,6 +131,7 @@ pub fn AdminNav(active: AdminSection) -> impl IntoView {
                 <a href="/admin/domains" class=link_class(AdminSection::Domains)>"Domaines"</a>
                 <a href="/admin/intentions" class=link_class(AdminSection::Intentions)>"Intentions"</a>
                 <a href="/admin/agent-tools" class=link_class(AdminSection::AgentTools)>"Outils de l'agent"</a>
+                <a href="/admin/agent-profiles" class=link_class(AdminSection::AgentProfiles)>"Profils d'experts"</a>
                 <a href="/admin/ai-models" class=link_class(AdminSection::AiModels)>"Modèles IA"</a>
                 <a href="/admin/oidc" class=link_class(AdminSection::Oidc)>"Fournisseurs OIDC"</a>
                 <a href="/admin/integrations" class=link_class(AdminSection::Integrations)>"Intégrations"</a>

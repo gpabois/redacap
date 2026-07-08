@@ -52,12 +52,16 @@ dependencies = [
  "dsfr",
  "leptos",
  "pulldown-cmark",
+ "quick-xml",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "wasm-bindgen",
  "web-sys",
+ "zip",
 ]
 
 [[package]]
@@ -3528,6 +3532,7 @@ dependencies = [
  "axum-extra",
  "base64 0.22.1",
  "chrono",
+ "content",
  "cookie",
  "dotenv",
  "futures-util",
@@ -3536,6 +3541,7 @@ dependencies = [
  "leptos_axum",
  "log",
  "openidconnect",
+ "pulldown-cmark",
  "reqwest",
  "serde",
  "serde_json",

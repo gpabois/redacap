@@ -24,8 +24,8 @@
 //! après le montage, à chaque frame reçue du serveur.
 
 use agent::{
-    InteractionRequest, InteractionResponse, PanelEntry, PanelQuestion, PanelReasoning,
-    PanelToolCall, PanelToolCallStatus,
+    DocumentRequest, DocumentUpload, InteractionRequest, InteractionResponse, PanelEntry,
+    PanelQuestion, PanelReasoning, PanelToolCall, PanelToolCallStatus,
 };
 use base64::Engine;
 use legal_act::{Body, BodyNodeId, DirectBody, Review, YrsBody, YrsReview};
@@ -40,7 +40,9 @@ use yrs::updates::decoder::Decode;
 use yrs::Update as YrsUpdate;
 use yrs::{Doc, Transact};
 
-use crate::protocol::{ClientMessage, InteractionAnswerWire, PresenceUser, ServerMessage};
+use crate::protocol::{
+    ClientMessage, DocumentUploadWire, InteractionAnswerWire, PresenceUser, ServerMessage,
+};
 
 /// Origine posée sur les transactions Yrs appliquées depuis le réseau, pour
 /// que l'observateur de mises à jour locales (voir [`open_socket`]) sache
@@ -96,6 +98,10 @@ pub struct RoomHandle {
     pub agent_messages: RwSignal<Vec<PanelEntry>>,
     pub agent_pending: RwSignal<bool>,
     pub interaction: RwSignal<Option<InteractionRequest>>,
+    /// Requête de document affichée par [`agent::AgentPanel`] lorsque
+    /// l'agent attend un upload (outil `request_document`), pendant de
+    /// `interaction` pour ce type d'interaction (voir [`Self::respond_document`]).
+    pub document_request: RwSignal<Option<DocumentRequest>>,
     /// Index dans `agent_messages` de la réflexion du tour courant,
     /// toujours la dernière entrée poussée tant qu'elle n'est pas figée par
     /// `ServerMessage::AgentStepFinished` (voir [`handle_text_frame`]).
@@ -203,6 +209,20 @@ impl RoomHandle {
         self.send(&ClientMessage::InteractionAnswer { value });
     }
 
+    /// Répond au sélecteur de document affiché par [`agent::AgentPanel`]
+    /// lorsque l'agent attend un upload (voir [`Self::document_request`]).
+    pub fn respond_document(&self, upload: DocumentUpload) {
+        let wire = DocumentUploadWire {
+            file_name: upload.file_name,
+            mime_type: upload.mime_type,
+            content_base64: upload.content_base64,
+        };
+        let value = serde_json::to_value(wire).unwrap_or(serde_json::Value::Null);
+        self.document_request.set(None);
+        self.agent_pending.set(true);
+        self.send(&ClientMessage::InteractionAnswer { value });
+    }
+
     fn send(&self, message: &ClientMessage) {
         let Some(socket) = self.socket.get_untracked() else {
             return;
@@ -227,6 +247,7 @@ pub fn connect_room(room_id: impl Into<String>) -> RoomHandle {
         agent_messages: RwSignal::new(Vec::new()),
         agent_pending: RwSignal::new(false),
         interaction: RwSignal::new(None),
+        document_request: RwSignal::new(None),
         open_reasoning: RwSignal::new(None),
         open_message: RwSignal::new(None),
         auto_accept: RwSignal::new(false),
@@ -360,10 +381,10 @@ fn handle_text_frame(handle: RoomHandle, text: &str) {
                 .update(|m| m.push(PanelEntry::assistant(format!("Erreur : {message}"))));
             handle.agent_pending.set(false);
         }
-        ServerMessage::AgentReasoningDelta { delta } => {
-            append_reasoning_delta(handle, delta);
+        ServerMessage::AgentReasoningDelta { agent_label, delta } => {
+            append_reasoning_delta(handle, agent_label, delta);
         }
-        ServerMessage::AgentContentDelta { delta } => {
+        ServerMessage::AgentContentDelta { delta, .. } => {
             append_content_delta(handle, delta);
         }
         ServerMessage::AgentStepFinished => {
@@ -378,6 +399,7 @@ fn handle_text_frame(handle: RoomHandle, text: &str) {
             handle.open_message.set(None);
         }
         ServerMessage::AgentToolCallStarted {
+            agent_label,
             id,
             name,
             arguments,
@@ -387,13 +409,14 @@ fn handle_text_frame(handle: RoomHandle, text: &str) {
             handle.agent_messages.update(|entries| {
                 entries.push(PanelEntry::ToolCall(PanelToolCall {
                     id,
+                    agent_label,
                     name,
                     arguments,
                     status: PanelToolCallStatus::Running,
                 }));
             });
         }
-        ServerMessage::AgentToolCallFinished { id, ok, output } => {
+        ServerMessage::AgentToolCallFinished { id, ok, output, .. } => {
             let status = if ok {
                 PanelToolCallStatus::Done { output }
             } else {
@@ -403,10 +426,11 @@ fn handle_text_frame(handle: RoomHandle, text: &str) {
                 set_tool_call_status(entries, &id, status);
             });
         }
-        ServerMessage::InteractionAsk { question } => {
+        ServerMessage::InteractionAsk { agent_label, question } => {
             handle.agent_pending.set(false);
             handle.pending_kind.set(Some(PendingInteractionKind::Ask));
             handle.interaction.set(Some(InteractionRequest {
+                agent_label,
                 prompt: question,
                 questions: vec![PanelQuestion {
                     id: "reponse".to_string(),
@@ -415,12 +439,13 @@ fn handle_text_frame(handle: RoomHandle, text: &str) {
                 }],
             }));
         }
-        ServerMessage::InteractionConfirm { message } => {
+        ServerMessage::InteractionConfirm { agent_label, message } => {
             handle.agent_pending.set(false);
             handle
                 .pending_kind
                 .set(Some(PendingInteractionKind::Confirm));
             handle.interaction.set(Some(InteractionRequest {
+                agent_label,
                 prompt: message,
                 questions: vec![PanelQuestion {
                     id: "confirmation".to_string(),
@@ -429,12 +454,13 @@ fn handle_text_frame(handle: RoomHandle, text: &str) {
                 }],
             }));
         }
-        ServerMessage::InteractionQuestions { prompt, questions } => {
+        ServerMessage::InteractionQuestions { agent_label, prompt, questions } => {
             handle.agent_pending.set(false);
             handle
                 .pending_kind
                 .set(Some(PendingInteractionKind::Questions));
             handle.interaction.set(Some(InteractionRequest {
+                agent_label,
                 prompt,
                 questions: questions
                     .into_iter()
@@ -444,6 +470,18 @@ fn handle_text_frame(handle: RoomHandle, text: &str) {
                         options: q.options,
                     })
                     .collect(),
+            }));
+        }
+        ServerMessage::InteractionRequestDocument {
+            agent_label,
+            prompt,
+            accepted_mime_types,
+        } => {
+            handle.agent_pending.set(false);
+            handle.document_request.set(Some(DocumentRequest {
+                agent_label,
+                prompt,
+                accepted_mime_types,
             }));
         }
         ServerMessage::Presence { users } => {
@@ -524,7 +562,7 @@ fn handle_review_update(handle: RoomHandle, update_b64: &str) {
 /// entrée [`PanelEntry::Reasoning`] s'il n'y en a pas déjà une pour ce tour
 /// (voir `RoomHandle::open_reasoning`, remis à `None` par
 /// `ServerMessage::AgentStepFinished`).
-fn append_reasoning_delta(handle: RoomHandle, delta: String) {
+fn append_reasoning_delta(handle: RoomHandle, agent_label: String, delta: String) {
     if let Some(idx) = handle.open_reasoning.get_untracked() {
         handle.agent_messages.update(|entries| {
             if let Some(PanelEntry::Reasoning(reasoning)) = entries.get_mut(idx) {
@@ -536,6 +574,7 @@ fn append_reasoning_delta(handle: RoomHandle, delta: String) {
     let mut new_idx = 0;
     handle.agent_messages.update(|entries| {
         entries.push(PanelEntry::Reasoning(PanelReasoning {
+            agent_label,
             content: delta,
             done: false,
         }));

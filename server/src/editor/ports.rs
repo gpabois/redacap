@@ -1,26 +1,26 @@
 //! Implémentations des ports de `agent` (voir `agent::ports`) qui
-//! branchent la boucle agentique sur la salle websocket courante : les
-//! outils qui modifient l'acte agissent sur le [`YrsBody`] partagé de la
-//! [`Room`] et diffusent la mise à jour Yrs résultante à tous les pairs
-//! connectés ; les outils d'interaction relaient les questions de l'agent
-//! au client à l'origine de la tâche et attendent sa réponse.
+//! branchent l'orchestration sur la salle websocket courante : les outils
+//! qui modifient l'acte agissent sur le [`YrsBody`] partagé de la [`Room`]
+//! et diffusent la mise à jour Yrs résultante à tous les pairs connectés.
 
 use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use agent::ToolError;
 use agent::ports::{
-    IntentionPort, IntentionSummary, LegalActEditorPort, Question, QuestionAnswer,
-    UserInteractionPort, ValidationReport,
+    DocumentContent, DocumentContentPort, IntentionPort, IntentionSummary, LegalActEditorPort,
+    ValidationReport,
 };
 use agent::{AgentObserver, ToolCall};
+use content::{List, ListItem, ListMarker, Span};
 use legal_act::{BodyNodeId, BodyRead, BodyWrite, NodeKind, NodeSpec, YrsBody};
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use serde_json::Value;
 use shared::id::ID;
-use tokio::sync::{Mutex as AsyncMutex, mpsc};
+use tokio::sync::mpsc;
 use yrs::{ReadTxn, Transact};
 
-use super::protocol::{InteractionAnswerWire, InteractionQuestionWire, ServerMessage};
+use super::protocol::ServerMessage;
 use super::state::EditorRoom;
 
 /// Mot-clé accepté à la place d'un identifiant de nœud pour désigner la
@@ -373,12 +373,81 @@ fn content_target(body: &YrsBody, id: BodyNodeId) -> BodyNodeId {
         .unwrap_or(id)
 }
 
-/// Remplit la feuille `Plain` de `id` (ou de son conteneur de contenu, voir
-/// [`content_target`] ; ou `id` lui-même s'il s'agit déjà d'un nœud `Plain`)
-/// avec `content`.
+/// Remplace le contenu du nœud résolu depuis `id` (voir [`content_target`])
+/// par le résultat du parsing Markdown de `content` : **gras**/*italique*/
+/// ~~barré~~ deviennent des `Span`, les lignes vides séparent des
+/// `Paragraphe`, les listes à puces/numérotées et les tableaux GFM
+/// deviennent des `List`/`Table` — dans la limite de ce que le nœud visé
+/// accepte structurellement (voir [`NodeKind::CHILDREN_TABLE`]) :
+/// - un nœud acceptant des blocs (ex. `ArticleBody`) reçoit la totalité de
+///   la structure (paragraphes, listes, tableaux) ;
+/// - un nœud n'acceptant que de l'inline (Visa, Considérant, libellés...)
+///   reçoit le texte et les `Span` mis bout à bout (paragraphes séparés par
+///   un saut de ligne), listes et tableaux n'y étant pas représentables ;
+/// - un nœud déjà terminal (`Plain` visé directement, par ex. depuis un
+///   identifiant renvoyé par `read_structure`) garde l'ancien comportement :
+///   remplacement direct de son texte, sans interprétation Markdown.
 fn fill_leaf(body: &mut YrsBody, id: BodyNodeId, content: &str) -> anyhow::Result<()> {
     let target = content_target(body, id);
-    let leaf = if body.kind_of(target) == NodeKind::Plain {
+    let target_kind = body.kind_of(target);
+
+    if target_kind.can_accept_child(NodeKind::Paragraphe) {
+        let blocks = parse_markdown(body, content);
+        for child in body.children_of(target) {
+            body.remove_subtree(child)?;
+        }
+        if blocks.is_empty() {
+            let plain = body.create_node(NodeSpec::Plain(String::new()));
+            let para = body.create_node(NodeSpec::Paragraphe);
+            body.append_child_unchecked(para, plain)?;
+            return body.append_child_unchecked(target, para);
+        }
+        for block in blocks {
+            let node = match block {
+                MdBlock::Paragraph(children) => {
+                    let para = body.create_node(NodeSpec::Paragraphe);
+                    for child in children {
+                        body.append_child_unchecked(para, child)?;
+                    }
+                    para
+                }
+                MdBlock::Node(node) => node,
+            };
+            body.append_child_unchecked(target, node)?;
+        }
+        return Ok(());
+    }
+
+    if target_kind.can_accept_child(NodeKind::Plain) {
+        // Nœud inline uniquement : aplatit les paragraphes (séparés par un
+        // saut de ligne littéral) et ignore listes/tableaux, non
+        // représentables ici.
+        let blocks = parse_markdown(body, content);
+        let mut inline = Vec::new();
+        for block in blocks {
+            if let MdBlock::Paragraph(children) = block {
+                if children.is_empty() {
+                    continue;
+                }
+                if !inline.is_empty() {
+                    inline.push(body.create_node(NodeSpec::Plain("\n".to_string())));
+                }
+                inline.extend(children);
+            }
+        }
+        for child in body.children_of(target) {
+            body.remove_subtree(child)?;
+        }
+        if inline.is_empty() {
+            inline.push(body.create_node(NodeSpec::Plain(String::new())));
+        }
+        for child in inline {
+            body.append_child_unchecked(target, child)?;
+        }
+        return Ok(());
+    }
+
+    let leaf = if target_kind == NodeKind::Plain {
         target
     } else {
         body.first_leaf_of(target)
@@ -387,6 +456,352 @@ fn fill_leaf(body: &mut YrsBody, id: BodyNodeId, content: &str) -> anyhow::Resul
         anyhow::bail!("le nœud {id} n'a pas de contenu textuel modifiable");
     }
     body.set_spec_unchecked(leaf, NodeSpec::Plain(content.to_string()))
+}
+
+/// Style d'emphase courant lors de la conversion d'un fragment Markdown en
+/// nœuds `Plain`/`Span`, empilé au fil des balises `Strong`/`Emphasis`/
+/// `Strikethrough` imbriquées (voir [`parse_inline`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct InlineStyle {
+    bold: bool,
+    italic: bool,
+    strikeout: bool,
+}
+
+/// Bloc de contenu issu du parsing Markdown, avant matérialisation dans
+/// l'arbre par [`fill_leaf`] : un paragraphe garde ses enfants `Plain`/
+/// `Span` à part (pas encore enveloppés dans un nœud `Paragraphe`) pour que
+/// l'appelant puisse choisir de les aplatir (nœud cible n'acceptant que de
+/// l'inline) ou de les envelopper (nœud cible acceptant des blocs).
+enum MdBlock {
+    Paragraph(Vec<BodyNodeId>),
+    /// Liste ou tableau déjà entièrement construits (non aplatissables).
+    Node(BodyNodeId),
+}
+
+type MdEvents<'a> = std::iter::Peekable<std::vec::IntoIter<Event<'a>>>;
+
+/// Parse `markdown` en une séquence de blocs de haut niveau, pour l'outil
+/// `fill_section` (voir [`fill_leaf`]).
+fn parse_markdown(body: &mut YrsBody, markdown: &str) -> Vec<MdBlock> {
+    let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH;
+    let events: Vec<Event> = Parser::new_ext(markdown, options).collect();
+    let mut events = events.into_iter().peekable();
+    parse_blocks(body, &mut events)
+}
+
+/// Consomme les événements de bloc disponibles, en s'arrêtant (sans le
+/// consommer) sur le premier `Event::End` qui ne correspond à aucun bloc
+/// géré ici : c'est le signal que le conteneur englobant (cellule de
+/// tableau, item de liste, citation...) doit reprendre la main.
+fn parse_blocks(body: &mut YrsBody, events: &mut MdEvents) -> Vec<MdBlock> {
+    let mut blocks = Vec::new();
+    while let Some(event) = events.peek().cloned() {
+        match event {
+            Event::Start(Tag::Paragraph) => {
+                events.next();
+                let children = parse_inline(body, events);
+                if matches!(events.peek(), Some(Event::End(TagEnd::Paragraph))) {
+                    events.next();
+                }
+                blocks.push(MdBlock::Paragraph(children));
+            }
+            Event::Start(Tag::Heading { .. }) => {
+                events.next();
+                let children = parse_inline(body, events);
+                if matches!(events.peek(), Some(Event::End(TagEnd::Heading(_)))) {
+                    events.next();
+                }
+                blocks.push(MdBlock::Paragraph(children));
+            }
+            Event::Start(Tag::List(start)) => {
+                events.next();
+                blocks.push(MdBlock::Node(parse_list(body, events, start)));
+            }
+            Event::Start(Tag::Table(_)) => {
+                events.next();
+                blocks.push(MdBlock::Node(parse_table(body, events)));
+            }
+            Event::Start(Tag::BlockQuote(_)) => {
+                events.next();
+                blocks.extend(parse_blocks(body, events));
+                if matches!(events.peek(), Some(Event::End(TagEnd::BlockQuote(_)))) {
+                    events.next();
+                }
+            }
+            Event::Start(Tag::CodeBlock(_)) => {
+                events.next();
+                let mut text = String::new();
+                while let Some(event) = events.next() {
+                    match event {
+                        Event::Text(t) => text.push_str(&t),
+                        Event::End(TagEnd::CodeBlock) => break,
+                        _ => {}
+                    }
+                }
+                blocks.push(MdBlock::Paragraph(vec![body.create_node(NodeSpec::Plain(text))]));
+            }
+            // Contenu inline directement au niveau bloc : c'est le cas des
+            // cellules de tableau GFM, dont le contenu n'est jamais
+            // enveloppé dans un `Paragraph` par pulldown-cmark.
+            Event::Text(_)
+            | Event::Code(_)
+            | Event::SoftBreak
+            | Event::HardBreak
+            | Event::Start(Tag::Strong)
+            | Event::Start(Tag::Emphasis)
+            | Event::Start(Tag::Strikethrough)
+            | Event::Start(Tag::Link { .. }) => {
+                let children = parse_inline(body, events);
+                if !children.is_empty() {
+                    blocks.push(MdBlock::Paragraph(children));
+                }
+            }
+            Event::End(_) => break,
+            _ => {
+                events.next();
+            }
+        }
+    }
+    blocks
+}
+
+/// Consomme les événements inline (texte, gras, italique, barré, liens)
+/// disponibles et les matérialise en nœuds `Plain`/`Span`, en fusionnant les
+/// suites de texte consécutif de même style en un seul nœud. S'arrête (sans
+/// le consommer) sur le premier événement qui n'est pas de l'inline reconnu
+/// (fin du bloc englobant, sous-bloc imbriqué...).
+fn parse_inline(body: &mut YrsBody, events: &mut MdEvents) -> Vec<BodyNodeId> {
+    let mut children = Vec::new();
+    let mut style = InlineStyle::default();
+    let mut style_stack = Vec::new();
+    let mut pending = String::new();
+
+    while let Some(event) = events.peek().cloned() {
+        match event {
+            Event::Text(text) => {
+                pending.push_str(&text);
+                events.next();
+            }
+            Event::Code(text) => {
+                pending.push_str(&text);
+                events.next();
+            }
+            Event::SoftBreak => {
+                pending.push(' ');
+                events.next();
+            }
+            Event::HardBreak => {
+                pending.push('\n');
+                events.next();
+            }
+            Event::Start(Tag::Strong) => {
+                flush_pending(body, &mut pending, style, &mut children);
+                style_stack.push(style);
+                style.bold = true;
+                events.next();
+            }
+            Event::Start(Tag::Emphasis) => {
+                flush_pending(body, &mut pending, style, &mut children);
+                style_stack.push(style);
+                style.italic = true;
+                events.next();
+            }
+            Event::Start(Tag::Strikethrough) => {
+                flush_pending(body, &mut pending, style, &mut children);
+                style_stack.push(style);
+                style.strikeout = true;
+                events.next();
+            }
+            Event::End(TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough) => {
+                flush_pending(body, &mut pending, style, &mut children);
+                style = style_stack.pop().unwrap_or_default();
+                events.next();
+            }
+            // Le texte du lien est traité comme de l'inline normal ; sa
+            // cible n'a pas d'équivalent dans le modèle de contenu.
+            Event::Start(Tag::Link { .. }) | Event::End(TagEnd::Link) => {
+                events.next();
+            }
+            _ => break,
+        }
+    }
+    flush_pending(body, &mut pending, style, &mut children);
+    children
+}
+
+/// Matérialise le texte accumulé dans `pending` en un nœud `Plain` (style
+/// par défaut) ou `Span` (sinon), et vide `pending`. Ne fait rien si
+/// `pending` est vide (styles ouverts puis refermés sans texte entre les
+/// deux, par ex.).
+fn flush_pending(
+    body: &mut YrsBody,
+    pending: &mut String,
+    style: InlineStyle,
+    out: &mut Vec<BodyNodeId>,
+) {
+    if pending.is_empty() {
+        return;
+    }
+    let text = std::mem::take(pending);
+    if style == InlineStyle::default() {
+        out.push(body.create_node(NodeSpec::Plain(text)));
+    } else {
+        let span = body.create_node(NodeSpec::Span(Span {
+            bold: style.bold,
+            italic: style.italic,
+            underline: false,
+            strikeout: style.strikeout,
+        }));
+        let plain = body.create_node(NodeSpec::Plain(text));
+        let _ = body.append_child_unchecked(span, plain);
+        out.push(span);
+    }
+}
+
+/// Construit un nœud `List` à partir des `Item` consécutifs, jusqu'au
+/// `TagEnd::List` correspondant (le `Start` a déjà été consommé par
+/// l'appelant).
+fn parse_list(body: &mut YrsBody, events: &mut MdEvents, start: Option<u64>) -> BodyNodeId {
+    let marker = if start.is_some() {
+        ListMarker::Decimal
+    } else {
+        ListMarker::Disc
+    };
+    let list = body.create_node(NodeSpec::List(List {
+        marker,
+        start: start.map(|s| s as u32),
+    }));
+
+    while let Some(event) = events.peek().cloned() {
+        match event {
+            Event::Start(Tag::Item) => {
+                events.next();
+                let children = parse_item(body, events);
+                let item = body.create_node(NodeSpec::ListItem(ListItem { marker }));
+                for child in children {
+                    let _ = body.append_child_unchecked(item, child);
+                }
+                let _ = body.append_child_unchecked(list, item);
+            }
+            Event::End(TagEnd::List(_)) => {
+                events.next();
+                break;
+            }
+            _ => {
+                events.next();
+            }
+        }
+    }
+    list
+}
+
+/// Contenu inline d'un item de liste : `pulldown-cmark` l'enveloppe dans un
+/// `Paragraph` pour une liste « lâche », ou l'émet directement pour une
+/// liste « compacte ». Tout contenu de bloc restant (sous-liste, second
+/// paragraphe...) est consommé puis ignoré, `ListItem` n'acceptant que du
+/// contenu inline (voir [`NodeKind::CHILDREN_TABLE`]).
+fn parse_item(body: &mut YrsBody, events: &mut MdEvents) -> Vec<BodyNodeId> {
+    let children = if matches!(events.peek(), Some(Event::Start(Tag::Paragraph))) {
+        events.next();
+        let children = parse_inline(body, events);
+        if matches!(events.peek(), Some(Event::End(TagEnd::Paragraph))) {
+            events.next();
+        }
+        children
+    } else {
+        parse_inline(body, events)
+    };
+
+    let mut depth = 0i32;
+    while let Some(event) = events.peek().cloned() {
+        match event {
+            Event::End(TagEnd::Item) if depth == 0 => break,
+            Event::Start(_) => {
+                depth += 1;
+                events.next();
+            }
+            Event::End(_) => {
+                depth -= 1;
+                events.next();
+            }
+            _ => {
+                events.next();
+            }
+        }
+    }
+    if matches!(events.peek(), Some(Event::End(TagEnd::Item))) {
+        events.next();
+    }
+    children
+}
+
+/// Construit un nœud `Table` à partir des lignes (`TableHead`/`TableRow`,
+/// traitées de façon identique, ce modèle de contenu ne distinguant pas
+/// l'en-tête) rencontrées, jusqu'au `TagEnd::Table` correspondant.
+fn parse_table(body: &mut YrsBody, events: &mut MdEvents) -> BodyNodeId {
+    let table = body.create_node(NodeSpec::Table);
+    while let Some(event) = events.peek().cloned() {
+        match event {
+            Event::Start(Tag::TableHead) | Event::Start(Tag::TableRow) => {
+                events.next();
+                let row = parse_table_row(body, events);
+                let _ = body.append_child_unchecked(table, row);
+            }
+            Event::End(TagEnd::Table) => {
+                events.next();
+                break;
+            }
+            _ => {
+                events.next();
+            }
+        }
+    }
+    table
+}
+
+/// Construit un nœud `TableRow` à partir des `TableCell` rencontrées,
+/// jusqu'au `TagEnd::TableHead`/`TagEnd::TableRow` correspondant.
+fn parse_table_row(body: &mut YrsBody, events: &mut MdEvents) -> BodyNodeId {
+    let row = body.create_node(NodeSpec::TableRow);
+    while let Some(event) = events.peek().cloned() {
+        match event {
+            Event::Start(Tag::TableCell) => {
+                events.next();
+                let blocks = parse_blocks(body, events);
+                if matches!(events.peek(), Some(Event::End(TagEnd::TableCell))) {
+                    events.next();
+                }
+                let cell = body.create_node(NodeSpec::TableCell);
+                for block in blocks {
+                    match block {
+                        MdBlock::Paragraph(children) => {
+                            let para = body.create_node(NodeSpec::Paragraphe);
+                            for child in children {
+                                let _ = body.append_child_unchecked(para, child);
+                            }
+                            let _ = body.append_child_unchecked(cell, para);
+                        }
+                        // Une cellule n'accepte que Paragraphe/List (pas de
+                        // tableau imbriqué, voir `NodeKind::CHILDREN_TABLE`).
+                        MdBlock::Node(node) if body.kind_of(node) == NodeKind::List => {
+                            let _ = body.append_child_unchecked(cell, node);
+                        }
+                        MdBlock::Node(_) => {}
+                    }
+                }
+                let _ = body.append_child_unchecked(row, cell);
+            }
+            Event::End(TagEnd::TableHead) | Event::End(TagEnd::TableRow) => {
+                events.next();
+                break;
+            }
+            _ => {
+                events.next();
+            }
+        }
+    }
+    row
 }
 
 /// Crée un nœud de type `kind` sous `parent` (voir
@@ -451,136 +866,137 @@ fn check_structure(body: &YrsBody, node: BodyNodeId, errors: &mut Vec<String>) {
     }
 }
 
-/// Implémentation de [`UserInteractionPort`] qui relaie les questions de
-/// l'agent au client websocket à l'origine de la tâche en cours, et
-/// attend sa réponse sur le canal de contrôle du protocole.
+/// Relaie au client websocket de la salle les réflexions du modèle et les
+/// appels d'outils que l'orchestration déclenche (voir [`AgentObserver`]),
+/// pour affichage dans `agent::AgentPanel` au fil de l'eau plutôt qu'une
+/// fois la tâche entièrement terminée, et lit le contenu des documents
+/// précédemment fournis par l'inspecteur (voir [`DocumentContentPort`]).
+///
+/// Contrairement à l'ancienne implémentation, cette struct ne relaie plus
+/// elle-même les questions de l'agent ni n'attend leur réponse en bloquant :
+/// une pause HITL est désormais un [`agent::orchestration::RunOutcome::Paused`]
+/// traduit en `ServerMessage::Interaction*` par l'appelant (voir
+/// `super::ws::spawn_agent_run`), et sa réponse est appliquée à l'état
+/// persisté du run (voir `storage::agent_run`) plutôt qu'au travers d'un
+/// canal propre à cette connexion — c'est ce qui permet à une pause de
+/// survivre à une déconnexion ou un redémarrage du serveur.
 pub struct WsUserInteraction {
     out: mpsc::UnboundedSender<ServerMessage>,
-    answers: AsyncMutex<mpsc::UnboundedReceiver<serde_json::Value>>,
+    pool: storage::Pool,
 }
 
 impl WsUserInteraction {
     #[must_use]
-    pub fn new(
-        out: mpsc::UnboundedSender<ServerMessage>,
-        answers: mpsc::UnboundedReceiver<serde_json::Value>,
-    ) -> Self {
-        Self {
-            out,
-            answers: AsyncMutex::new(answers),
-        }
-    }
-
-    async fn recv_answer(&self) -> Result<serde_json::Value, ToolError> {
-        self.answers
-            .lock()
-            .await
-            .recv()
-            .await
-            .ok_or_else(|| ToolError::Other("connexion websocket fermée avant réponse".to_string()))
+    pub fn new(out: mpsc::UnboundedSender<ServerMessage>, pool: storage::Pool) -> Self {
+        Self { out, pool }
     }
 }
 
 #[async_trait::async_trait]
-impl UserInteractionPort for WsUserInteraction {
-    async fn ask(&self, question: &str) -> Result<String, ToolError> {
-        self.out
-            .send(ServerMessage::InteractionAsk {
-                question: question.to_string(),
-            })
-            .map_err(|_| ToolError::Other("connexion websocket fermée".to_string()))?;
-        let value = self.recv_answer().await?;
-        serde_json::from_value(value)
-            .map_err(|error| ToolError::Other(format!("réponse invalide à la question : {error}")))
-    }
-
-    async fn confirm(&self, message: &str) -> Result<bool, ToolError> {
-        self.out
-            .send(ServerMessage::InteractionConfirm {
-                message: message.to_string(),
-            })
-            .map_err(|_| ToolError::Other("connexion websocket fermée".to_string()))?;
-        let value = self.recv_answer().await?;
-        serde_json::from_value(value).map_err(|error| {
-            ToolError::Other(format!("réponse invalide à la confirmation : {error}"))
+impl DocumentContentPort for WsUserInteraction {
+    async fn fetch_content(&self, document_id: &str) -> Result<DocumentContent, ToolError> {
+        let id: ID = document_id.parse().map_err(|_| {
+            ToolError::InvalidArguments(format!("identifiant de document invalide : {document_id}"))
+        })?;
+        let document = storage::agent_run::fetch_document(&self.pool, &id)
+            .await
+            .map_err(|_| ToolError::InvalidArguments(format!("document introuvable : {document_id}")))?;
+        Ok(DocumentContent {
+            bytes: document.bytes,
+            mime_type: document.mime_type,
+            file_name: document.file_name,
         })
     }
-
-    async fn ask_questions(
-        &self,
-        prompt: &str,
-        questions: &[Question],
-    ) -> Result<Vec<QuestionAnswer>, ToolError> {
-        let wire_questions = questions
-            .iter()
-            .map(|q| InteractionQuestionWire {
-                id: q.id.clone(),
-                label: q.label.clone(),
-                options: q.options.clone(),
-            })
-            .collect();
-        self.out
-            .send(ServerMessage::InteractionQuestions {
-                prompt: prompt.to_string(),
-                questions: wire_questions,
-            })
-            .map_err(|_| ToolError::Other("connexion websocket fermée".to_string()))?;
-        let value = self.recv_answer().await?;
-        let answers: Vec<InteractionAnswerWire> =
-            serde_json::from_value(value).map_err(|error| {
-                ToolError::Other(format!("réponses invalides au formulaire : {error}"))
-            })?;
-        Ok(answers
-            .into_iter()
-            .map(|a| QuestionAnswer {
-                question_id: a.question_id,
-                value: a.value,
-                unsatisfactory_reason: a.unsatisfactory_reason,
-            })
-            .collect())
-    }
 }
 
-/// Relaie au client websocket à l'origine de la tâche les réflexions du
-/// modèle et les appels d'outils que l'agent déclenche (voir
-/// `agent::AgentObserver`), pour affichage dans `agent::AgentPanel` au fil
-/// de l'eau plutôt qu'une fois la tâche entièrement terminée.
 #[async_trait::async_trait]
 impl AgentObserver for WsUserInteraction {
-    async fn on_reasoning_delta(&self, delta: &str) {
+    async fn on_reasoning_delta(&self, agent_label: &str, delta: &str) {
         let _ = self.out.send(ServerMessage::AgentReasoningDelta {
+            agent_label: agent_label.to_string(),
             delta: delta.to_string(),
         });
     }
 
-    async fn on_content_delta(&self, delta: &str) {
+    async fn on_content_delta(&self, agent_label: &str, delta: &str) {
         let _ = self.out.send(ServerMessage::AgentContentDelta {
+            agent_label: agent_label.to_string(),
             delta: delta.to_string(),
         });
     }
 
-    async fn on_turn_finished(&self) {
+    async fn on_turn_finished(&self, _agent_label: &str) {
         let _ = self.out.send(ServerMessage::AgentStepFinished);
     }
 
-    async fn on_tool_call_started(&self, call: &ToolCall) {
+    async fn on_tool_call_started(&self, agent_label: &str, call: &ToolCall) {
         let _ = self.out.send(ServerMessage::AgentToolCallStarted {
+            agent_label: agent_label.to_string(),
             id: call.id.clone(),
             name: call.name.clone(),
             arguments: call.arguments.clone(),
         });
     }
 
-    async fn on_tool_call_finished(&self, call_id: &str, result: &Result<String, String>) {
+    async fn on_tool_call_finished(
+        &self,
+        agent_label: &str,
+        call_id: &str,
+        result: &Result<String, String>,
+    ) {
         let (ok, output) = match result {
             Ok(output) => (true, output.clone()),
             Err(message) => (false, message.clone()),
         };
         let _ = self.out.send(ServerMessage::AgentToolCallFinished {
+            agent_label: agent_label.to_string(),
             id: call_id.to_string(),
             ok,
             output,
         });
+    }
+}
+
+/// Implémentation de [`agent::catalog::AgentCatalog`] adossée à la table
+/// `agent_profiles` (voir `storage::agent_profile`) : le catalogue d'experts
+/// que le Superviseur peut instancier à la volée est une donnée
+/// administrable (`/admin/agent-profiles`), jamais une struct Rust par
+/// expert.
+pub struct StorageAgentCatalog {
+    pool: storage::Pool,
+}
+
+impl StorageAgentCatalog {
+    #[must_use]
+    pub fn new(pool: storage::Pool) -> Self {
+        Self { pool }
+    }
+}
+
+fn to_catalog_profile(stored: shared::model::AgentProfile) -> agent::AgentProfile {
+    agent::AgentProfile {
+        id: stored.name,
+        display_name: stored.display_name,
+        system_prompt: stored.system_prompt,
+        tool_names: stored.tool_names,
+        max_steps: u32::try_from(stored.max_steps).unwrap_or(1).max(1),
+    }
+}
+
+#[async_trait::async_trait]
+impl agent::AgentCatalog for StorageAgentCatalog {
+    async fn list(&self) -> Result<Vec<agent::AgentProfile>, ToolError> {
+        let profiles = storage::agent_profile::list_enabled_agent_profiles(&self.pool)
+            .await
+            .map_err(|error| ToolError::Other(error.to_string()))?;
+        Ok(profiles.into_iter().map(to_catalog_profile).collect())
+    }
+
+    async fn get(&self, id: &str) -> Result<Option<agent::AgentProfile>, ToolError> {
+        let profile = storage::agent_profile::get_enabled_agent_profile_by_name(&self.pool, id)
+            .await
+            .map_err(|error| ToolError::Other(error.to_string()))?;
+        Ok(profile.map(to_catalog_profile))
     }
 }
 
@@ -628,6 +1044,20 @@ mod tests {
             .find(|&c| body.kind_of(c) == NodeKind::ArticleBody)
             .expect("ArticleBody manquant");
         body.first_leaf_of(article_body)
+    }
+
+    /// Concatène le texte de tous les descendants `Plain` de `id`, pour
+    /// vérifier le texte rendu d'un nœud sans se soucier de son
+    /// enveloppement éventuel dans des `Span` (`BodyRead::text_of` ne
+    /// renvoie du texte que pour un nœud `Plain` pris isolément).
+    fn text_of_subtree(body: &YrsBody, id: BodyNodeId) -> String {
+        if body.kind_of(id) == NodeKind::Plain {
+            return body.text_of(id);
+        }
+        body.children_of(id)
+            .into_iter()
+            .map(|child| text_of_subtree(body, child))
+            .collect()
     }
 
     #[tokio::test]
@@ -678,6 +1108,167 @@ mod tests {
         let body = room.body.lock().await;
         let leaf = article_body_leaf(&body, article);
         assert_eq!(body.text_of(leaf), "Contenu de l'article");
+    }
+
+    #[tokio::test]
+    async fn fill_section_converts_bold_and_italic_to_spans() {
+        let (room, article) = room_with_article();
+        let editor = new_editor(&room);
+
+        editor
+            .fill_section(&article.to_string(), "Du texte **en gras** et *en italique*.")
+            .await
+            .unwrap();
+
+        let body = room.body.lock().await;
+        let article_body = body
+            .children_of(article)
+            .into_iter()
+            .find(|&c| body.kind_of(c) == NodeKind::ArticleBody)
+            .unwrap();
+        let para = body.first_child_of(article_body).unwrap();
+        assert_eq!(body.kind_of(para), NodeKind::Paragraphe);
+
+        let children = body.children_of(para);
+        let full_text: String = children.iter().map(|&c| text_of_subtree(&body, c)).collect();
+        assert_eq!(full_text, "Du texte en gras et en italique.");
+
+        let bold_span = children
+            .iter()
+            .find(|&&c| body.kind_of(c) == NodeKind::Span && text_of_subtree(&body, c) == "en gras")
+            .expect("span en gras introuvable");
+        if let NodeSpec::Span(span) = body.spec_of(*bold_span) {
+            assert!(span.bold);
+            assert!(!span.italic);
+        } else {
+            panic!("attendu un NodeSpec::Span");
+        }
+
+        let italic_span = children
+            .iter()
+            .find(|&&c| body.kind_of(c) == NodeKind::Span && text_of_subtree(&body, c) == "en italique")
+            .expect("span en italique introuvable");
+        if let NodeSpec::Span(span) = body.spec_of(*italic_span) {
+            assert!(span.italic);
+            assert!(!span.bold);
+        } else {
+            panic!("attendu un NodeSpec::Span");
+        }
+    }
+
+    #[tokio::test]
+    async fn fill_section_creates_one_paragraphe_per_markdown_paragraph() {
+        let (room, article) = room_with_article();
+        let editor = new_editor(&room);
+
+        editor
+            .fill_section(&article.to_string(), "Premier paragraphe.\n\nSecond paragraphe.")
+            .await
+            .unwrap();
+
+        let body = room.body.lock().await;
+        let article_body = body
+            .children_of(article)
+            .into_iter()
+            .find(|&c| body.kind_of(c) == NodeKind::ArticleBody)
+            .unwrap();
+        let paragraphs = body.children_of(article_body);
+        assert_eq!(paragraphs.len(), 2);
+        assert!(paragraphs.iter().all(|&p| body.kind_of(p) == NodeKind::Paragraphe));
+        assert_eq!(body.text_of(body.first_leaf_of(paragraphs[0])), "Premier paragraphe.");
+        assert_eq!(body.text_of(body.first_leaf_of(paragraphs[1])), "Second paragraphe.");
+    }
+
+    #[tokio::test]
+    async fn fill_section_creates_a_bullet_list() {
+        let (room, article) = room_with_article();
+        let editor = new_editor(&room);
+
+        editor
+            .fill_section(&article.to_string(), "- Premier item\n- Second item")
+            .await
+            .unwrap();
+
+        let body = room.body.lock().await;
+        let article_body = body
+            .children_of(article)
+            .into_iter()
+            .find(|&c| body.kind_of(c) == NodeKind::ArticleBody)
+            .unwrap();
+        let list = body.first_child_of(article_body).unwrap();
+        assert_eq!(body.kind_of(list), NodeKind::List);
+
+        let items = body.children_of(list);
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().all(|&i| body.kind_of(i) == NodeKind::ListItem));
+        assert_eq!(body.text_of(body.first_leaf_of(items[0])), "Premier item");
+        assert_eq!(body.text_of(body.first_leaf_of(items[1])), "Second item");
+    }
+
+    #[tokio::test]
+    async fn fill_section_creates_a_table() {
+        let (room, article) = room_with_article();
+        let editor = new_editor(&room);
+
+        editor
+            .fill_section(
+                &article.to_string(),
+                "| A | B |\n| --- | --- |\n| 1 | 2 |",
+            )
+            .await
+            .unwrap();
+
+        let body = room.body.lock().await;
+        let article_body = body
+            .children_of(article)
+            .into_iter()
+            .find(|&c| body.kind_of(c) == NodeKind::ArticleBody)
+            .unwrap();
+        let table = body.first_child_of(article_body).unwrap();
+        assert_eq!(body.kind_of(table), NodeKind::Table);
+
+        let rows = body.children_of(table);
+        assert_eq!(rows.len(), 2);
+        for &row in &rows {
+            assert_eq!(body.kind_of(row), NodeKind::TableRow);
+            let cells = body.children_of(row);
+            assert_eq!(cells.len(), 2);
+            for &cell in &cells {
+                assert_eq!(body.kind_of(cell), NodeKind::TableCell);
+            }
+        }
+        let header_texts: Vec<String> = body
+            .children_of(rows[0])
+            .into_iter()
+            .map(|c| body.text_of(body.first_leaf_of(c)))
+            .collect();
+        assert_eq!(header_texts, vec!["A".to_string(), "B".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn fill_section_on_inline_only_node_flattens_paragraphs_into_spans() {
+        let (room, _) = room_with_article();
+        let editor = new_editor(&room);
+        let root = { room.body.lock().await.root() };
+
+        let visa = {
+            let mut body = room.body.lock().await;
+            body.append_node(root, NodeSpec::Visa).unwrap()
+        };
+
+        editor
+            .fill_section(&visa.to_string(), "Vu le **code** de l'environnement.")
+            .await
+            .unwrap();
+
+        let body = room.body.lock().await;
+        let children = body.children_of(visa);
+        assert!(children.iter().all(|&c| matches!(
+            body.kind_of(c),
+            NodeKind::Plain | NodeKind::Span
+        )));
+        let full_text: String = children.iter().map(|&c| text_of_subtree(&body, c)).collect();
+        assert_eq!(full_text, "Vu le code de l'environnement.");
     }
 
     #[tokio::test]

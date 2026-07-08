@@ -6,13 +6,16 @@
 //! handles opaques `ContentHandle`/`LegalActHandle`.
 
 use async_trait::async_trait;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::ToolError;
 
-/// Une question posée à l'utilisateur dans le cadre d'un formulaire structuré.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Une question posée à l'utilisateur dans le cadre d'un formulaire
+/// structuré. Sérialisable : embarquée dans un
+/// [`crate::tool::PauseRequest::AskQuestions`], donc persistée le temps
+/// qu'une orchestration en pause soit reprise.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Question {
     pub id: String,
     pub label: String,
@@ -22,7 +25,7 @@ pub struct Question {
 }
 
 /// Réponse de l'utilisateur à une question du formulaire.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QuestionAnswer {
     pub question_id: String,
     pub value: String,
@@ -30,44 +33,29 @@ pub struct QuestionAnswer {
     pub unsatisfactory_reason: Option<String>,
 }
 
-/// Point d'intégration avec l'utilisateur courant (l'inspecteur), pour
-/// l'outil `ask_user` et pour la confirmation des actions irréversibles.
-#[async_trait]
-pub trait UserInteractionPort: Send + Sync {
-    /// Pose une question ouverte à l'utilisateur et renvoie sa réponse.
-    async fn ask(&self, question: &str) -> Result<String, ToolError>;
-
-    /// Demande une confirmation oui/non avant une action irréversible.
-    async fn confirm(&self, message: &str) -> Result<bool, ToolError>;
-
-    /// Présente un formulaire structuré à l'utilisateur et renvoie ses réponses.
-    /// Chaque réponse peut indiquer qu'elle n'est pas satisfaisante via
-    /// [`QuestionAnswer::unsatisfactory_reason`].
-    async fn ask_questions(
-        &self,
-        prompt: &str,
-        questions: &[Question],
-    ) -> Result<Vec<QuestionAnswer>, ToolError>;
-}
-
 /// Référence vers un document fourni par l'utilisateur en réponse à
 /// `request_document`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DocumentRef {
     pub id: String,
     pub file_name: String,
     pub mime_type: String,
 }
 
-/// Point d'intégration pour demander à l'utilisateur de fournir un document
-/// externe (upload), pour l'outil `request_document`.
+/// Contenu brut d'un document précédemment fourni via `request_document`,
+/// pour l'outil `read_document`.
+pub struct DocumentContent {
+    pub bytes: Vec<u8>,
+    pub mime_type: String,
+    pub file_name: String,
+}
+
+/// Point d'intégration pour relire le contenu d'un document référencé par
+/// l'identifiant renvoyé dans un [`DocumentRef`], pour l'outil
+/// `read_document`.
 #[async_trait]
-pub trait DocumentRequestPort: Send + Sync {
-    async fn request_document(
-        &self,
-        prompt: &str,
-        accepted_mime_types: &[String],
-    ) -> Result<DocumentRef, ToolError>;
+pub trait DocumentContentPort: Send + Sync {
+    async fn fetch_content(&self, document_id: &str) -> Result<DocumentContent, ToolError>;
 }
 
 /// Accès aux métadonnées contextuelles de l'acte en cours d'édition

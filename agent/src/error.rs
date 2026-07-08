@@ -35,4 +35,8 @@ pub enum AgentError {
     },
     #[error("nombre maximal d'itérations atteint ({0}) sans réponse finale du modèle")]
     MaxStepsExceeded(u32),
+    #[error("aucune orchestration en attente d'une réponse humaine à reprendre")]
+    NotPaused,
+    #[error("la réponse fournie ne correspond pas à la question en attente")]
+    MismatchedAnswer,
 }

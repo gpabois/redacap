@@ -25,7 +25,7 @@ pub enum Role {
 }
 
 /// Appel d'outil demandé par le modèle, à exécuter par l'agent.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: String,
     pub name: String,
@@ -52,8 +52,10 @@ pub enum StreamEvent {
 }
 
 /// Message échangé avec le modèle de langage, indépendant du format de
-/// transport du fournisseur.
-#[derive(Debug, Clone, PartialEq)]
+/// transport du fournisseur. Sérialisable : c'est l'unité persistée dans
+/// l'historique d'un [`crate::orchestration::AgentFrame`], pour que la
+/// reprise d'une orchestration en pause survive à un redémarrage du serveur.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: Role,
     pub content: Option<String>,

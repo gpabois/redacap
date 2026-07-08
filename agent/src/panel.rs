@@ -9,6 +9,7 @@ use dsfr::{Badge, ResizeHandle, Severity};
 use leptos::prelude::*;
 use leptos::*;
 use pulldown_cmark::{Event, Options, Parser};
+use wasm_bindgen::JsCast;
 use web_sys::KeyboardEvent;
 
 /// Largeur initiale du panneau de formulaire d'interaction, en pixels,
@@ -18,6 +19,83 @@ const INTERACTION_PANEL_DEFAULT_WIDTH: f64 = 280.0;
 /// (voir [`ResizeHandle`]).
 const INTERACTION_PANEL_MIN_WIDTH: f64 = 200.0;
 const INTERACTION_PANEL_MAX_WIDTH: f64 = 480.0;
+
+/// Libellé humain d'un appel d'outil, tel qu'affiché dans l'historique du
+/// panneau : traduit l'identifiant technique (`Tool::name()`, snake_case)
+/// en une phrase compréhensible pour l'inspecteur, qui n'a pas à connaître
+/// le nom interne des outils de l'agent. Couvre tous les outils enregistrés
+/// côté serveur (voir `agent::tools`) ; un nom non répertorié (futur outil)
+/// retombe sur son identifiant technique brut plutôt que de planter
+/// l'affichage.
+fn tool_display_name(name: &str) -> &str {
+    match name {
+        "read_structure" => "Lecture de la structure de l'acte",
+        "read_title" => "Lecture du titre de l'acte",
+        "set_title" => "Modification du titre de l'acte",
+        "fill_section" => "Rédaction d'une section",
+        "insert_node" => "Insertion d'un élément dans l'acte",
+        "remove_node" => "Suppression d'un élément de l'acte",
+        "generate_numbering" => "Recalcul de la numérotation",
+        "validate_structure" => "Vérification de la structure de l'acte",
+        "read_metadata" => "Lecture d'une métadonnée",
+        "write_metadata" => "Mise à jour d'une métadonnée",
+        "list_intentions" => "Liste des intentions du projet",
+        "add_intention" => "Association d'une intention au projet",
+        "remove_intention" => "Retrait d'une intention du projet",
+        "ask_user" => "Question posée à l'utilisateur",
+        "ask_questions" => "Formulaire présenté à l'utilisateur",
+        "request_document" => "Demande d'un document à l'utilisateur",
+        "read_document" => "Lecture d'un document externe",
+        "legifrance_search" => "Recherche Légifrance",
+        "legifrance_fetch" => "Lecture d'un texte Légifrance",
+        "georisques_query" => "Interrogation GéoRisques",
+        "icpe_query" => "Interrogation de la base ICPE",
+        _ => name,
+    }
+}
+
+/// Tronque `s` à `max` caractères (approximatif, sur les `char`) pour
+/// l'affichage en aperçu, avec une ellipse si nécessaire.
+fn truncate_for_summary(s: &str, max: usize) -> String {
+    if s.chars().count() > max {
+        format!("{}…", s.chars().take(max).collect::<String>())
+    } else {
+        s.to_string()
+    }
+}
+
+/// Résumé lisible du ou des arguments les plus significatifs d'un appel
+/// d'outil, affiché à côté de son libellé dans l'en-tête replié : permet de
+/// distinguer d'un coup d'oeil, par exemple, deux appels à `fill_section`
+/// sans déplier chacun d'eux. Le JSON complet reste consultable au dépli
+/// (voir `render_panel_entry`). Renvoie `None` si l'outil n'a pas
+/// d'argument significatif à mettre en avant (ex. `read_structure`) ou si
+/// les arguments ne sont pas l'objet JSON attendu.
+fn tool_call_summary(name: &str, arguments: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(arguments).ok()?;
+    let object = value.as_object()?;
+    let candidates: &[&str] = match name {
+        "fill_section" => &["section_id"],
+        "insert_node" => &["kind", "parent_id"],
+        "remove_node" => &["node_id"],
+        "set_title" => &["title"],
+        "read_metadata" | "write_metadata" => &["key"],
+        "add_intention" | "remove_intention" => &["intention_id"],
+        "legifrance_search" => &["query"],
+        "legifrance_fetch" => &["textId", "textCid", "id"],
+        "request_document" => &["prompt"],
+        "ask_user" => &["question"],
+        "read_document" => &["document_id", "url"],
+        "georisques_query" => &["code_insee", "latlon"],
+        "icpe_query" => &["nom_etablissement", "code_insee"],
+        _ => return None,
+    };
+    candidates
+        .iter()
+        .find_map(|key| object.get(*key).and_then(|v| v.as_str()))
+        .filter(|s| !s.is_empty())
+        .map(|s| truncate_for_summary(s, 80))
+}
 
 /// Convertit un texte Markdown (réponse de l'agent) en HTML affichable.
 ///
@@ -71,6 +149,10 @@ impl PanelMessage {
 /// en cours de réception (voir [`AgentPanel`]).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PanelReasoning {
+    /// Libellé du frame à l'origine de cette réflexion (`"Superviseur"` ou
+    /// le nom d'un expert délégué, voir `agent::orchestration::AgentFrame`) ;
+    /// vide si l'application hôte ne distingue pas plusieurs agents.
+    pub agent_label: String,
     pub content: String,
     pub done: bool,
 }
@@ -95,6 +177,8 @@ pub enum PanelToolCallStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PanelToolCall {
     pub id: String,
+    /// Libellé du frame à l'origine de cet appel (voir [`PanelReasoning::agent_label`]).
+    pub agent_label: String,
     pub name: String,
     /// Arguments de l'appel, tels que sérialisés (JSON) par l'appelant.
     pub arguments: String,
@@ -160,6 +244,8 @@ pub struct PanelQuestionAnswer {
 /// saisie texte par le formulaire correspondant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InteractionRequest {
+    /// Libellé du frame à l'origine de la question (voir [`PanelReasoning::agent_label`]).
+    pub agent_label: String,
     pub prompt: String,
     pub questions: Vec<PanelQuestion>,
 }
@@ -168,6 +254,69 @@ pub struct InteractionRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InteractionResponse {
     pub answers: Vec<PanelQuestionAnswer>,
+}
+
+/// Requête de l'agent demandant à l'utilisateur de fournir un document
+/// externe, upload (outil `request_document`). Distincte de
+/// [`InteractionRequest`] : elle affiche un sélecteur de fichier plutôt qu'un
+/// formulaire de questions, tant que ce signal est `Some`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentRequest {
+    /// Libellé du frame à l'origine de la demande (voir [`PanelReasoning::agent_label`]).
+    pub agent_label: String,
+    pub prompt: String,
+    /// Types MIME acceptés par le sélecteur de fichier (attribut `accept`) ;
+    /// vide si tous les types sont acceptés.
+    pub accepted_mime_types: Vec<String>,
+}
+
+/// Document choisi par l'utilisateur en réponse à un [`DocumentRequest`],
+/// son contenu encodé en base64 (voir `server::protocol::DocumentUploadWire`,
+/// son pendant sur le fil).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentUpload {
+    pub file_name: String,
+    pub mime_type: String,
+    pub content_base64: String,
+}
+
+/// Lit le premier fichier sélectionné dans `input` et invoque
+/// `on_document_response` une fois son contenu disponible, encodé en base64
+/// (voir [`DocumentUpload`]) : `FileReader::read_as_data_url` produit
+/// directement une chaîne `data:<mime>;base64,<contenu>`, dont seule la
+/// partie après la virgule nous intéresse.
+fn read_uploaded_file(input: web_sys::HtmlInputElement, on_document_response: Callback<DocumentUpload>) {
+    use wasm_bindgen::closure::Closure;
+
+    let Some(files) = input.files() else { return };
+    let Some(file) = files.get(0) else { return };
+    let file_name = file.name();
+    let mime_type = file.type_();
+
+    let Ok(reader) = web_sys::FileReader::new() else {
+        return;
+    };
+    let reader_for_closure = reader.clone();
+    let onload = Closure::<dyn FnMut()>::new(move || {
+        let Ok(result) = reader_for_closure.result() else {
+            return;
+        };
+        let Some(data_url) = result.as_string() else {
+            return;
+        };
+        let content_base64 = data_url
+            .split_once(',')
+            .map(|(_, encoded)| encoded.to_string())
+            .unwrap_or_default();
+        on_document_response.run(DocumentUpload {
+            file_name: file_name.clone(),
+            mime_type: mime_type.clone(),
+            content_base64,
+        });
+    });
+    reader.set_onload(Some(onload.as_ref().unchecked_ref()));
+    onload.forget();
+    let _ = reader.read_as_data_url(&file);
 }
 
 #[derive(Clone, Default)]
@@ -202,10 +351,16 @@ fn render_panel_entry(entry: PanelEntry) -> AnyView {
         },
         PanelEntry::Reasoning(reasoning) => {
             let done = reasoning.done;
+            let agent_label = reasoning.agent_label.clone();
             view! {
                 <div class="self-start max-w-[80%] rounded-sm border border-dashed \
                             border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 \
                             px-3 py-1.5 text-sm italic text-gray-500 dark:text-gray-400">
+                    {(!agent_label.is_empty()).then(|| view! {
+                        <div class="mb-1 not-italic">
+                            <Badge severity=Severity::Info small=true>{agent_label}</Badge>
+                        </div>
+                    })}
                     {reasoning.content.clone()}
                     {(!done).then(|| view! { <span class="animate-pulse">"▍"</span> })}
                 </div>
@@ -213,32 +368,66 @@ fn render_panel_entry(entry: PanelEntry) -> AnyView {
             .into_any()
         }
         PanelEntry::ToolCall(call) => {
-            let (status_label, status_class) = match &call.status {
-                PanelToolCallStatus::Running => ("en cours…", "text-gray-500 dark:text-gray-400"),
-                PanelToolCallStatus::Done { .. } => ("terminé", "text-success"),
-                PanelToolCallStatus::Error { .. } => ("erreur", "text-error"),
+            let display_name = tool_display_name(&call.name);
+            let summary = tool_call_summary(&call.name, &call.arguments);
+            let has_arguments = call.arguments.trim() != "{}";
+            let status_badge = match &call.status {
+                PanelToolCallStatus::Running => view! {
+                    <span class="inline-flex items-center gap-1.5 text-xs italic \
+                                 text-gray-500 dark:text-gray-400">
+                        <span class="size-1.5 rounded-full bg-gray-400 dark:bg-gray-500 animate-pulse"></span>
+                        "en cours…"
+                    </span>
+                }
+                .into_any(),
+                PanelToolCallStatus::Done { .. } => view! {
+                    <Badge severity=Severity::Success small=true>"Terminé"</Badge>
+                }
+                .into_any(),
+                PanelToolCallStatus::Error { .. } => view! {
+                    <Badge severity=Severity::Error small=true>"Échec"</Badge>
+                }
+                .into_any(),
             };
             let output = match &call.status {
                 PanelToolCallStatus::Running => None,
                 PanelToolCallStatus::Done { output } => Some(output.clone()),
                 PanelToolCallStatus::Error { message } => Some(message.clone()),
             };
+            let output_label = match &call.status {
+                PanelToolCallStatus::Error { .. } => "Erreur : ",
+                _ => "Résultat : ",
+            };
             view! {
                 <details class="self-start w-full max-w-[90%] rounded-sm border \
                                 border-blue-france-925 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-xs">
-                    <summary class="flex cursor-pointer select-none items-center gap-2 px-2 py-1">
-                        <span class="font-mono font-bold text-gray-700 dark:text-gray-200">{call.name.clone()}</span>
-                        <span class=format!("italic {status_class}")>{status_label}</span>
+                    <summary class="flex cursor-pointer select-none items-center gap-2 px-2 py-1.5">
+                        {(!call.agent_label.is_empty()).then(|| view! {
+                            <Badge severity=Severity::Info small=true>{call.agent_label.clone()}</Badge>
+                        })}
+                        <span class="font-semibold text-gray-700 dark:text-gray-200">{display_name}</span>
+                        {summary.map(|s| view! {
+                            <span class="truncate italic text-gray-500 dark:text-gray-400">
+                                {format!("« {s} »")}
+                            </span>
+                        })}
+                        <span class="ml-auto flex-shrink-0">{status_badge}</span>
                     </summary>
-                    <div class="space-y-1 whitespace-pre-wrap break-words px-2 pb-2 font-mono \
+                    <div class="space-y-1 whitespace-pre-wrap break-words border-t \
+                                border-blue-france-925 dark:border-gray-700 px-2 py-2 font-mono \
                                 text-gray-900 dark:text-gray-100">
-                        <div>
-                            <span class="text-gray-500 dark:text-gray-400">"Arguments : "</span>
-                            {call.arguments.clone()}
+                        <div class="text-gray-500 dark:text-gray-400">
+                            "Outil : " <span class="font-semibold">{call.name.clone()}</span>
                         </div>
+                        {has_arguments.then(|| view! {
+                            <div>
+                                <span class="text-gray-500 dark:text-gray-400">"Arguments : "</span>
+                                {call.arguments.clone()}
+                            </div>
+                        })}
                         {output.map(|output| view! {
                             <div>
-                                <span class="text-gray-500 dark:text-gray-400">"Résultat : "</span>
+                                <span class="text-gray-500 dark:text-gray-400">{output_label}</span>
                                 {output}
                             </div>
                         })}
@@ -302,12 +491,23 @@ pub fn AgentPanel(
     /// le bouton correspondant n'est pas affiché.
     #[prop(optional)]
     on_clear_history: Option<Callback<()>>,
+    /// Requête de document à afficher lorsque l'agent attend un upload
+    /// (outil `request_document`). Comme `interaction`, remplace la zone de
+    /// saisie texte tant qu'elle est `Some`.
+    #[prop(optional, into)]
+    document_request: Option<Signal<Option<DocumentRequest>>>,
+    /// Invoqué avec le fichier choisi par l'utilisateur lorsqu'un
+    /// `document_request` est en cours.
+    #[prop(optional)]
+    on_document_response: Option<Callback<DocumentUpload>>,
 ) -> impl IntoView {
     let (draft, set_draft) = signal(String::new());
     let draft_answers = RwSignal::new(Vec::<QuestionDraft>::new());
     let interaction_panel_width = RwSignal::new(INTERACTION_PANEL_DEFAULT_WIDTH);
+    let document_panel_width = RwSignal::new(INTERACTION_PANEL_DEFAULT_WIDTH);
 
     let interaction = interaction.unwrap_or_else(|| Signal::derive(|| None));
+    let document_request = document_request.unwrap_or_else(|| Signal::derive(|| None));
 
     // Réinitialise les brouillons quand un nouveau formulaire apparaît.
     Effect::new(move |_| {
@@ -390,8 +590,9 @@ pub fn AgentPanel(
                     </div>
 
                     // Saisie texte libre, masquée quand un formulaire structuré
-                    // est affiché à côté (colonne de droite ci-dessous).
-                    {move || interaction.get().is_none().then(|| {
+                    // ou un sélecteur de document est affiché à côté (colonne
+                    // de droite ci-dessous).
+                    {move || (interaction.get().is_none() && document_request.get().is_none()).then(|| {
                         let send = make_send();
                         let send_on_click = make_send();
                         view! {
@@ -433,6 +634,7 @@ pub fn AgentPanel(
                 // glissement indépendamment de la colonne chat.
                 {move || {
                 if let Some(req) = interaction.get() {
+                    let agent_label = req.agent_label.clone();
                     let prompt = req.prompt.clone();
                     let fields = req.questions.into_iter().enumerate().map(|(i, q)| {
                         let q_label   = q.label.clone();
@@ -567,6 +769,9 @@ pub fn AgentPanel(
                                        border-l border-blue-france-925 dark:border-gray-700"
                                 style:width=move || format!("{}px", interaction_panel_width.get())
                             >
+                                {(!agent_label.is_empty()).then(|| view! {
+                                    <Badge severity=Severity::Info small=true>{agent_label}</Badge>
+                                })}
                                 <p class="text-sm italic text-gray-600 dark:text-gray-400">{prompt}</p>
                                 {fields}
                                 <div class="flex justify-end">
@@ -590,6 +795,52 @@ pub fn AgentPanel(
                     None
                 }
             }}
+
+                // Colonne document : n'apparaît que lorsque l'agent attend un
+                // upload (outil `request_document`) ; redimensionnable comme
+                // la colonne formulaire ci-dessus.
+                {move || {
+                    if let Some(req) = document_request.get() {
+                        let agent_label = req.agent_label.clone();
+                        let prompt = req.prompt.clone();
+                        let accept = req.accepted_mime_types.join(",");
+                        Some(view! {
+                            <div class="contents">
+                                <ResizeHandle
+                                    width=document_panel_width
+                                    min_width=INTERACTION_PANEL_MIN_WIDTH
+                                    max_width=INTERACTION_PANEL_MAX_WIDTH
+                                />
+                                <div
+                                    class="shrink-0 overflow-y-auto p-3 flex flex-col gap-3 \
+                                           border-l border-blue-france-925 dark:border-gray-700"
+                                    style:width=move || format!("{}px", document_panel_width.get())
+                                >
+                                    {(!agent_label.is_empty()).then(|| view! {
+                                        <Badge severity=Severity::Info small=true>{agent_label}</Badge>
+                                    })}
+                                    <p class="text-sm italic text-gray-600 dark:text-gray-400">{prompt}</p>
+                                    <input
+                                        type="file"
+                                        accept=accept
+                                        class="text-sm text-gray-900 dark:text-gray-100"
+                                        on:change=move |ev| {
+                                            if let Some(cb) = on_document_response
+                                                && let Some(input) = ev
+                                                    .target()
+                                                    .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                                            {
+                                                read_uploaded_file(input, cb);
+                                            }
+                                        }
+                                    />
+                                </div>
+                            </div>
+                        })
+                    } else {
+                        None
+                    }
+                }}
             </div>
         </div>
     }

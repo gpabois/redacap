@@ -1,6 +1,9 @@
 use leptos::prelude::*;
 
-use agent::{AgentPanel, InteractionRequest, InteractionResponse, PanelEntry};
+use agent::{
+    AgentPanel, DocumentRequest, DocumentUpload, InteractionRequest, InteractionResponse,
+    PanelEntry,
+};
 use dsfr::{BlocMarianneInline, ResizeHandle, TabPanel, Tabs};
 
 use super::content::ContentSubtree;
@@ -86,6 +89,13 @@ pub fn LegalActEditor(
     /// conversation avec l'agent (voir [`AgentPanel`]'s `on_clear_history`).
     #[prop(optional)]
     on_agent_clear_history: Option<Callback<()>>,
+    /// Sélecteur de document à afficher (voir [`AgentPanel`]'s `document_request`).
+    #[prop(optional, into)]
+    agent_document_request: Option<Signal<Option<DocumentRequest>>>,
+    /// Appelé avec le fichier choisi par l'utilisateur en réponse à
+    /// `agent_document_request`.
+    #[prop(optional)]
+    on_agent_document_response: Option<Callback<DocumentUpload>>,
     /// Appelé à chaque changement du nœud ciblé pour l'agent IA (bouton
     /// « Cibler », voir [`super::context::EditorContext::agent_target`]),
     /// pour que la page hôte le transmette au serveur (voir `app::ws::
@@ -125,12 +135,16 @@ pub fn LegalActEditor(
         _ => None,
     };
     let agent_interaction = agent_interaction.unwrap_or_else(|| Signal::derive(|| None));
+    let agent_document_request =
+        agent_document_request.unwrap_or_else(|| Signal::derive(|| None));
     let connected_users = connected_users.unwrap_or_else(|| Signal::derive(Vec::new));
     let on_agent_respond = on_agent_respond.unwrap_or_else(|| Callback::new(|_| {}));
     let agent_auto_accept = agent_auto_accept.unwrap_or_else(|| Signal::derive(|| false));
     let on_agent_toggle_auto_accept =
         on_agent_toggle_auto_accept.unwrap_or_else(|| Callback::new(|_| {}));
     let on_agent_clear_history = on_agent_clear_history.unwrap_or_else(|| Callback::new(|_| {}));
+    let on_agent_document_response =
+        on_agent_document_response.unwrap_or_else(|| Callback::new(|_| {}));
 
     // `StoredValue` (Copy) plutôt qu'une capture directe de `children` (non
     // `Copy`, `Rc<dyn Fn...>`) : le bloc réactif ci-dessous s'exécute à
@@ -201,6 +215,8 @@ pub fn LegalActEditor(
                                                 auto_accept=agent_auto_accept
                                                 on_toggle_auto_accept=on_agent_toggle_auto_accept
                                                 on_clear_history=on_agent_clear_history
+                                                document_request=agent_document_request
+                                                on_document_response=on_agent_document_response
                                             />
                                         }.into_any()
                                     })}
@@ -409,32 +425,42 @@ fn TargetButton(node_id: BodyNodeId) -> impl IntoView {
 
 // ── Nœuds textuels (Visa / Considérant / Sur) ────────────────────────────────
 
-fn plain_text_signal(node_id: BodyNodeId) -> (Option<BodyNodeId>, Signal<String>) {
+fn plain_text_signal(node_id: BodyNodeId) -> Signal<String> {
     let ctx = expect_editor_context();
-    let plain_id = ctx.body.with_untracked(|b| b.first_child_of(node_id));
-    let text = Signal::derive(move || {
-        plain_id
-            .map(|pid| ctx.body.with(|b| b.text_of(pid)))
-            .unwrap_or_default()
-    });
-    (plain_id, text)
+    Signal::derive(move || ctx.body.with(|b| super::content::inline_text_of(b, node_id)))
 }
 
-pub(super) fn save_plain_text(plain_id: Option<BodyNodeId>, new_text: String) {
+/// Remplace le contenu texte de `node_id` par `new_text` : réutilise l'unique
+/// enfant `Plain` en place s'il existe déjà (cas courant : simple frappe),
+/// sinon (nœud vide, ou enfants Plain/Span multiples laissés par un
+/// `fill_section` de l'agent, voir `server::editor::ports::fill_leaf`)
+/// reconstruit un unique enfant `Plain`. Ne jamais mettre en cache l'enfant
+/// visé au-delà d'un appel : l'agent peut avoir remplacé les enfants de
+/// `node_id` entre deux rendus.
+pub(super) fn save_plain_text(node_id: BodyNodeId, new_text: String) {
     let ctx = expect_editor_context();
-    if let Some(pid) = plain_id {
-        ctx.body.update(|b| {
+    ctx.body.update(|b| {
+        let children = b.children_of(node_id);
+        if let [pid] = children[..]
+            && b.kind_of(pid) == NodeKind::Plain
+        {
             let len = b.len_of(pid);
             b.remove_text_unchecked(pid, 0, len);
             b.insert_text_unchecked(pid, 0, &new_text);
-        });
-    }
+            return;
+        }
+        for child in children {
+            let _ = b.remove_subtree(child);
+        }
+        let plain = b.create_node(NodeSpec::Plain(new_text));
+        let _ = b.append_child_unchecked(node_id, plain);
+    });
 }
 
 #[component]
 fn EditVisa(node_id: BodyNodeId) -> impl IntoView {
     let ctx = expect_editor_context();
-    let (plain_id, text) = plain_text_signal(node_id);
+    let text = plain_text_signal(node_id);
 
     view! {
         <div class="group flex items-start gap-3 py-1 hover:bg-gray-50 rounded px-1 transition-colors">
@@ -442,7 +468,7 @@ fn EditVisa(node_id: BodyNodeId) -> impl IntoView {
             <div class="flex-1 text-sm">
                 <InlineEditableDiv
                     text=text
-                    on_save=move |s| save_plain_text(plain_id, s)
+                    on_save=move |s| save_plain_text(node_id, s)
                 />
             </div>
             <TargetButton node_id=node_id/>
@@ -457,7 +483,7 @@ fn EditVisa(node_id: BodyNodeId) -> impl IntoView {
 #[component]
 fn EditConsiderant(node_id: BodyNodeId) -> impl IntoView {
     let ctx = expect_editor_context();
-    let (plain_id, text) = plain_text_signal(node_id);
+    let text = plain_text_signal(node_id);
 
     view! {
         <div class="group flex items-start gap-3 py-1 hover:bg-gray-50 rounded px-1 transition-colors">
@@ -465,7 +491,7 @@ fn EditConsiderant(node_id: BodyNodeId) -> impl IntoView {
             <div class="flex-1 text-sm">
                 <InlineEditableDiv
                     text=text
-                    on_save=move |s| save_plain_text(plain_id, s)
+                    on_save=move |s| save_plain_text(node_id, s)
                 />
             </div>
             <TargetButton node_id=node_id/>
@@ -480,7 +506,7 @@ fn EditConsiderant(node_id: BodyNodeId) -> impl IntoView {
 #[component]
 fn EditSur(node_id: BodyNodeId) -> impl IntoView {
     let ctx = expect_editor_context();
-    let (plain_id, text) = plain_text_signal(node_id);
+    let text = plain_text_signal(node_id);
 
     view! {
         <div class="group flex items-start gap-3 py-1 hover:bg-gray-50 rounded px-1 transition-colors">
@@ -488,7 +514,7 @@ fn EditSur(node_id: BodyNodeId) -> impl IntoView {
             <div class="flex-1 text-sm">
                 <InlineEditableDiv
                     text=text
-                    on_save=move |s| save_plain_text(plain_id, s)
+                    on_save=move |s| save_plain_text(node_id, s)
                 />
             </div>
             <TargetButton node_id=node_id/>
@@ -745,20 +771,13 @@ fn EditAnnexe(node_id: BodyNodeId) -> impl IntoView {
 /// Édition inline du premier enfant `Plain` d'un nœud `Libellé*`.
 #[component]
 pub fn EditLabel(node_id: BodyNodeId) -> impl IntoView {
-    let ctx = expect_editor_context();
-    let plain_id = ctx.body.with_untracked(|b| b.first_child_of(node_id));
-
-    let text = Signal::derive(move || {
-        plain_id
-            .map(|pid| ctx.body.with(|b| b.text_of(pid)))
-            .unwrap_or_default()
-    });
+    let text = plain_text_signal(node_id);
 
     view! {
         <InlineEditableDiv
             class="flex-1 mx-4 font-semibold text-sm tracking-wide uppercase"
             text=text
-            on_save=move |s| save_plain_text(plain_id, s)
+            on_save=move |s| save_plain_text(node_id, s)
             prevent_newlines=true
         />
     }

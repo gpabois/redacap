@@ -115,7 +115,7 @@ fn build_inline_html(
 /// pour tester la vacuité réelle du contenu indépendamment de l'enveloppe
 /// `data-plain-id` posée par [`node_to_inline_html`] (qui rend `build_inline_html`
 /// toujours non-vide, même pour un `Plain` vide).
-fn inline_text_of(body: &impl BodyRead, node_id: BodyNodeId) -> String {
+pub(super) fn inline_text_of(body: &impl BodyRead, node_id: BodyNodeId) -> String {
     body.children_of(node_id)
         .into_iter()
         .map(|id| match body.kind_of(id) {
@@ -370,7 +370,7 @@ pub fn ContentSubtree(node_id: BodyNodeId) -> impl IntoView {
     let ctx = expect_editor_context();
 
     view! {
-        <div class="content-subtree space-y-1">
+        <div class="content-subtree space-y-1 text-justify">
             <For
                 each=move || ctx.body.with(|b| {
                     b.children_of(node_id).into_iter()

@@ -46,30 +46,43 @@ pub enum ServerMessage {
     AgentDone,
     /// La boucle agentique a échoué (erreur de modèle, outil, etc.).
     AgentError { message: String },
-    /// L'agent pose une question ouverte (outil `ask_user`).
-    InteractionAsk { question: String },
+    /// L'agent pose une question ouverte (outil `ask_user`). `agent_label`
+    /// identifie le frame à l'origine de la question (`"Superviseur"` ou le
+    /// libellé d'un expert délégué).
+    InteractionAsk { agent_label: String, question: String },
     /// L'agent demande une confirmation oui/non avant une action irréversible.
-    InteractionConfirm { message: String },
+    InteractionConfirm { agent_label: String, message: String },
     /// L'agent présente un formulaire structuré (outil `ask_questions`).
     InteractionQuestions {
+        agent_label: String,
         prompt: String,
         questions: Vec<InteractionQuestionWire>,
+    },
+    /// L'agent demande à l'utilisateur de fournir un document externe, upload
+    /// (outil `request_document`). La réponse attendue via
+    /// [`ClientMessage::InteractionAnswer`] est un [`DocumentUploadWire`].
+    InteractionRequestDocument {
+        agent_label: String,
+        prompt: String,
+        accepted_mime_types: Vec<String>,
     },
     /// Liste des utilisateurs actuellement connectés à la salle, envoyée à
     /// la connexion puis à chaque changement (arrivée/départ d'un pair).
     Presence { users: Vec<PresenceUser> },
     /// Fragment de réflexion (chaîne de raisonnement) du modèle pour le tour
-    /// en cours. Absent des fournisseurs qui n'exposent pas de raisonnement.
-    AgentReasoningDelta { delta: String },
+    /// en cours, émis par le frame `agent_label`. Absent des fournisseurs
+    /// qui n'exposent pas de raisonnement.
+    AgentReasoningDelta { agent_label: String, delta: String },
     /// Fragment de réponse texte (narration ou réponse finale) du modèle
-    /// pour le tour en cours.
-    AgentContentDelta { delta: String },
+    /// pour le tour en cours, émis par le frame `agent_label`.
+    AgentContentDelta { agent_label: String, delta: String },
     /// Le tour courant du modèle est terminé : les fragments de réflexion
     /// accumulés depuis le dernier `AgentStepFinished` peuvent être figés.
     AgentStepFinished,
     /// L'agent démarre l'appel de l'outil `name`, avant confirmation
-    /// éventuelle et exécution.
+    /// éventuelle et exécution, pour le frame `agent_label`.
     AgentToolCallStarted {
+        agent_label: String,
         id: String,
         name: String,
         arguments: serde_json::Value,
@@ -78,6 +91,7 @@ pub enum ServerMessage {
     /// un succès (`output` porte alors la sortie de l'outil) d'un échec
     /// (`output` porte alors le message d'erreur).
     AgentToolCallFinished {
+        agent_label: String,
         id: String,
         ok: bool,
         output: String,
@@ -112,4 +126,14 @@ pub struct InteractionAnswerWire {
     pub value: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unsatisfactory_reason: Option<String>,
+}
+
+/// Réponse à une [`ServerMessage::InteractionRequestDocument`], transmise
+/// comme `value` d'un [`ClientMessage::InteractionAnswer`] (voir
+/// `server::protocol::DocumentUploadWire`, son pendant côté serveur).
+#[derive(Debug, Serialize)]
+pub struct DocumentUploadWire {
+    pub file_name: String,
+    pub mime_type: String,
+    pub content_base64: String,
 }

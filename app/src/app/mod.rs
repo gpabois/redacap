@@ -10,9 +10,9 @@ use leptos_router::{
 
 use crate::pages::account::PageAccount;
 use crate::pages::admin::{
-    PageAdminAgentTools, PageAdminAiModels, PageAdminAudit, PageAdminAuthorities,
-    PageAdminDashboard, PageAdminDomains, PageAdminGroups, PageAdminIntegrations,
-    PageAdminIntentions, PageAdminOidc, PageAdminUsers,
+    PageAdminAgentProfiles, PageAdminAgentTools, PageAdminAiModels, PageAdminAudit,
+    PageAdminAuthorities, PageAdminDashboard, PageAdminDomains, PageAdminGroups,
+    PageAdminIntegrations, PageAdminIntentions, PageAdminOidc, PageAdminUsers,
 };
 use crate::pages::bootstrap::PageBootstrap;
 use crate::pages::dashboard::PageDashboard;
@@ -30,6 +30,7 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
             <head>
                 <meta charset="utf-8"/>
                 <meta name="viewport" content="width=device-width, initial-scale=1"/>
+                <link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
                 // Posé en premier et exécuté de façon synchrone, avant le
                 // chargement du WASM : applique la classe `dark` sur `<html>`
                 // d'après la préférence persistée pour éviter un flash du
@@ -70,6 +71,7 @@ pub fn App() -> impl IntoView {
                     <Route path=path!("/admin/domains") view=PageAdminDomains/>
                     <Route path=path!("/admin/intentions") view=PageAdminIntentions/>
                     <Route path=path!("/admin/agent-tools") view=PageAdminAgentTools/>
+                    <Route path=path!("/admin/agent-profiles") view=PageAdminAgentProfiles/>
                     <Route path=path!("/admin/ai-models") view=PageAdminAiModels/>
                     <Route path=path!("/admin/oidc") view=PageAdminOidc/>
                     <Route path=path!("/admin/integrations") view=PageAdminIntegrations/>
@@ -167,6 +169,8 @@ fn PageEditorProjet() -> impl IntoView {
                             on_agent_toggle_auto_accept=Callback::new(move |enabled| room.set_auto_accept(enabled))
                             on_agent_clear_history=Callback::new(move |()| room.clear_history())
                             on_agent_target=Callback::new(move |node_id| room.set_selection(node_id))
+                            agent_document_request=room.document_request
+                            on_agent_document_response=Callback::new(move |upload| room.respond_document(upload))
                             user_initial=user_initial.clone()
                             is_admin=is_admin
                             connected_users=connected_users

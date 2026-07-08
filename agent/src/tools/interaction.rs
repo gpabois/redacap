@@ -1,9 +1,11 @@
-//! Outils `ask_user` et `request_document`, qui délèguent à l'application
-//! hôte via [`UserInteractionPort`] et [`DocumentRequestPort`] : ce crate ne
-//! sait rien de la session ou de l'UI, seulement comment formuler la
-//! demande et interpréter la réponse.
-
-use std::sync::Arc;
+//! Outils `ask_user`, `ask_questions` et `request_document` : contrairement
+//! aux autres outils, ils ne s'exécutent jamais eux-mêmes (leur [`Tool::call`]
+//! n'est jamais invoqué). Ils se contentent de valider leurs arguments et de
+//! les traduire en [`PauseRequest`] via [`Tool::pause_request`] : c'est
+//! l'orchestrateur (voir `crate::orchestration`) qui suspend l'exécution du
+//! frame courant et persiste la demande, plutôt que d'attendre la réponse de
+//! l'utilisateur en bloquant — indispensable pour qu'une pause survive à une
+//! déconnexion ou un redémarrage du serveur.
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -11,8 +13,8 @@ use serde_json::Value;
 
 use crate::{
     error::ToolError,
-    ports::{DocumentRequestPort, Question, UserInteractionPort},
-    tool::{Tool, ToolOutput},
+    ports::Question,
+    tool::{PauseRequest, Tool, ToolOutput},
 };
 
 #[derive(Deserialize)]
@@ -22,16 +24,7 @@ struct AskUserArguments {
 
 /// Outil `ask_user` : pose une question ou demande une confirmation à
 /// l'inspecteur.
-pub struct AskUserTool {
-    user_interaction: Arc<dyn UserInteractionPort>,
-}
-
-impl AskUserTool {
-    #[must_use]
-    pub fn new(user_interaction: Arc<dyn UserInteractionPort>) -> Self {
-        Self { user_interaction }
-    }
-}
+pub struct AskUserTool;
 
 #[async_trait]
 impl Tool for AskUserTool {
@@ -53,12 +46,19 @@ impl Tool for AskUserTool {
         })
     }
 
-    async fn call(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
-        let args: AskUserArguments = serde_json::from_value(arguments)
+    fn pause_request(&self, arguments: &Value) -> Result<Option<PauseRequest>, ToolError> {
+        let args: AskUserArguments = serde_json::from_value(arguments.clone())
             .map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
+        Ok(Some(PauseRequest::Ask {
+            question: args.question,
+        }))
+    }
 
-        let answer = self.user_interaction.ask(&args.question).await?;
-        Ok(ToolOutput::new(answer))
+    async fn call(&self, _arguments: Value) -> Result<ToolOutput, ToolError> {
+        unreachable!(
+            "ask_user est reconnu via Tool::pause_request : l'orchestrateur ne doit jamais \
+             appeler call() dessus"
+        )
     }
 }
 
@@ -79,16 +79,7 @@ struct AskQuestionsArguments {
 /// Outil `ask_questions` : présente un formulaire structuré à l'utilisateur
 /// et renvoie ses réponses, en indiquant éventuellement lesquelles ne sont pas
 /// satisfaisantes.
-pub struct AskQuestionsTool {
-    user_interaction: Arc<dyn UserInteractionPort>,
-}
-
-impl AskQuestionsTool {
-    #[must_use]
-    pub fn new(user_interaction: Arc<dyn UserInteractionPort>) -> Self {
-        Self { user_interaction }
-    }
-}
+pub struct AskQuestionsTool;
 
 #[async_trait]
 impl Tool for AskQuestionsTool {
@@ -131,8 +122,8 @@ impl Tool for AskQuestionsTool {
         })
     }
 
-    async fn call(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
-        let args: AskQuestionsArguments = serde_json::from_value(arguments)
+    fn pause_request(&self, arguments: &Value) -> Result<Option<PauseRequest>, ToolError> {
+        let args: AskQuestionsArguments = serde_json::from_value(arguments.clone())
             .map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
 
         let questions: Vec<Question> = args
@@ -145,28 +136,17 @@ impl Tool for AskQuestionsTool {
             })
             .collect();
 
-        let answers = self
-            .user_interaction
-            .ask_questions(&args.prompt, &questions)
-            .await?;
+        Ok(Some(PauseRequest::AskQuestions {
+            prompt: args.prompt,
+            questions,
+        }))
+    }
 
-        let output = serde_json::to_string(
-            &answers
-                .iter()
-                .map(|a| {
-                    serde_json::json!({
-                        "question_id": a.question_id,
-                        "value": a.value,
-                        "unsatisfactory_reason": a.unsatisfactory_reason
-                    })
-                })
-                .collect::<Vec<_>>(),
+    async fn call(&self, _arguments: Value) -> Result<ToolOutput, ToolError> {
+        unreachable!(
+            "ask_questions est reconnu via Tool::pause_request : l'orchestrateur ne doit jamais \
+             appeler call() dessus"
         )
-        .map_err(|error| {
-            ToolError::Other(format!("échec de sérialisation des réponses : {error}"))
-        })?;
-
-        Ok(ToolOutput::new(output))
     }
 }
 
@@ -179,16 +159,7 @@ struct RequestDocumentArguments {
 
 /// Outil `request_document` : demande un document externe à l'utilisateur
 /// (upload).
-pub struct RequestDocumentTool {
-    document_request: Arc<dyn DocumentRequestPort>,
-}
-
-impl RequestDocumentTool {
-    #[must_use]
-    pub fn new(document_request: Arc<dyn DocumentRequestPort>) -> Self {
-        Self { document_request }
-    }
-}
+pub struct RequestDocumentTool;
 
 #[async_trait]
 impl Tool for RequestDocumentTool {
@@ -215,17 +186,19 @@ impl Tool for RequestDocumentTool {
         })
     }
 
-    async fn call(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
-        let args: RequestDocumentArguments = serde_json::from_value(arguments)
+    fn pause_request(&self, arguments: &Value) -> Result<Option<PauseRequest>, ToolError> {
+        let args: RequestDocumentArguments = serde_json::from_value(arguments.clone())
             .map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
+        Ok(Some(PauseRequest::RequestDocument {
+            prompt: args.prompt,
+            accepted_mime_types: args.accepted_mime_types,
+        }))
+    }
 
-        let document = self
-            .document_request
-            .request_document(&args.prompt, &args.accepted_mime_types)
-            .await?;
-        let output = serde_json::to_string(&document).map_err(|error| {
-            ToolError::Other(format!("échec de sérialisation du document : {error}"))
-        })?;
-        Ok(ToolOutput::new(output))
+    async fn call(&self, _arguments: Value) -> Result<ToolOutput, ToolError> {
+        unreachable!(
+            "request_document est reconnu via Tool::pause_request : l'orchestrateur ne doit \
+             jamais appeler call() dessus"
+        )
     }
 }

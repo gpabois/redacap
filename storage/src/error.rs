@@ -19,6 +19,9 @@ pub enum StorageError {
     #[error("ressource introuvable")]
     NotFound,
 
+    #[error("modification concurrente détectée : la ressource a changé entre-temps")]
+    Conflict,
+
     #[error("un super administrateur existe déjà : l'état bootstrap est terminé")]
     AlreadyBootstrapped,
 }

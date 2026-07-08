@@ -2,8 +2,8 @@
 //! Accessible en développement à la route `/dev/agent`.
 
 use agent::{
-    AgentPanel, InteractionRequest, InteractionResponse, PanelEntry, PanelQuestion, PanelReasoning,
-    PanelToolCall, PanelToolCallStatus,
+    AgentPanel, DocumentRequest, DocumentUpload, InteractionRequest, InteractionResponse,
+    PanelEntry, PanelQuestion, PanelReasoning, PanelToolCall, PanelToolCallStatus,
 };
 use leptos::prelude::*;
 
@@ -33,6 +33,7 @@ fn messages_trace() -> Vec<PanelEntry> {
     vec![
         PanelEntry::user("Complète le considérant relatif au seuil de classement"),
         PanelEntry::Reasoning(PanelReasoning {
+            agent_label: "Expert Considérants".to_string(),
             content: "L'utilisateur vise la rubrique 2760-1. Je dois d'abord lire la \
                       structure actuelle de l'acte pour savoir où insérer le considérant, \
                       puis rechercher le seuil réglementaire applicable."
@@ -41,6 +42,7 @@ fn messages_trace() -> Vec<PanelEntry> {
         }),
         PanelEntry::ToolCall(PanelToolCall {
             id: "call_1".to_string(),
+            agent_label: "Expert Considérants".to_string(),
             name: "read_structure".to_string(),
             arguments: "{}".to_string(),
             status: PanelToolCallStatus::Done {
@@ -49,6 +51,7 @@ fn messages_trace() -> Vec<PanelEntry> {
         }),
         PanelEntry::ToolCall(PanelToolCall {
             id: "call_2".to_string(),
+            agent_label: "Expert Considérants".to_string(),
             name: "legifrance_search".to_string(),
             arguments: "{ \"query\": \"rubrique 2760-1 seuil\" }".to_string(),
             status: PanelToolCallStatus::Running,
@@ -58,6 +61,7 @@ fn messages_trace() -> Vec<PanelEntry> {
 
 fn interaction_formulaire() -> InteractionRequest {
     InteractionRequest {
+        agent_label: "Superviseur".to_string(),
         prompt: "Pour compléter les métadonnées de l'installation, \
                  veuillez renseigner les informations suivantes :"
             .to_string(),
@@ -87,6 +91,7 @@ fn interaction_formulaire() -> InteractionRequest {
 
 fn interaction_confirmation() -> InteractionRequest {
     InteractionRequest {
+        agent_label: "Expert Considérants".to_string(),
         prompt: "Avant de remplir la section « Considérants », \
                  confirmez les points suivants :"
             .to_string(),
@@ -142,9 +147,12 @@ pub fn PageDevAgentPanel() -> impl IntoView {
                 </Scenario>
             </div>
 
-            <div class="grid grid-cols-1 gap-4">
+            <div class="grid grid-cols-2 gap-4">
                 <Scenario titre="Conversation + formulaire (enchaînement)">
                     <ScenarioConversationPuisFormulaire/>
+                </Scenario>
+                <Scenario titre="Demande de document (upload)">
+                    <ScenarioDemandeDocument/>
                 </Scenario>
             </div>
         </div>
@@ -342,5 +350,49 @@ fn ScenarioConversationPuisFormulaire() -> impl IntoView {
                 interaction.set(None);
             })
         />
+    }
+}
+
+// ── Scénario 7 : demande de document (upload) ─────────────────────────────────
+
+#[component]
+fn ScenarioDemandeDocument() -> impl IntoView {
+    let messages = Signal::derive(|| {
+        vec![PanelEntry::assistant(
+            "Pour vérifier la conformité, transmettez-moi l'étude d'impact au format PDF.",
+        )]
+    });
+    let pending = Signal::derive(|| false);
+    let document_request = RwSignal::new(Some(DocumentRequest {
+        agent_label: "Superviseur".to_string(),
+        prompt: "Étude d'impact (PDF ou ODT)".to_string(),
+        accepted_mime_types: vec!["application/pdf".to_string()],
+    }));
+    let (log, set_log) = signal(String::new());
+    view! {
+        <div class="flex flex-col h-full">
+            <div class="flex-1 min-h-0">
+                <AgentPanel
+                    messages=messages
+                    pending=pending
+                    on_send=|_| {}
+                    document_request=Signal::derive(move || document_request.get())
+                    on_document_response=Callback::new(move |upload: DocumentUpload| {
+                        set_log.set(format!(
+                            "{} ({}, {} caractères base64)",
+                            upload.file_name,
+                            upload.mime_type,
+                            upload.content_base64.len()
+                        ));
+                        document_request.set(None);
+                    })
+                />
+            </div>
+            {move || (!log.get().is_empty()).then(|| view! {
+                <div class="border-t border-stone-200 px-2 py-1 text-xs text-stone-500 bg-stone-50 truncate">
+                    "Reçu : " {log.get()}
+                </div>
+            })}
+        </div>
     }
 }

@@ -32,12 +32,11 @@ pub(super) fn InlineEditableDiv(
     // Sync signal → DOM uniquement quand le div n'est pas en focus.
     Effect::new(move |_| {
         let t = text.get();
-        if !is_focused.get_untracked() {
-            if let Some(el) = div_ref.get() {
-                if el.inner_text() != t {
-                    el.set_inner_text(&t);
-                }
-            }
+        if !is_focused.get_untracked() 
+            && let Some(el) = div_ref.get() 
+            && el.inner_text() != t  
+        {
+            el.set_inner_text(&t);
         }
     });
 
@@ -258,16 +257,15 @@ pub(super) fn RichEditableDiv(
 
     // Focus programmatique via content_focus_request.
     Effect::new(move |_| {
-        if let Some((req_id, at_end)) = ctx.content_focus_request.get() {
-            if Some(req_id) == focus_node_id {
-                if let Some(el) = div_ref.get() {
-                    let _ = el.focus();
-                    if at_end {
-                        set_cursor_to_end(&el);
-                    }
-                    ctx.content_focus_request.set(None);
-                }
+        if let Some((req_id, at_end)) = ctx.content_focus_request.get() 
+            && Some(req_id) == focus_node_id 
+            && let Some(el) = div_ref.get()
+        {
+            let _ = el.focus();
+            if at_end {
+                set_cursor_to_end(&el);
             }
+            ctx.content_focus_request.set(None);
         }
     });
 
@@ -300,34 +298,24 @@ pub(super) fn RichEditableDiv(
             on:keydown=move |ev| {
                 let Some(el) = div_ref.get() else { return };
                 match ev.key().as_str() {
-                    "Enter" => {
-                        if let Some(cb) = on_enter {
-                            ev.prevent_default();
-                            on_save_key.clone()(el.inner_html());
-                            cb.run(());
-                        }
+                    "Enter" if let Some(cb) = on_enter  => {
+                        ev.prevent_default();
+                        on_save_key.clone()(el.inner_html());
+                        cb.run(());
                     }
-                    "Backspace" => {
-                        if let Some(cb) = on_backspace_start {
-                            if cursor_at_document_start(&el) {
-                                ev.prevent_default();
-                                on_save_key.clone()(el.inner_html());
-                                cb.run(());
-                            }
-                        }
+                    "Backspace" if let Some(cb) = on_backspace_start && cursor_at_document_start(&el) => {
+                        ev.prevent_default();
+                        on_save_key.clone()(el.inner_html());
+                        cb.run(());
                     }
-                    "Delete" => {
-                        if let Some(cb) = on_delete_end {
-                            if cursor_at_document_end(&el) {
-                                ev.prevent_default();
-                                on_save_key.clone()(el.inner_html());
-                                cb.run(());
-                                // Forcer la mise à jour du div (on reste en focus)
-                                let new_html = html.get_untracked();
-                                if el.inner_html() != new_html {
-                                    el.set_inner_html(&new_html);
-                                }
-                            }
+                    "Delete" if let Some(cb) = on_delete_end  && cursor_at_document_end(&el) => {
+                        ev.prevent_default();
+                        on_save_key.clone()(el.inner_html());
+                        cb.run(());
+                        // Forcer la mise à jour du div (on reste en focus)
+                        let new_html = html.get_untracked();
+                        if el.inner_html() != new_html {
+                            el.set_inner_html(&new_html);
                         }
                     }
                     _ => {}

@@ -3,6 +3,8 @@
 //! Ces types portent uniquement des données (pas de logique métier ni de dépendance
 //! à `sqlx`/`leptos`) afin de pouvoir circuler tels quels entre les trois systèmes.
 
+pub mod agent_profile;
+pub mod agent_run;
 pub mod agent_tool_scope;
 pub mod ai_model;
 pub mod audit_log;
@@ -18,6 +20,8 @@ pub mod permission;
 pub mod session;
 pub mod user;
 
+pub use agent_profile::*;
+pub use agent_run::*;
 pub use agent_tool_scope::*;
 pub use ai_model::*;
 pub use audit_log::*;

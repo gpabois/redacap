@@ -1,7 +1,10 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{error::ToolError, model::ToolDefinition};
+use crate::{error::ToolError, model::ToolDefinition, ports::Question};
 
 /// Résultat renvoyé par un outil après exécution, transmis au modèle comme
 /// contenu du message `tool` correspondant.
@@ -13,6 +16,42 @@ impl ToolOutput {
     pub fn new(content: impl Into<String>) -> Self {
         Self(content.into())
     }
+}
+
+/// Requête d'intervention humaine renvoyée par [`Tool::pause_request`] :
+/// contrairement à un outil normal, un outil qui en renvoie une (`ask_user`,
+/// `ask_questions`, `request_document`) n'est **jamais** exécuté via
+/// [`Tool::call`] — reconnu par ce hook avant tout appel, l'orchestrateur
+/// suspend l'exécution du frame courant plutôt que d'attendre une réponse en
+/// bloquant (voir `crate::orchestration`), pour que la pause puisse être
+/// persistée et reprise plus tard, y compris après un redémarrage.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum PauseRequest {
+    Ask {
+        question: String,
+    },
+    AskQuestions {
+        prompt: String,
+        questions: Vec<Question>,
+    },
+    Confirm {
+        message: String,
+    },
+    RequestDocument {
+        prompt: String,
+        accepted_mime_types: Vec<String>,
+    },
+}
+
+/// Requête de délégation à un agent expert renvoyée par
+/// [`Tool::delegate_request`] (voir `agent::tools::DelegateToExpertTool`) :
+/// comme pour [`PauseRequest`], un outil qui en renvoie une n'est jamais
+/// exécuté via [`Tool::call`] — l'orchestrateur empile un nouveau frame
+/// éphémère pour le profil désigné plutôt que d'exécuter l'outil lui-même.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DelegateRequest {
+    pub profile_id: String,
+    pub task: String,
 }
 
 /// Une capacité exposée au modèle de langage pendant la boucle agentique
@@ -28,8 +67,25 @@ pub trait Tool: Send + Sync {
     /// Si `true`, l'agent doit obtenir une confirmation explicite de
     /// l'utilisateur avant d'exécuter l'outil — réservé aux actions
     /// irréversibles (remplacement de section, métadonnées critiques...).
+    /// L'orchestrateur traduit ceci en [`PauseRequest::Confirm`] plutôt que
+    /// d'attendre une confirmation en bloquant.
     fn requires_confirmation(&self) -> bool {
         false
+    }
+
+    /// `Some` si cet appel doit suspendre l'exécution en attente d'une
+    /// réponse humaine plutôt que d'être exécuté normalement (voir
+    /// [`PauseRequest`]). Défaut neutre : la quasi-totalité des outils
+    /// n'ont rien à changer.
+    fn pause_request(&self, _arguments: &Value) -> Result<Option<PauseRequest>, ToolError> {
+        Ok(None)
+    }
+
+    /// `Some` si cet appel doit déléguer à un agent expert éphémère plutôt
+    /// que d'être exécuté normalement (voir [`DelegateRequest`]). Défaut
+    /// neutre : seul `delegate_to_expert` le redéfinit.
+    fn delegate_request(&self, _arguments: &Value) -> Result<Option<DelegateRequest>, ToolError> {
+        Ok(None)
     }
 
     async fn call(&self, arguments: Value) -> Result<ToolOutput, ToolError>;
@@ -43,10 +99,14 @@ pub trait Tool: Send + Sync {
     }
 }
 
-/// Registre des outils disponibles pour une exécution de l'agent.
-#[derive(Default)]
+/// Registre des outils disponibles pour une exécution de l'agent. Les outils
+/// sont partagés (`Arc`) plutôt que possédés (`Box`) : un frame expert
+/// éphémère n'a besoin que d'un sous-ensemble du registre complet construit
+/// une fois par connexion (voir [`Self::subset`]), sans dupliquer leur
+/// construction ni leurs éventuelles connexions réseau sous-jacentes.
+#[derive(Default, Clone)]
 pub struct ToolRegistry {
-    tools: Vec<Box<dyn Tool>>,
+    tools: Vec<Arc<dyn Tool>>,
 }
 
 impl ToolRegistry {
@@ -56,7 +116,7 @@ impl ToolRegistry {
     }
 
     pub fn register(&mut self, tool: Box<dyn Tool>) -> &mut Self {
-        self.tools.push(tool);
+        self.tools.push(Arc::from(tool));
         self
     }
 
@@ -70,7 +130,26 @@ impl ToolRegistry {
         self.tools
             .iter()
             .find(|tool| tool.name() == name)
-            .map(Box::as_ref)
+            .map(Arc::as_ref)
+    }
+
+    /// Construit un registre restreint aux outils dont le nom figure dans
+    /// `names` (voir `agent::catalog::AgentProfile::tool_names`), pour
+    /// délimiter les capacités d'un agent expert éphémère à celles définies
+    /// par son profil. Un nom sans outil correspondant est silencieusement
+    /// ignoré : mieux vaut un expert avec un outil en moins qu'un échec de
+    /// démarrage pour toute la délégation à cause d'un profil mal renseigné
+    /// dans le catalogue.
+    #[must_use]
+    pub fn subset(&self, names: &[String]) -> ToolRegistry {
+        ToolRegistry {
+            tools: self
+                .tools
+                .iter()
+                .filter(|tool| names.iter().any(|name| name == tool.name()))
+                .cloned()
+                .collect(),
+        }
     }
 }
 

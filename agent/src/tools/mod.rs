@@ -2,6 +2,8 @@
 //! l'agent IA : chaque outil est un [`crate::Tool`] indépendant, à
 //! enregistrer dans un [`crate::ToolRegistry`].
 
+mod delegate;
+mod document;
 mod georisques;
 mod intention;
 mod interaction;
@@ -9,6 +11,8 @@ mod legal_act_editor;
 mod legifrance;
 mod metadata;
 
+pub use delegate::DelegateToExpertTool;
+pub use document::ReadDocumentTool;
 pub use georisques::{GeorisquesClient, GeorisquesConfig, GeorisquesQueryTool, IcpeQueryTool};
 pub use intention::{AddIntentionTool, ListIntentionsTool, RemoveIntentionTool};
 pub use interaction::{AskQuestionsTool, AskUserTool, RequestDocumentTool};
