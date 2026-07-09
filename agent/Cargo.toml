@@ -18,6 +18,7 @@ thiserror = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true, features = ["io-util", "macros", "process", "sync"] }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"], optional = true }
 wasm-bindgen.workspace = true
+js-sys.workspace = true
 web-sys = { workspace = true, features = [
     "Event",
     "File",

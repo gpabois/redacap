@@ -31,6 +31,7 @@ use agent::{
 use base64::Engine;
 use legal_act::{Body, BodyNodeId, DirectBody, Review, YrsBody, YrsReview};
 use leptos::prelude::*;
+use shared::broadcast::{DocumentsChangedEvent, MetadataChangedEvent};
 use web_sys::wasm_bindgen::JsCast;
 use web_sys::wasm_bindgen::closure::Closure;
 use web_sys::{BinaryType, MessageEvent, WebSocket};
@@ -99,6 +100,10 @@ pub struct RoomHandle {
     pub ready: RwSignal<bool>,
     pub agent_messages: RwSignal<Vec<PanelEntry>>,
     pub agent_pending: RwSignal<bool>,
+    /// Dernière tâche envoyée à l'agent via [`Self::run_agent`] (voir
+    /// [`Self::restart_agent`]), `None` tant qu'aucune tâche n'a encore été
+    /// envoyée depuis l'ouverture de cette page.
+    last_task: RwSignal<Option<String>>,
     pub interaction: RwSignal<Option<InteractionRequest>>,
     /// Requête de document affichée par [`agent::AgentPanel`] lorsque
     /// l'agent attend un upload (outil `request_document`), pendant de
@@ -135,6 +140,26 @@ pub struct RoomHandle {
     /// `supervisor_context` en recouvrement de `agent_messages`, sans jamais
     /// le modifier.
     pub supervisor_context: RwSignal<Option<Vec<SupervisorContextEntry>>>,
+    /// Incrémenté à chaque [`ServerMessage::MetadataChanged`] reçu (écriture
+    /// ou suppression d'une métadonnée du projet par l'agent ou par un autre
+    /// utilisateur), pour que `crate::pages::project_metadata::ProjectMetadataPanel`
+    /// puisse s'en servir de clé de rechargement sans dépendre de l'égalité
+    /// de [`Self::metadata_last_change`] (qui ne changerait pas si la même
+    /// clé était réécrite avec la même valeur).
+    pub metadata_version: RwSignal<u32>,
+    /// Dernier changement de métadonnée reçu (voir [`Self::metadata_version`]),
+    /// affiché par `ProjectMetadataPanel` comme un avis ponctuel de ce qui
+    /// vient de changer et par qui.
+    pub metadata_last_change: RwSignal<Option<MetadataChangedEvent>>,
+    /// Incrémenté à chaque [`ServerMessage::DocumentsChanged`] reçu (ajout ou
+    /// suppression d'un document du projet par l'agent ou par un autre
+    /// utilisateur), pendant de [`Self::metadata_version`] pour
+    /// `crate::pages::project_documents::ProjectFilesPanel`.
+    pub files_version: RwSignal<u32>,
+    /// Dernier changement de document reçu (voir [`Self::files_version`]),
+    /// affiché par `ProjectFilesPanel` comme un avis ponctuel de ce qui vient
+    /// de changer et par qui.
+    pub files_last_change: RwSignal<Option<DocumentsChangedEvent>>,
     pending_kind: RwSignal<Option<PendingInteractionKind>>,
     socket: RwSignal<Option<WasmSend<WebSocket>>>,
 }
@@ -162,12 +187,31 @@ impl RoomHandle {
     /// Démarre la boucle agentique côté serveur avec `task`, et ajoute
     /// immédiatement le message de l'utilisateur à l'historique affiché.
     pub fn run_agent(&self, task: String) {
+        self.last_task.set(Some(task.clone()));
         self.agent_messages
             .update(|m| m.push(PanelEntry::user(task.clone())));
         self.open_reasoning.set(None);
         self.open_message.set(None);
         self.agent_pending.set(true);
         self.send(&ClientMessage::RunAgent { task });
+    }
+
+    /// Demande au serveur d'arrêter immédiatement la tâche agent en cours
+    /// (voir `server::editor::protocol::ClientMessage::StopAgent`) : sans
+    /// effet si aucune tâche n'est en cours. Ne lève pas immédiatement
+    /// `agent_pending` — c'est [`ServerMessage::AgentStopped`], renvoyé une
+    /// fois l'arrêt effectif côté serveur, qui s'en charge.
+    pub fn stop_agent(&self) {
+        self.send(&ClientMessage::StopAgent);
+    }
+
+    /// Relance la dernière tâche envoyée à l'agent (voir [`Self::last_task`]),
+    /// par exemple après un arrêt volontaire ou une erreur : sans effet si
+    /// aucune tâche n'a encore été envoyée sur cette page.
+    pub fn restart_agent(&self) {
+        if let Some(task) = self.last_task.get_untracked() {
+            self.run_agent(task);
+        }
     }
 
     /// Efface l'historique affiché et la conversation tenue côté serveur
@@ -298,6 +342,7 @@ pub fn connect_room(room_id: impl Into<String>) -> RoomHandle {
         ready: RwSignal::new(false),
         agent_messages: RwSignal::new(Vec::new()),
         agent_pending: RwSignal::new(false),
+        last_task: RwSignal::new(None),
         interaction: RwSignal::new(None),
         document_request: RwSignal::new(None),
         open_reasoning: RwSignal::new(None),
@@ -307,6 +352,10 @@ pub fn connect_room(room_id: impl Into<String>) -> RoomHandle {
         agent_sessions: RwSignal::new(Vec::new()),
         agent_session_history: RwSignal::new(None),
         supervisor_context: RwSignal::new(None),
+        metadata_version: RwSignal::new(0),
+        metadata_last_change: RwSignal::new(None),
+        files_version: RwSignal::new(0),
+        files_last_change: RwSignal::new(None),
         pending_kind: RwSignal::new(None),
         socket: RwSignal::new(None),
     };
@@ -433,7 +482,15 @@ fn handle_text_frame(handle: RoomHandle, text: &str) {
             handle.open_message.set(None);
             handle
                 .agent_messages
-                .update(|m| m.push(PanelEntry::assistant(format!("Erreur : {message}"))));
+                .update(|m| m.push(PanelEntry::error(String::new(), message)));
+            handle.agent_pending.set(false);
+        }
+        ServerMessage::AgentStopped => {
+            handle.open_reasoning.set(None);
+            handle.open_message.set(None);
+            handle
+                .agent_messages
+                .update(|m| m.push(PanelEntry::stopped("Tâche interrompue par l'utilisateur.")));
             handle.agent_pending.set(false);
         }
         ServerMessage::AgentReasoningDelta { agent_label, delta } => {
@@ -602,6 +659,14 @@ fn handle_text_frame(handle: RoomHandle, text: &str) {
         }
         ServerMessage::AgentRunInProgress => {
             handle.agent_pending.set(true);
+        }
+        ServerMessage::MetadataChanged(event) => {
+            handle.metadata_last_change.set(Some(event));
+            handle.metadata_version.update(|v| *v = v.wrapping_add(1));
+        }
+        ServerMessage::DocumentsChanged(event) => {
+            handle.files_last_change.set(Some(event));
+            handle.files_version.update(|v| *v = v.wrapping_add(1));
         }
     }
 }

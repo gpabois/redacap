@@ -155,6 +155,15 @@ pub fn PageDevAgentPanel() -> impl IntoView {
                     <ScenarioDemandeDocument/>
                 </Scenario>
             </div>
+
+            <div class="grid grid-cols-2 gap-4 mt-6">
+                <Scenario titre="Erreur et arrêt volontaire">
+                    <ScenarioErreurEtArret/>
+                </Scenario>
+                <Scenario titre="Agent en attente — arrêt/redémarrage">
+                    <ScenarioEnAttenteAvecControles/>
+                </Scenario>
+            </div>
         </div>
     }
 }
@@ -350,6 +359,72 @@ fn ScenarioConversationPuisFormulaire() -> impl IntoView {
                 interaction.set(None);
             })
         />
+    }
+}
+
+// ── Scénario 8 : erreur et arrêt volontaire ───────────────────────────────────
+
+#[component]
+fn ScenarioErreurEtArret() -> impl IntoView {
+    let messages = Signal::derive(|| {
+        vec![
+            PanelEntry::user("Rédige les visas réglementaires"),
+            PanelEntry::error(
+                "Expert Visas",
+                "le fournisseur du modèle a renvoyé une erreur 503 : service indisponible",
+            ),
+            PanelEntry::user("Recommence"),
+            PanelEntry::stopped("Tâche interrompue par l'utilisateur."),
+        ]
+    });
+    let pending = Signal::derive(|| false);
+    let (log, set_log) = signal(String::new());
+    view! {
+        <div class="flex flex-col h-full">
+            <div class="flex-1 min-h-0">
+                <AgentPanel
+                    messages=messages
+                    pending=pending
+                    on_send=|_| {}
+                    on_restart=Callback::new(move |()| set_log.set("Redémarrage demandé".to_string()))
+                />
+            </div>
+            {move || (!log.get().is_empty()).then(|| view! {
+                <div class="border-t border-stone-200 px-2 py-1 text-xs text-stone-500 bg-stone-50 truncate">
+                    {log.get()}
+                </div>
+            })}
+        </div>
+    }
+}
+
+// ── Scénario 9 : agent en attente, avec bouton d'arrêt ────────────────────────
+
+#[component]
+fn ScenarioEnAttenteAvecControles() -> impl IntoView {
+    let messages = Signal::derive(|| vec![PanelEntry::user("Rédige les visas de l'arrêté")]);
+    let pending = RwSignal::new(true);
+    let (log, set_log) = signal(String::new());
+    view! {
+        <div class="flex flex-col h-full">
+            <div class="flex-1 min-h-0">
+                <AgentPanel
+                    messages=messages
+                    pending=Signal::derive(move || pending.get())
+                    on_send=|_| {}
+                    on_stop=Callback::new(move |()| {
+                        pending.set(false);
+                        set_log.set("Arrêt demandé".to_string());
+                    })
+                    on_restart=Callback::new(move |()| set_log.set("Redémarrage demandé".to_string()))
+                />
+            </div>
+            {move || (!log.get().is_empty()).then(|| view! {
+                <div class="border-t border-stone-200 px-2 py-1 text-xs text-stone-500 bg-stone-50 truncate">
+                    {log.get()}
+                </div>
+            })}
+        </div>
     }
 }
 

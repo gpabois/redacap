@@ -12,7 +12,7 @@ mod legifrance;
 mod metadata;
 
 pub use delegate::{DelegateToExpertTool, SpawnExpertTool};
-pub use document::ReadDocumentTool;
+pub use document::{FetchDocumentByUrlTool, ReadDocumentTool, SearchDocumentsTool};
 pub use georisques::{GeorisquesClient, GeorisquesConfig, GeorisquesQueryTool, IcpeQueryTool};
 pub use intention::{AddIntentionTool, ListIntentionsTool, RemoveIntentionTool};
 pub use interaction::{AskQuestionsTool, AskUserTool, RequestDocumentTool};
@@ -23,7 +23,7 @@ pub use legal_act_editor::{
 pub use legifrance::{
     LegifranceClient, LegifranceConfig, LegifranceFetchTool, LegifranceSearchTool,
 };
-pub use metadata::{ReadMetadataTool, WriteMetadataTool};
+pub use metadata::{ReadMetadataTool, SearchMetadataTool, WriteMetadataTool};
 
 /// Catalogue des outils dont la disponibilité est configurable par domaine
 /// (voir `storage::agent_tool_scope`) : des outils d'accès à des API
@@ -54,7 +54,10 @@ pub const AGENT_TOOL_CATALOG: &[(&str, &str)] = &[
     ("validate_structure", "Valider la structure de l'acte"),
     ("read_metadata", "Lire les métadonnées de l'acte"),
     ("write_metadata", "Modifier les métadonnées de l'acte"),
+    ("search_metadata", "Rechercher parmi les métadonnées de l'acte"),
     ("read_document", "Lire un document fourni par l'utilisateur"),
+    ("fetch_document_by_url", "Récupérer un document par URL"),
+    ("search_documents", "Rechercher parmi les documents fournis"),
     ("request_document", "Demander un document à l'utilisateur"),
     ("ask_user", "Poser une question à l'utilisateur"),
     ("ask_questions", "Poser plusieurs questions à l'utilisateur"),

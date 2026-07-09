@@ -27,6 +27,13 @@ pub struct AgentProfile {
     /// (voir [`crate::tool::ToolRegistry::subset`]).
     pub tool_names: Vec<String>,
     pub max_steps: u32,
+    /// Identifiant opaque (résolu par l'application hôte, voir
+    /// [`crate::orchestration::Orchestrator::new`]) du modèle de langage
+    /// dédié à cet expert. `None` fait exécuter cet expert par le modèle par
+    /// défaut de l'Orchestrateur, comme avant l'introduction de ce champ —
+    /// utile pour confier certaines tâches à un modèle plus adapté (plus
+    /// rigoureux, plus rapide, moins coûteux...) que le modèle par défaut.
+    pub model_id: Option<String>,
 }
 
 /// Point d'intégration vers le catalogue de profils d'experts disponibles.

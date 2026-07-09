@@ -20,6 +20,7 @@ fn from_row(row: PgRow) -> Result<AgentProfile, StorageError> {
         system_prompt: row.try_get("system_prompt")?,
         tool_names: row.try_get("tool_names")?,
         max_steps: row.try_get("max_steps")?,
+        ai_model_id: id::column_opt(&row, "ai_model_id")?,
         enabled: row.try_get("enabled")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
@@ -33,8 +34,8 @@ pub async fn create_agent_profile(
 ) -> Result<AgentProfile, StorageError> {
     let new_id = shared::id::generate_id();
     let row = sqlx::query(
-        "INSERT INTO agent_profiles (id, name, display_name, system_prompt, tool_names, max_steps) \
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
+        "INSERT INTO agent_profiles (id, name, display_name, system_prompt, tool_names, max_steps, ai_model_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *",
     )
     .bind(id::encode(&new_id))
     .bind(args.name)
@@ -42,6 +43,7 @@ pub async fn create_agent_profile(
     .bind(args.system_prompt)
     .bind(args.tool_names)
     .bind(args.max_steps)
+    .bind(args.ai_model_id.as_ref().map(id::encode))
     .fetch_one(pool)
     .await?;
     from_row(row)
@@ -118,6 +120,10 @@ pub async fn update_agent_profile(
     }
     if let Some(max_steps) = changeset.max_steps {
         set.push("max_steps = ").push_bind_unseparated(max_steps);
+    }
+    if let Some(ai_model_id) = changeset.ai_model_id {
+        set.push("ai_model_id = ")
+            .push_bind_unseparated(ai_model_id.map(|id| id.as_bytes().to_vec()));
     }
     if let Some(enabled) = changeset.enabled {
         set.push("enabled = ").push_bind_unseparated(enabled);

@@ -211,7 +211,12 @@ fn DomainsPanel() -> impl IntoView {
                 <Input label="Nom" value=name on_input=move |v| set_name.set(v)/>
                 <Textarea
                     label="Contexte pour l'agent IA"
-                    hint="Texte ajouté au prompt système de l'agent pour tout projet de ce domaine."
+                    hint="Texte ajouté au prompt système de l'agent pour tout projet de ce domaine \
+                          (visible par le Superviseur et par chaque expert délégué). Pensez à y \
+                          inclure la liste des clés de métadonnées attendues pour ce domaine (ex. \
+                          « installation_nom », « rubriques_icpe », « emissaires »), pour que tous \
+                          les agents utilisent les mêmes clés plutôt que d'en inventer de \
+                          nouvelles."
                     value=agent_context
                     on_input=move |v| set_agent_context.set(v)
                 />

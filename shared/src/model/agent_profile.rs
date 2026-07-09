@@ -21,6 +21,13 @@ pub struct AgentProfile {
     /// `agent::tool::ToolRegistry::subset`).
     pub tool_names: Vec<String>,
     pub max_steps: i32,
+    /// Modèle IA (voir [`crate::model::AiModel`]) utilisé pour exécuter cet
+    /// expert, à la place du modèle actif par défaut — permet de tirer parti
+    /// des forces propres à chaque modèle (ex: un modèle plus rigoureux pour
+    /// la vérification de structure, un modèle plus rapide pour un résumé).
+    /// `None` conserve le comportement par défaut : le modèle actif de
+    /// `/admin/ai-models`.
+    pub ai_model_id: Option<ID>,
     pub enabled: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -34,6 +41,7 @@ pub struct CreateAgentProfile {
     pub system_prompt: String,
     pub tool_names: Vec<String>,
     pub max_steps: i32,
+    pub ai_model_id: Option<ID>,
 }
 
 /// Attributs modifiables d'un profil d'agent expert existant.
@@ -52,6 +60,10 @@ pub struct AgentProfileChangeset {
     pub tool_names: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_steps: Option<i32>,
+    /// `Some(None)` revient au modèle actif par défaut ; `Some(Some(id))`
+    /// fixe le modèle dédié à cet expert.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_model_id: Option<Option<ID>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
 }

@@ -40,6 +40,11 @@ pub struct DocumentRef {
     pub id: String,
     pub file_name: String,
     pub mime_type: String,
+    /// Libellé sémantique du document (ex. « rapport d'inspection ICPE du
+    /// 12/03/2024 »), distinct de `file_name` : permet de le retrouver par
+    /// ce qu'il représente plutôt que par le nom de fichier brut, souvent
+    /// opaque (`scan003.pdf`). Chaîne vide si aucun libellé n'a été fourni.
+    pub label: String,
 }
 
 /// Contenu brut d'un document précédemment fourni via `request_document`,
@@ -56,15 +61,51 @@ pub struct DocumentContent {
 #[async_trait]
 pub trait DocumentContentPort: Send + Sync {
     async fn fetch_content(&self, document_id: &str) -> Result<DocumentContent, ToolError>;
+
+    /// Liste les documents actuellement disponibles pour le projet (fournis
+    /// via le panneau « Fichiers » ou au fil d'une conversation via
+    /// `request_document`), pour l'outil `search_documents`.
+    async fn list_documents(&self) -> Result<Vec<DocumentRef>, ToolError>;
+}
+
+/// Une métadonnée contextuelle de l'acte en cours d'édition, telle que
+/// renvoyée par [`MetadataPort::list`] pour l'outil `search_metadata`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MetadataEntry {
+    pub key: String,
+    pub value: Value,
 }
 
 /// Accès aux métadonnées contextuelles de l'acte en cours d'édition
 /// (installation, rubriques ICPE, émissaires...), pour les outils
-/// `read_metadata` et `write_metadata`.
+/// `read_metadata`, `write_metadata` et `search_metadata`.
 #[async_trait]
 pub trait MetadataPort: Send + Sync {
     async fn read(&self, key: &str) -> Result<Option<Value>, ToolError>;
     async fn write(&self, key: &str, value: Value) -> Result<(), ToolError>;
+
+    /// Liste l'ensemble des métadonnées actuellement renseignées, pour
+    /// l'outil `search_metadata`.
+    async fn list(&self) -> Result<Vec<MetadataEntry>, ToolError>;
+}
+
+/// Instantané, en texte libre lisible par le modèle, de l'état courant du
+/// projet (contexte du domaine, métadonnées déjà renseignées, documents déjà
+/// fournis...), fourni à chaque agent expert délégué au moment de sa
+/// création (voir `crate::orchestration::Orchestrator::resolve_delegate_target`).
+/// Sans cet instantané, un expert délégué ne voit ni le contexte du domaine
+/// ni ce que d'autres agents ont déjà écrit dans la même tâche (métadonnées,
+/// documents) : il ne peut le découvrir qu'en appelant lui-même
+/// `search_metadata`/`search_documents`, ce qu'il ne fait pas toujours,
+/// menant à des clés de métadonnées ou des références de documents
+/// dupliquées d'un agent à l'autre.
+#[async_trait]
+pub trait ContextSnapshotPort: Send + Sync {
+    /// Chaîne vide si rien à montrer (aucun contexte de domaine, aucune
+    /// métadonnée, aucun document). Une erreur ne doit jamais interrompre une
+    /// délégation : l'appelant la traite comme un instantané vide plutôt que
+    /// de faire échouer toute l'orchestration pour un contexte manquant.
+    async fn snapshot(&self) -> Result<String, ToolError>;
 }
 
 /// Rapport produit par `validate_structure`.

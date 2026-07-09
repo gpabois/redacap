@@ -89,6 +89,14 @@ pub fn LegalActEditor(
     /// conversation avec l'agent (voir [`AgentPanel`]'s `on_clear_history`).
     #[prop(optional)]
     on_agent_clear_history: Option<Callback<()>>,
+    /// Appelé lorsque l'utilisateur demande l'arrêt immédiat de la tâche
+    /// agent en cours (voir [`AgentPanel`]'s `on_stop`).
+    #[prop(optional)]
+    on_agent_stop: Option<Callback<()>>,
+    /// Appelé lorsque l'utilisateur demande de relancer la dernière tâche
+    /// envoyée à l'agent (voir [`AgentPanel`]'s `on_restart`).
+    #[prop(optional)]
+    on_agent_restart: Option<Callback<()>>,
     /// Sélecteur de document à afficher (voir [`AgentPanel`]'s `document_request`).
     #[prop(optional, into)]
     agent_document_request: Option<Signal<Option<DocumentRequest>>>,
@@ -173,6 +181,8 @@ pub fn LegalActEditor(
     let on_agent_toggle_auto_accept =
         on_agent_toggle_auto_accept.unwrap_or_else(|| Callback::new(|_| {}));
     let on_agent_clear_history = on_agent_clear_history.unwrap_or_else(|| Callback::new(|_| {}));
+    let on_agent_stop = on_agent_stop.unwrap_or_else(|| Callback::new(|_| {}));
+    let on_agent_restart = on_agent_restart.unwrap_or_else(|| Callback::new(|_| {}));
     let on_agent_document_response =
         on_agent_document_response.unwrap_or_else(|| Callback::new(|_| {}));
     let agent_sessions = agent_sessions.unwrap_or_else(|| Signal::derive(Vec::new));
@@ -257,6 +267,8 @@ pub fn LegalActEditor(
                                                 auto_accept=agent_auto_accept
                                                 on_toggle_auto_accept=on_agent_toggle_auto_accept
                                                 on_clear_history=on_agent_clear_history
+                                                on_stop=on_agent_stop
+                                                on_restart=on_agent_restart
                                                 document_request=agent_document_request
                                                 on_document_response=on_agent_document_response
                                                 sessions=agent_sessions

@@ -37,13 +37,15 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
-use agent::ports::{DocumentContentPort, LegalActEditorPort};
+use agent::ports::LegalActEditorPort;
 use agent::tools::{
-    AddIntentionTool, AskQuestionsTool, AskUserTool, DelegateToExpertTool, FillSectionTool,
-    GenerateNumberingTool, GeorisquesClient, GeorisquesConfig, GeorisquesQueryTool, IcpeQueryTool,
-    InsertNodeTool, LegifranceClient, LegifranceConfig, LegifranceFetchTool, LegifranceSearchTool,
-    ListIntentionsTool, ReadDocumentTool, ReadStructureTool, ReadTitleTool, RemoveIntentionTool,
-    RemoveNodeTool, RequestDocumentTool, SetTitleTool, SpawnExpertTool, ValidateStructureTool,
+    AddIntentionTool, AskQuestionsTool, AskUserTool, DelegateToExpertTool, FetchDocumentByUrlTool,
+    FillSectionTool, GenerateNumberingTool, GeorisquesClient, GeorisquesConfig,
+    GeorisquesQueryTool, IcpeQueryTool, InsertNodeTool, LegifranceClient, LegifranceConfig,
+    LegifranceFetchTool, LegifranceSearchTool, ListIntentionsTool, ReadDocumentTool,
+    ReadMetadataTool, ReadStructureTool, ReadTitleTool, RemoveIntentionTool, RemoveNodeTool,
+    RequestDocumentTool, SearchDocumentsTool, SearchMetadataTool, SetTitleTool, SpawnExpertTool,
+    ValidateStructureTool, WriteMetadataTool,
 };
 use agent::{
     AgentCatalog, AgentFrame, AgentObserver, ChatMessage, LanguageModel, OpenAiCompatibleModel,
@@ -58,12 +60,16 @@ use axum_extra::extract::PrivateCookieJar;
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use legal_act::BodyNodeId;
+use shared::broadcast::{DocumentChangeKind, DocumentsChangedEvent};
 use shared::id::ID;
 use tokio::sync::mpsc;
 use yrs::updates::decoder::Decode;
 use yrs::{ReadTxn, StateVector, Transact, Update};
 
-use super::ports::{StorageAgentCatalog, WsIntentions, WsLegalActEditor, WsUserInteraction};
+use super::ports::{
+    StorageAgentCatalog, WsContextSnapshot, WsDocuments, WsIntentions, WsLegalActEditor,
+    WsMetadata, WsUserInteraction,
+};
 use super::presence::{color_for_id, display_initial};
 use super::protocol::{
     AgentSessionEntryWire, AgentSessionWire, ClientMessage, DocumentUploadWire,
@@ -77,35 +83,56 @@ use crate::state::{AppState, SessionKey};
 const SUPERVISOR_SYSTEM_PROMPT: &str = "Tu es le superviseur d'une équipe d'agents experts qui \
     rédigent ensemble un arrêté préfectoral ICPE. Tu ne rédiges jamais toi-même le contenu de \
     l'acte : tu comprends la demande de l'inspecteur, tu consultes `read_structure`/`read_title` \
-    pour connaître l'état actuel de l'acte, puis tu délègues chaque sous-tâche de rédaction à \
-    l'expert approprié du catalogue via `delegate_to_expert`, en lui donnant une description \
-    autonome et précise de ce qu'il doit faire (il ne voit pas cette conversation). Un expert \
-    peut lui-même poser une question à l'inspecteur si une information lui manque : dans ce cas, \
-    attends simplement sa réponse avant de reprendre. Pose toi-même une question à l'inspecteur \
-    (`ask_user`/`ask_questions`) uniquement pour clarifier la demande globale ou trancher entre \
-    plusieurs experts possibles, jamais pour une question de détail rédactionnel qui relève d'un \
-    expert. Les intentions rédactionnelles du projet (ex. « mise en demeure », « sanction \
+    pour connaître l'état actuel de l'acte, puis tu découpes la demande en sous-tâches précises \
+    que tu délègues à l'expert approprié du catalogue via `delegate_to_expert`, en lui donnant une \
+    description autonome et précise de ce qu'il doit faire (il ne voit pas cette conversation). \
+    \n\n\
+    Avant de commencer, relis toujours les métadonnées du projet avec `read_metadata` (clé \
+    `todo_superviseur`) : si une todo-list y figure déjà avec une ou plusieurs sous-tâches encore \
+    à `a_faire` (reprise après une tâche précédente interrompue ou une nouvelle demande qui \
+    complète la précédente), poursuis les délégations à partir de cet état existant plutôt que de \
+    tout redécomposer depuis zéro — n'ajoute que les sous-tâches réellement nouvelles à la liste. \
+    Dès qu'une demande comporte plusieurs sous-tâches et qu'aucune todo-list exploitable n'existe \
+    encore, tiens-en à jour une dans les métadonnées du projet (même clé `todo_superviseur`, \
+    valeur : liste d'objets `{ tache, statut }`, `statut` valant `a_faire` ou `fait`) : écris-la \
+    avec `write_metadata` juste après avoir décomposé la demande, avant la première délégation. \
+    Après chaque réponse d'un expert délégué, relis-la avec `read_metadata` (même clé), fais \
+    passer la ou les sous-tâches accomplies à `fait`, puis réécris la liste complète avec \
+    `write_metadata` — jamais une sous-tâche oubliée ou laissée à `a_faire` sans délégation prévue \
+    pour elle. Pour une demande ne comportant qu'une seule sous-tâche et sans todo-list existante, \
+    la todo-list est facultative. \
+    \n\n\
+    Un expert peut lui-même poser une question à l'inspecteur si une information lui manque : dans \
+    ce cas, attends simplement sa réponse avant de reprendre. Pose toi-même une question à \
+    l'inspecteur (`ask_user`/`ask_questions`) uniquement pour clarifier la demande globale ou \
+    trancher entre plusieurs experts possibles, jamais pour une question de détail rédactionnel qui \
+    relève d'un expert. Les intentions rédactionnelles du projet (ex. « mise en demeure », « sanction \
     administrative ») s'ajoutent ou se retirent uniquement sur demande explicite de l'inspecteur, \
     avec `add_intention`/`remove_intention` : appelle d'abord `list_intentions` pour connaître les \
     intentions disponibles pour le domaine du projet et leur identifiant, n'en invente jamais un. \
-    Une fois toutes les délégations nécessaires terminées, résume en une phrase ce qui a été fait.";
+    \n\n\
+    Avant de conclure, si une todo-list a été ouverte, relis-la avec `read_metadata` (clé \
+    `todo_superviseur`) : tant qu'une sous-tâche y figure encore à `a_faire`, poursuis les \
+    délégations nécessaires plutôt que de t'arrêter. Une fois toutes les délégations nécessaires \
+    terminées et la todo-list entièrement à `fait` (ou en l'absence de todo-list), résume en une \
+    phrase ce qui a été fait.";
 
 /// Outils directement accessibles au Superviseur (voir
 /// [`SUPERVISOR_SYSTEM_PROMPT`]) : lecture/orientation, interaction, gestion
 /// des intentions et délégation — jamais les outils de rédaction eux-mêmes
 /// (`fill_section`, `insert_node`...) ni les API externes, réservés aux
-/// profils d'experts du catalogue (voir `storage::agent_profile`).
+/// profils d'experts du catalogue (voir `storage::agent_profile`). `write_metadata`
+/// n'y figure que pour tenir la todo-list de suivi (clé `todo_superviseur`,
+/// réservée au Superviseur) : il ne l'utilise jamais pour écrire une donnée
+/// métier, qui reste du ressort des profils d'experts délégués.
 const SUPERVISOR_TOOL_NAMES: &[&str] = &[
+    "read_metadata",
+    "write_metadata",
     "read_structure",
     "read_title",
-    "validate_structure",
-    "read_document",
     "list_intentions",
     "add_intention",
     "remove_intention",
-    "ask_user",
-    "ask_questions",
-    "request_document",
     "delegate_to_expert",
 ];
 
@@ -383,16 +410,12 @@ async fn handle_socket(
         selection.clone(),
         author_id,
     ));
-    // Une seule instance concrète, utilisée à la fois comme port de lecture
-    // de document et comme observateur de l'orchestration : les deux rôles
-    // relaient à tous les pairs de la salle (voir `WsUserInteraction` dans
-    // `super::ports`, et `EditorRoom::agent_events`).
-    let ws_interaction = Arc::new(WsUserInteraction::new(
+    // Relaie les réflexions et appels d'outils de l'orchestration à tous les
+    // pairs de la salle (voir `WsUserInteraction` dans `super::ports`, et
+    // `EditorRoom::agent_events`).
+    let agent_observer: Arc<dyn AgentObserver> = Arc::new(WsUserInteraction::new(
         room.agent_events.clone(),
-        state.store.clone(),
     ));
-    let document_content: Arc<dyn DocumentContentPort> = ws_interaction.clone();
-    let agent_observer: Arc<dyn AgentObserver> = ws_interaction;
     // Propre à cette connexion : voir la note sur son pendant, `selection`,
     // ci-dessus. Une orchestration reprise depuis une autre connexion après
     // une déconnexion repart avec `auto_accept = false`, ce qui est sans
@@ -439,8 +462,8 @@ async fn handle_socket(
                     if !already_active {
                         spawn_agent_run(
                             state.clone(),
+                            room.clone(),
                             editor.clone(),
-                            document_content.clone(),
                             agent_observer.clone(),
                             room.agent_events.clone(),
                             auto_accept.clone(),
@@ -461,8 +484,8 @@ async fn handle_socket(
                     if paused {
                         spawn_agent_run(
                             state.clone(),
+                            room.clone(),
                             editor.clone(),
-                            document_content.clone(),
                             agent_observer.clone(),
                             room.agent_events.clone(),
                             auto_accept.clone(),
@@ -521,6 +544,28 @@ async fn handle_socket(
                         let _ = out_tx.send(message);
                     }
                 }
+                Ok(ClientMessage::StopAgent) => {
+                    if let Ok(Some(run)) =
+                        storage::agent_run::get_active_run_for_room(&state.store, &room_id).await
+                    {
+                        if let Some(handle) = room.take_agent_task() {
+                            handle.abort();
+                        }
+                        // Sans effet (et sans diffusion) si le run est passé
+                        // entretemps à `done`/`failed` par la tâche elle-même
+                        // (`stop_run` échoue alors silencieusement, voir sa
+                        // documentation) : le message terminal légitime a
+                        // déjà été diffusé par cette tâche, un `AgentStopped`
+                        // ferait ici plus de mal que de bien.
+                        if storage::agent_run::stop_run(&state.store, &run.id, run.version)
+                            .await
+                            .is_ok()
+                            && let Ok(text) = serde_json::to_string(&ServerMessage::AgentStopped)
+                        {
+                            let _ = room.agent_events.send(text);
+                        }
+                    }
+                }
                 Err(_) => {}
             },
             Message::Close(_) => break,
@@ -576,9 +621,36 @@ async fn apply_and_broadcast_review(room: &Arc<EditorRoom>, author_id: &ID, byte
         .await;
 }
 
+/// Construit un [`LanguageModel`] prêt à l'emploi à partir d'un
+/// [`shared::model::AiModel`] enregistré, en déchiffrant sa clé API avec
+/// `AppState::secret_encryption_key` — partagé par [`build_active_language_model`]
+/// (modèle par défaut) et [`build_agent_profile_models`] (modèles dédiés à
+/// certains profils d'experts, voir `/admin/agent-profiles`).
+fn build_language_model(
+    ai_model: shared::model::AiModel,
+    secret_key: &Option<Vec<u8>>,
+) -> Result<Arc<dyn LanguageModel>, String> {
+    let key = secret_key.as_ref().ok_or_else(|| {
+        "SECRET_ENCRYPTION_KEY absente : impossible de déchiffrer la clé API du modèle IA"
+            .to_string()
+    })?;
+    let api_key = shared::crypto::decrypt(key, &ai_model.api_key_encrypted)
+        .map_err(|_| "échec du déchiffrement de la clé API du modèle IA".to_string())?;
+
+    Ok(Arc::new(OpenAiCompatibleModel::new(
+        OpenAiCompatibleModelConfig {
+            base_url: ai_model.base_url,
+            api_key,
+            model: ai_model.model,
+        },
+    )))
+}
+
 /// Résout le modèle IA actif (voir `/admin/ai-models`,
 /// `storage::ai_model::get_active_ai_model`) en un [`LanguageModel`] prêt à
-/// l'emploi, en déchiffrant sa clé API avec `AppState::secret_encryption_key`.
+/// l'emploi : le modèle par défaut de l'Orchestrateur, utilisé par le
+/// Superviseur et tout expert dont le profil ne dédie pas de modèle
+/// spécifique (voir [`build_agent_profile_models`]).
 ///
 /// Échoue avec un message destiné à l'utilisateur si aucun modèle n'est actif
 /// ou si sa clé API ne peut pas être déchiffrée : contrairement au contexte de
@@ -586,7 +658,7 @@ async fn apply_and_broadcast_review(room: &Arc<EditorRoom>, author_id: &ID, byte
 /// l'orchestration.
 async fn build_active_language_model(
     pool: &storage::Pool,
-    secret_key: Option<Vec<u8>>,
+    secret_key: &Option<Vec<u8>>,
 ) -> Result<(Arc<dyn LanguageModel>, String), String> {
     let ai_model = storage::ai_model::get_active_ai_model(pool)
         .await
@@ -595,20 +667,41 @@ async fn build_active_language_model(
         .ok_or_else(|| {
             "aucun modèle IA actif n'est configuré (voir /admin/ai-models)".to_string()
         })?;
-    let key = secret_key.ok_or_else(|| {
-        "SECRET_ENCRYPTION_KEY absente : impossible de déchiffrer la clé API du modèle IA"
-            .to_string()
-    })?;
-    let api_key = shared::crypto::decrypt(&key, &ai_model.api_key_encrypted)
-        .map_err(|_| "échec du déchiffrement de la clé API du modèle IA".to_string())?;
+    let system_prompt = ai_model.system_prompt.clone();
+    let model = build_language_model(ai_model, secret_key)?;
+    Ok((model, system_prompt))
+}
 
-    let model: Arc<dyn LanguageModel> =
-        Arc::new(OpenAiCompatibleModel::new(OpenAiCompatibleModelConfig {
-            base_url: ai_model.base_url,
-            api_key,
-            model: ai_model.model,
-        }));
-    Ok((model, ai_model.system_prompt))
+/// Résout, pour chaque profil d'expert de `profiles` dédiant un modèle
+/// spécifique (voir `agent::AgentProfile::model_id`), le [`LanguageModel`]
+/// correspondant — indexé par ce même identifiant, prêt à être passé à
+/// [`Orchestrator::new`]. Un profil dont le modèle référencé a depuis été
+/// supprimé, ou dont la clé API ne peut pas être déchiffrée, est simplement
+/// absent de la table renvoyée plutôt que de faire échouer toute
+/// l'orchestration : [`agent::orchestration::Orchestrator::model_for`] retombe
+/// alors sur le modèle par défaut pour cet expert.
+async fn build_agent_profile_models(
+    pool: &storage::Pool,
+    secret_key: &Option<Vec<u8>>,
+    profiles: &[agent::AgentProfile],
+) -> std::collections::HashMap<String, Arc<dyn LanguageModel>> {
+    let mut models = std::collections::HashMap::new();
+    for model_id in profiles
+        .iter()
+        .filter_map(|profile| profile.model_id.as_deref())
+        .collect::<HashSet<_>>()
+    {
+        let Ok(id) = model_id.parse::<ID>() else {
+            continue;
+        };
+        let Ok(ai_model) = storage::ai_model::get_ai_model(pool, &id).await else {
+            continue;
+        };
+        if let Ok(model) = build_language_model(ai_model, secret_key) {
+            models.insert(model_id.to_string(), model);
+        }
+    }
+    models
 }
 
 /// Construit le client GéoRisques à partir de la configuration enregistrée
@@ -743,13 +836,13 @@ async fn reconcile_agent_lag(pool: &storage::Pool, room_id: &str) -> Option<Serv
             let run = storage::agent_run::get_latest_run_for_session(pool, &session.id)
                 .await
                 .ok()??;
-            Some(if run.status == "failed" {
-                ServerMessage::AgentError {
+            Some(match run.status.as_str() {
+                "failed" => ServerMessage::AgentError {
                     message: "une erreur est survenue pendant le traitement de la tâche"
                         .to_string(),
-                }
-            } else {
-                ServerMessage::AgentDone
+                },
+                "stopped" => ServerMessage::AgentStopped,
+                _ => ServerMessage::AgentDone,
             })
         }
     }
@@ -1026,11 +1119,16 @@ async fn get_agent_session_history(
 
 /// Convertit la réponse brute du client (`ClientMessage::InteractionAnswer`)
 /// en [`PauseAnswer`] adaptée à `request`, en persistant au passage les
-/// octets d'un document uploadé (voir `storage::agent_run::store_document`)
-/// pour qu'il survive à la connexion courante.
+/// octets d'un document uploadé (voir `storage::legal_act_document::store_document`)
+/// pour qu'il survive à la connexion courante, rattaché au projet
+/// `legal_act_id` plutôt qu'au run en cours — au même titre qu'un document
+/// ajouté depuis le panneau « Fichiers » (voir
+/// `app::pages::project_documents::upload_project_document`).
 async fn decode_pause_answer(
     pool: &storage::Pool,
-    run_id: &ID,
+    legal_act_id: Option<ID>,
+    uploaded_by: &ID,
+    agent_events: &tokio::sync::broadcast::Sender<String>,
     request: &PauseRequest,
     value: serde_json::Value,
 ) -> Result<PauseAnswer, String> {
@@ -1059,25 +1157,47 @@ async fn decode_pause_answer(
                     .collect(),
             ))
         }
-        PauseRequest::RequestDocument { .. } => {
+        PauseRequest::RequestDocument { prompt, .. } => {
+            let legal_act_id = legal_act_id
+                .ok_or_else(|| "aucun projet associé à cette salle".to_string())?;
             let upload: DocumentUploadWire = serde_json::from_value(value)
                 .map_err(|error| format!("réponse invalide à la demande de document : {error}"))?;
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(&upload.content_base64)
                 .map_err(|error| format!("contenu du document invalide (base64) : {error}"))?;
-            let document = storage::agent_run::store_document(
+            // Le libellé du document reprend la description que l'agent
+            // avait lui-même donnée à sa demande (`prompt`, ex. « le rapport
+            // d'inspection ICPE le plus récent ») : c'est exactement l'alias
+            // sémantique dont un futur `search_documents` a besoin, sans
+            // qu'il faille demander à l'inspecteur de le ressaisir.
+            let document = storage::legal_act_document::store_document(
                 pool,
-                run_id,
+                &legal_act_id,
                 &upload.file_name,
                 &upload.mime_type,
                 bytes,
+                prompt,
+                uploaded_by,
             )
             .await
             .map_err(|error| error.to_string())?;
+
+            if let Ok(text) = serde_json::to_string(&ServerMessage::DocumentsChanged(
+                DocumentsChangedEvent {
+                    file_name: document.file_name.clone(),
+                    kind: DocumentChangeKind::Uploaded,
+                    by_agent: true,
+                    actor_id: None,
+                },
+            )) {
+                let _ = agent_events.send(text);
+            }
+
             Ok(PauseAnswer::Document(agent::ports::DocumentRef {
                 id: document.id.to_string(),
                 file_name: document.file_name,
                 mime_type: document.mime_type,
+                label: document.label,
             }))
         }
     }
@@ -1151,8 +1271,8 @@ async fn persist_run_outcome(
 /// [`replay_pending_interaction`]).
 fn spawn_agent_run(
     state: Arc<AppState>,
+    room: Arc<EditorRoom>,
     editor: Arc<dyn LegalActEditorPort>,
-    document_content: Arc<dyn DocumentContentPort>,
     agent_observer: Arc<dyn AgentObserver>,
     agent_events: tokio::sync::broadcast::Sender<String>,
     auto_accept: Arc<AtomicBool>,
@@ -1161,12 +1281,13 @@ fn spawn_agent_run(
     author_id: ID,
     input: AgentInput,
 ) {
-    tokio::spawn(async move {
+    let room_for_task = room.clone();
+    let handle = tokio::spawn(async move {
         let message = run_orchestration(
             &state,
             editor,
-            document_content,
             agent_observer,
+            agent_events.clone(),
             auto_accept,
             &room_id,
             legal_act_id,
@@ -1175,10 +1296,17 @@ fn spawn_agent_run(
         )
         .await
         .unwrap_or_else(|message| ServerMessage::AgentError { message });
+        // Retire sa propre poignée d'annulation avant de diffuser l'issue :
+        // une fois celle-ci enregistrée `None`, un `StopAgent` concurrent sait
+        // qu'il n'y a plus rien à interrompre (voir
+        // `EditorRoom::take_agent_task`). Sans effet si `StopAgent` l'a déjà
+        // retirée entretemps.
+        room_for_task.take_agent_task();
         if let Ok(text) = serde_json::to_string(&message) {
             let _ = agent_events.send(text);
         }
     });
+    room.set_agent_task(handle.abort_handle());
 }
 
 /// Construit l'orchestrateur (modèle, registre d'outils complet, catalogue
@@ -1187,8 +1315,8 @@ fn spawn_agent_run(
 async fn run_orchestration(
     state: &Arc<AppState>,
     editor: Arc<dyn LegalActEditorPort>,
-    document_content: Arc<dyn DocumentContentPort>,
     agent_observer: Arc<dyn AgentObserver>,
+    agent_events: tokio::sync::broadcast::Sender<String>,
     auto_accept: Arc<AtomicBool>,
     room_id: &str,
     legal_act_id: Option<ID>,
@@ -1197,7 +1325,7 @@ async fn run_orchestration(
 ) -> Result<ServerMessage, String> {
     let secret_key = state.secret_encryption_key.clone();
     let (model, ai_model_system_prompt) =
-        build_active_language_model(&state.store, secret_key.clone()).await?;
+        build_active_language_model(&state.store, &secret_key).await?;
     let (system_prompt, allowed_tools) =
         build_agent_context(&state.store, legal_act_id, &ai_model_system_prompt).await;
 
@@ -1213,9 +1341,16 @@ async fn run_orchestration(
     tools.register(Box::new(AskUserTool));
     tools.register(Box::new(AskQuestionsTool));
     tools.register(Box::new(RequestDocumentTool));
-    tools.register(Box::new(ReadDocumentTool::new(Some(document_content))));
+    tools.register(Box::new(FetchDocumentByUrlTool::new()));
+
+    let mut context_snapshot: Option<Arc<dyn agent::ports::ContextSnapshotPort>> = None;
 
     if let Some(legal_act_id) = legal_act_id {
+        context_snapshot = Some(Arc::new(WsContextSnapshot::new(
+            state.store.clone(),
+            legal_act_id,
+        )));
+
         let intentions: Arc<dyn agent::ports::IntentionPort> = Arc::new(WsIntentions::new(
             state.store.clone(),
             legal_act_id,
@@ -1224,6 +1359,28 @@ async fn run_orchestration(
         tools.register(Box::new(ListIntentionsTool::new(intentions.clone())));
         tools.register(Box::new(AddIntentionTool::new(intentions.clone())));
         tools.register(Box::new(RemoveIntentionTool::new(intentions)));
+
+        let metadata: Arc<dyn agent::ports::MetadataPort> = Arc::new(WsMetadata::new(
+            state.store.clone(),
+            legal_act_id,
+            author_id,
+            agent_events.clone(),
+        ));
+        tools.register(Box::new(ReadMetadataTool::new(metadata.clone())));
+        tools.register(Box::new(WriteMetadataTool::new(metadata.clone(), true)));
+        tools.register(Box::new(SearchMetadataTool::new(metadata)));
+
+        // Les documents du projet sont désormais rattachés à `legal_act_id`
+        // plutôt qu'à une session de conversation (voir
+        // `storage::legal_act_document`) : sans projet résolu pour cette
+        // salle, ni `read_document` ni `search_documents` ne peuvent
+        // fonctionner (`request_document`/`fetch_document_by_url` restent
+        // disponibles, la première ne faisant que suspendre l'orchestration,
+        // la seconde n'ayant aucune dépendance au projet).
+        let documents: Arc<dyn agent::ports::DocumentContentPort> =
+            Arc::new(WsDocuments::new(state.store.clone(), legal_act_id));
+        tools.register(Box::new(SearchDocumentsTool::new(Some(documents.clone()))));
+        tools.register(Box::new(ReadDocumentTool::new(Some(documents))));
     }
 
     if allowed_tools.contains("georisques_query") || allowed_tools.contains("icpe_query") {
@@ -1266,8 +1423,22 @@ async fn run_orchestration(
     // Superviseur plutôt que de choisir lui-même un profil du catalogue.
     tools.register(Box::new(SpawnExpertTool));
 
-    let orchestrator =
-        Orchestrator::new(model, tools, Arc::new(catalog), agent_observer, auto_accept);
+    // Certains profils d'experts (voir `/admin/agent-profiles`) dédient un
+    // modèle différent du modèle actif par défaut, pour tirer parti des
+    // forces propres à chaque modèle selon la sous-tâche déléguée.
+    let agent_profile_models = build_agent_profile_models(&state.store, &secret_key, &profiles).await;
+
+    let mut orchestrator = Orchestrator::new(
+        model,
+        agent_profile_models,
+        tools,
+        Arc::new(catalog),
+        agent_observer,
+        auto_accept,
+    );
+    if let Some(context_snapshot) = context_snapshot {
+        orchestrator = orchestrator.with_context_snapshot(context_snapshot);
+    }
 
     match input {
         AgentInput::Start { task } => {
@@ -1348,8 +1519,15 @@ async fn run_orchestration(
                 })
                 .ok_or_else(|| "cette salle n'est pas en attente d'une réponse".to_string())?;
 
-            let answer =
-                decode_pause_answer(&state.store, &existing.id, &pending_request, value).await?;
+            let answer = decode_pause_answer(
+                &state.store,
+                legal_act_id,
+                &author_id,
+                &agent_events,
+                &pending_request,
+                value,
+            )
+            .await?;
             let mut run = OrchestrationRun {
                 stack,
                 status: RunStatus::Paused,

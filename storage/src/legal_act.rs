@@ -215,3 +215,50 @@ pub async fn delete_legal_act_history(pool: &Pool, legal_act_id: &ID) -> Result<
     tx.commit().await?;
     Ok(())
 }
+
+/// Supprime définitivement un projet d'acte légal : son historique CRDT
+/// (corps et commentaires — aucune contrainte de clé étrangère sur ces
+/// tables, donc pas de suppression automatique par cascade), les permissions
+/// accordées spécifiquement sur ce projet (`permissions.resource_id` est une
+/// colonne polymorphe, également sans contrainte de clé étrangère), puis le
+/// projet lui-même. Les intentions rattachées (`legal_act_intentions`) sont
+/// supprimées automatiquement par la contrainte `ON DELETE CASCADE` de cette
+/// table. Le journal d'audit n'est volontairement pas purgé (`audit_log`
+/// doit survivre à la suppression de la ressource qu'il documente).
+///
+/// Tout est fait dans une seule transaction : soit tout disparaît, soit rien.
+pub async fn delete_legal_act(pool: &Pool, legal_act_id: &ID) -> Result<(), StorageError> {
+    let mut tx = pool.begin().await?;
+
+    sqlx::query("DELETE FROM legal_act_updates WHERE legal_act_id = $1")
+        .bind(id::encode(legal_act_id))
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM legal_act_snapshots WHERE legal_act_id = $1")
+        .bind(id::encode(legal_act_id))
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM legal_act_review_updates WHERE legal_act_id = $1")
+        .bind(id::encode(legal_act_id))
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM legal_act_review_snapshots WHERE legal_act_id = $1")
+        .bind(id::encode(legal_act_id))
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM permissions WHERE resource_type = 'legal_act' AND resource_id = $1")
+        .bind(id::encode(legal_act_id))
+        .execute(&mut *tx)
+        .await?;
+
+    let result = sqlx::query("DELETE FROM legal_acts WHERE id = $1")
+        .bind(id::encode(legal_act_id))
+        .execute(&mut *tx)
+        .await?;
+    if result.rows_affected() == 0 {
+        return Err(StorageError::NotFound);
+    }
+
+    tx.commit().await?;
+    Ok(())
+}

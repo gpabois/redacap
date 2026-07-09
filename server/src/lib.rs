@@ -111,8 +111,9 @@ pub async fn run() -> anyhow::Result<()> {
         .redirect(openidconnect::reqwest::redirect::Policy::none())
         .build()?;
 
+    let rooms = Arc::new(EditorRooms::default());
     let app_state = Arc::new(AppState {
-        rooms: EditorRooms::default(),
+        rooms: rooms.clone(),
         store,
         session_key,
         secret_encryption_key,
@@ -130,11 +131,19 @@ pub async fn run() -> anyhow::Result<()> {
                 let session_key = app_state.session_key.clone();
                 let secret_encryption_key = app_state.secret_encryption_key.clone();
                 let public_base_url = app_state.public_base_url.clone();
+                // Coercition explicite en `Arc<dyn RoomBroadcaster>` : `app`
+                // (qui consomme ce contexte, voir
+                // `app::pages::project_metadata`) ne peut pas nommer
+                // `EditorRooms` (dépendance circulaire, `server` dépend déjà
+                // de `app`), seulement le trait commun aux deux crates (voir
+                // `shared::broadcast`).
+                let room_broadcaster: shared::broadcast::SharedRoomBroadcaster = rooms.clone();
                 move || {
                     provide_context(store.clone());
                     provide_context(session_key.clone());
                     provide_context(secret_encryption_key.clone());
                     provide_context(public_base_url.clone());
+                    provide_context(room_broadcaster.clone());
                 }
             },
             {

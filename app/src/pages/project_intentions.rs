@@ -17,29 +17,6 @@ struct IntentionOption {
     selected: bool,
 }
 
-/// Vérifie que l'utilisateur courant peut éditer le projet `legal_act_id`
-/// (auteur, ou droit direct/hérité de ses groupes — voir
-/// `crate::auth::accessible_legal_act_ids`), et renvoie le projet.
-#[cfg(feature = "ssr")]
-async fn require_legal_act_access(
-    pool: &storage::Pool,
-    user_id: &shared::id::ID,
-    legal_act_id: &shared::id::ID,
-) -> Result<shared::model::LegalAct, ServerFnError> {
-    let legal_act = storage::legal_act::get_legal_act(pool, legal_act_id)
-        .await
-        .map_err(|_| ServerFnError::new("projet introuvable"))?;
-    if legal_act.created_by != *user_id {
-        let accessible_ids = crate::auth::accessible_legal_act_ids(pool, user_id).await?;
-        if !accessible_ids.contains(&legal_act.id) {
-            return Err(ServerFnError::new(
-                "vous n'avez pas le droit d'éditer ce projet",
-            ));
-        }
-    }
-    Ok(legal_act)
-}
-
 /// Liste les intentions du domaine du projet, avec leur état d'association
 /// actuel (voir `storage::intention::list_intentions_by_domain`/
 /// `list_intentions_for_legal_act`).
@@ -53,7 +30,8 @@ async fn list_project_intentions(
         .parse()
         .map_err(|_| ServerFnError::new("projet invalide"))?;
 
-    let legal_act = require_legal_act_access(&pool, &user_id, &legal_act_id).await?;
+    let legal_act =
+        crate::auth::require_legal_act_edit_access(&pool, &user_id, &legal_act_id).await?;
 
     let domain_intentions =
         storage::intention::list_intentions_by_domain(&pool, &legal_act.domain_id)
@@ -92,7 +70,8 @@ async fn add_project_intention(
         .parse()
         .map_err(|_| ServerFnError::new("intention invalide"))?;
 
-    let legal_act = require_legal_act_access(&pool, &user_id, &legal_act_id).await?;
+    let legal_act =
+        crate::auth::require_legal_act_edit_access(&pool, &user_id, &legal_act_id).await?;
 
     let intention = storage::intention::get_intention(&pool, &intention_id)
         .await
@@ -140,7 +119,7 @@ async fn remove_project_intention(
         .parse()
         .map_err(|_| ServerFnError::new("intention invalide"))?;
 
-    require_legal_act_access(&pool, &user_id, &legal_act_id).await?;
+    crate::auth::require_legal_act_edit_access(&pool, &user_id, &legal_act_id).await?;
 
     storage::intention::remove_intention_from_legal_act(&pool, &legal_act_id, &intention_id)
         .await

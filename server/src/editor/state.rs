@@ -58,6 +58,13 @@ pub struct EditorRoom {
     /// rechargement de page) de continuer à suivre une tâche déjà en cours
     /// plutôt que de perdre tout le fil de l'eau.
     pub agent_events: broadcast::Sender<String>,
+    /// Poignée d'annulation de la tâche Tokio détachée qui pilote le run
+    /// agent actuellement en cours pour cette salle (voir
+    /// [`super::ws::spawn_agent_run`]), `None` tant qu'aucun run n'est en
+    /// cours ou une fois celui-ci terminé. Permet à
+    /// [`super::protocol::ClientMessage::StopAgent`] d'interrompre la tâche à
+    /// son prochain point d'attente plutôt que d'attendre sa fin naturelle.
+    agent_task: Mutex<Option<tokio::task::AbortHandle>>,
     pool: Pool,
     /// Identifiant de l'acte légal édité, si `room_id` en est un (voir
     /// [`EditorRooms::get_or_create`]) : `None` pour les salons de
@@ -98,6 +105,7 @@ impl EditorRoom {
             review_updates,
             presence,
             agent_events,
+            agent_task: Mutex::new(None),
             pool,
             legal_act_id,
             next_seq: AtomicI64::new(next_seq),
@@ -112,6 +120,23 @@ impl EditorRoom {
     /// (domaine, intentions, outils autorisés) du prompt système de l'agent.
     pub fn legal_act_id(&self) -> Option<ID> {
         self.legal_act_id
+    }
+
+    /// Enregistre la poignée d'annulation de la tâche Tokio qui vient de
+    /// démarrer pour cette salle (voir [`super::ws::spawn_agent_run`]) :
+    /// remplace silencieusement toute poignée précédente, qui ne peut
+    /// correspondre qu'à un run déjà terminé (au plus un run actif par
+    /// salle, voir `agent_runs_active_per_room_idx`).
+    pub fn set_agent_task(&self, handle: tokio::task::AbortHandle) {
+        *self.agent_task.lock().expect("verrou non empoisonné") = Some(handle);
+    }
+
+    /// Retire et renvoie la poignée d'annulation actuellement enregistrée
+    /// (voir [`Self::set_agent_task`]) : utilisé aussi bien par la tâche
+    /// elle-même à sa fin naturelle que par
+    /// [`super::protocol::ClientMessage::StopAgent`] pour l'interrompre.
+    pub fn take_agent_task(&self) -> Option<tokio::task::AbortHandle> {
+        self.agent_task.lock().expect("verrou non empoisonné").take()
     }
 
     /// Diffuse `bytes` (mise à jour Yrs) à tous les pairs connectés à la
@@ -293,6 +318,32 @@ impl EditorRooms {
             rooms.remove(room_id);
         }
         None
+    }
+
+    /// Diffuse `payload` à tous les pairs actuellement connectés à
+    /// `room_id`, sur le même canal que la progression de l'agent (voir
+    /// [`EditorRoom::agent_events`]) : sans effet si la salle n'existe pas
+    /// (personne n'y a encore ouvert de connexion) ou n'a plus aucune
+    /// connexion active — l'appelant n'a pas besoin de le distinguer d'une
+    /// diffusion réussie mais sans destinataire. Implémente
+    /// [`shared::broadcast::RoomBroadcaster`], injecté par contexte Leptos
+    /// (voir `crate::run`) pour que des `ServerFunction`s de `app` (ex.
+    /// `app::pages::project_metadata::set_project_metadata`), qui n'ont pas
+    /// de connexion websocket propre, puissent notifier une salle.
+    pub fn broadcast(&self, room_id: &str, payload: String) {
+        let room = {
+            let rooms = self.0.lock().expect("verrou non empoisonné");
+            rooms.get(room_id).cloned()
+        };
+        if let Some(room) = room {
+            let _ = room.agent_events.send(payload);
+        }
+    }
+}
+
+impl shared::broadcast::RoomBroadcaster for EditorRooms {
+    fn broadcast(&self, room_id: &str, payload: String) {
+        EditorRooms::broadcast(self, room_id, payload);
     }
 }
 

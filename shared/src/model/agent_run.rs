@@ -26,7 +26,10 @@ pub struct AgentRun {
     pub session_id: ID,
     pub author_id: ID,
     /// `"running" | "paused" | "done" | "failed"` (voir
-    /// `agent::orchestration::RunStatus`).
+    /// `agent::orchestration::RunStatus`), plus `"stopped"` — un arrêt
+    /// volontaire de l'utilisateur (voir `storage::agent_run::stop_run`), qui
+    /// n'a pas de pendant dans `RunStatus` puisqu'il court-circuite
+    /// l'orchestrateur plutôt que de résulter d'un `drive`/`resume`.
     pub status: String,
     pub stack: Value,
     pub final_answer: Option<String>,
@@ -37,18 +40,4 @@ pub struct AgentRun {
     pub version: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-}
-
-/// Document uploadé par l'inspecteur en réponse à une pause de type
-/// `request_document`, persisté indépendamment de l'état en mémoire d'une
-/// connexion websocket pour que la reprise fonctionne même sur une connexion
-/// différente de celle où la demande a été faite.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AgentRunDocument {
-    pub id: ID,
-    pub run_id: ID,
-    pub file_name: String,
-    pub mime_type: String,
-    pub bytes: Vec<u8>,
-    pub created_at: DateTime<Utc>,
 }

@@ -6,6 +6,7 @@
 //! transitent jamais par ce protocole texte : voir [`crate::ws`].
 
 use serde::{Deserialize, Serialize};
+use shared::broadcast::{DocumentsChangedEvent, MetadataChangedEvent};
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -48,6 +49,10 @@ pub enum ClientMessage {
     /// run le plus récent de cette salle (voir
     /// `server::editor::protocol::ClientMessage::GetSupervisorContext`).
     GetSupervisorContext,
+    /// Demande l'arrêt immédiat du run agent en cours pour cette salle (voir
+    /// `server::editor::protocol::ClientMessage::StopAgent`). Sans effet si
+    /// aucun run n'est actuellement en cours.
+    StopAgent,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,6 +65,10 @@ pub enum ServerMessage {
     AgentDone,
     /// La boucle agentique a échoué (erreur de modèle, outil, etc.).
     AgentError { message: String },
+    /// Le run agent en cours a été interrompu à la demande d'un utilisateur
+    /// (voir [`ClientMessage::StopAgent`]) : distinct de [`Self::AgentError`],
+    /// qui signale un échec plutôt qu'un arrêt volontaire.
+    AgentStopped,
     /// L'agent pose une question ouverte (outil `ask_user`). `agent_label`
     /// identifie le frame à l'origine de la question (`"Superviseur"` ou le
     /// libellé d'un expert délégué).
@@ -149,6 +158,20 @@ pub enum ServerMessage {
     SupervisorContext {
         entries: Vec<SupervisorContextEntryWire>,
     },
+    /// Diffusé à chaque écriture ou suppression d'une métadonnée du projet,
+    /// par l'agent ou par un autre utilisateur (voir
+    /// `server::editor::protocol::ServerMessage::MetadataChanged`) : permet à
+    /// `crate::pages::project_metadata::ProjectMetadataPanel` de se
+    /// resynchroniser sans recharger la page (voir
+    /// `RoomHandle::metadata_version`/`RoomHandle::last_metadata_change`).
+    MetadataChanged(MetadataChangedEvent),
+    /// Diffusé à chaque ajout ou suppression d'un document du projet, par
+    /// l'agent ou par un autre utilisateur (voir
+    /// `server::editor::protocol::ServerMessage::DocumentsChanged`) : permet
+    /// à `crate::pages::project_documents::ProjectFilesPanel` de se
+    /// resynchroniser sans recharger la page (voir
+    /// `RoomHandle::files_version`/`RoomHandle::files_last_change`).
+    DocumentsChanged(DocumentsChangedEvent),
 }
 
 /// Résumé d'une session de conversation passée (voir

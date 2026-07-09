@@ -65,7 +65,7 @@ pub use panel::{
     AgentPanel, AgentSessionHistory, AgentSessionSummary, DocumentRequest, DocumentUpload,
     InteractionRequest, InteractionResponse, PanelEntry, PanelMessage, PanelQuestion,
     PanelQuestionAnswer, PanelReasoning, PanelRole, PanelToolCall, PanelToolCallStatus,
-    SupervisorContextEntry, SupervisorContextRole, SupervisorContextToolCall,
+    SupervisorContextEntry, SupervisorContextRole, SupervisorContextToolCall, read_uploaded_file,
 };
 #[cfg(feature = "server")]
 pub use tool::{DelegateRequest, DelegateTarget, PauseRequest, Tool, ToolOutput, ToolRegistry};

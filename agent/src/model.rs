@@ -131,10 +131,19 @@ pub trait LanguageModel: Send + Sync {
     /// pas être établie (réseau, authentification...) ; une erreur survenant
     /// après coup, pendant la lecture du flux, est renvoyée comme dernier
     /// élément du canal plutôt que par cette méthode.
+    ///
+    /// `require_tool_call` bascule `tool_choice` de `"auto"` à `"required"`
+    /// (sans effet si `tools` est vide) : voir
+    /// [`crate::orchestration::Orchestrator::run_turn`], qui ne le met à
+    /// `true` que pour reprendre un tour dont la première tentative n'a
+    /// produit ni contenu ni appel d'outil — un petit modèle local peut
+    /// échouer silencieusement à produire un appel valide sous `"auto"` alors
+    /// que la même requête sous `"required"` y parvient de façon fiable.
     async fn stream(
         &self,
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
+        require_tool_call: bool,
     ) -> Result<mpsc::UnboundedReceiver<Result<StreamEvent, ModelError>>, ModelError>;
 }
 
@@ -176,6 +185,7 @@ impl LanguageModel for OpenAiCompatibleModel {
         &self,
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
+        require_tool_call: bool,
     ) -> Result<mpsc::UnboundedReceiver<Result<StreamEvent, ModelError>>, ModelError> {
         let wire_tools: Vec<WireToolDefinition> =
             tools.iter().map(WireToolDefinition::from).collect();
@@ -187,7 +197,8 @@ impl LanguageModel for OpenAiCompatibleModel {
             // `tool_choice` comme `"none"` plutôt que le défaut standard
             // `"auto"`, ce qui fait répondre le modèle en texte libre sans
             // jamais appeler les outils pourtant transmis dans `tools`.
-            tool_choice: (!wire_tools.is_empty()).then_some("auto"),
+            tool_choice: (!wire_tools.is_empty())
+                .then_some(if require_tool_call { "required" } else { "auto" }),
             tools: wire_tools,
             stream: true,
         };

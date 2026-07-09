@@ -14,7 +14,7 @@ use leptos::prelude::*;
 use shared::id::ID;
 #[cfg(feature = "ssr")]
 use shared::model::{
-    ACTION_ADMINISTRATEUR, ACTION_SUPER_ADMINISTRATEUR, Permission, ResourceScope,
+    ACTION_ADMINISTRATEUR, ACTION_SUPER_ADMINISTRATEUR, LegalAct, Permission, ResourceScope,
 };
 #[cfg(feature = "ssr")]
 use std::collections::HashSet;
@@ -166,6 +166,32 @@ pub async fn accessible_legal_act_ids(
             _ => None,
         })
         .collect())
+}
+
+/// Vérifie que l'utilisateur courant peut éditer le projet `legal_act_id`
+/// (auteur, ou droit direct/hérité de ses groupes — voir
+/// [`accessible_legal_act_ids`]), et renvoie le projet. Partagé par toutes
+/// les actions de mutation sur un projet qui doivent être défendues en
+/// profondeur côté serveur (ajout/retrait d'intention, suppression du
+/// projet...), sans se fier au seul filtrage côté UI.
+#[cfg(feature = "ssr")]
+pub async fn require_legal_act_edit_access(
+    pool: &storage::Pool,
+    user_id: &ID,
+    legal_act_id: &ID,
+) -> Result<LegalAct, ServerFnError> {
+    let legal_act = storage::legal_act::get_legal_act(pool, legal_act_id)
+        .await
+        .map_err(|_| ServerFnError::new("projet introuvable"))?;
+    if legal_act.created_by != *user_id {
+        let accessible_ids = accessible_legal_act_ids(pool, user_id).await?;
+        if !accessible_ids.contains(&legal_act.id) {
+            return Err(ServerFnError::new(
+                "vous n'avez pas le droit d'éditer ce projet",
+            ));
+        }
+    }
+    Ok(legal_act)
 }
 
 /// Identifiants des domaines sur lesquels l'utilisateur dispose d'un droit

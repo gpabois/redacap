@@ -5,7 +5,7 @@
 //! responsable de l'appel réel à l'agent (typiquement via une fonction
 //! serveur Leptos) et de la mise à jour de `messages`/`pending` en retour.
 
-use dsfr::{Badge, ResizeHandle, Severity};
+use dsfr::{Alert, Badge, ResizeHandle, Severity};
 use leptos::prelude::*;
 use leptos::*;
 use pulldown_cmark::{Event, Options, Parser};
@@ -39,6 +39,7 @@ fn tool_display_name(name: &str) -> &str {
         "validate_structure" => "Vérification de la structure de l'acte",
         "read_metadata" => "Lecture d'une métadonnée",
         "write_metadata" => "Mise à jour d'une métadonnée",
+        "search_metadata" => "Recherche parmi les métadonnées",
         "list_intentions" => "Liste des intentions du projet",
         "add_intention" => "Association d'une intention au projet",
         "remove_intention" => "Retrait d'une intention du projet",
@@ -46,6 +47,8 @@ fn tool_display_name(name: &str) -> &str {
         "ask_questions" => "Formulaire présenté à l'utilisateur",
         "request_document" => "Demande d'un document à l'utilisateur",
         "read_document" => "Lecture d'un document externe",
+        "fetch_document_by_url" => "Récupération d'un document par URL",
+        "search_documents" => "Recherche parmi les documents fournis",
         "legifrance_search" => "Recherche Légifrance",
         "legifrance_fetch" => "Lecture d'un texte Légifrance",
         "georisques_query" => "Interrogation GéoRisques",
@@ -81,12 +84,15 @@ fn tool_call_summary(name: &str, arguments: &str) -> Option<String> {
         "remove_node" => &["node_id"],
         "set_title" => &["title"],
         "read_metadata" | "write_metadata" => &["key"],
+        "search_metadata" => &["query"],
         "add_intention" | "remove_intention" => &["intention_id"],
         "legifrance_search" => &["query"],
         "legifrance_fetch" => &["textId", "textCid", "id"],
         "request_document" => &["prompt"],
         "ask_user" => &["question"],
-        "read_document" => &["document_id", "url"],
+        "read_document" => &["document_id"],
+        "fetch_document_by_url" => &["url"],
+        "search_documents" => &["query"],
         "georisques_query" => &["code_insee", "latlon"],
         "icpe_query" => &["nom_etablissement", "code_insee"],
         "spawn_expert" => &["task"],
@@ -204,6 +210,33 @@ pub struct PanelToolCall {
     pub status: PanelToolCallStatus,
 }
 
+/// Distingue un échec réel d'un arrêt volontaire de l'utilisateur dans une
+/// [`PanelError`] : les deux interrompent la tâche en cours de la même façon
+/// côté panneau, mais méritent un ton et une couleur différents (voir
+/// [`render_panel_entry`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PanelErrorKind {
+    /// La boucle agentique s'est arrêtée d'elle-même (erreur de modèle,
+    /// d'outil, de configuration...).
+    Failure,
+    /// L'utilisateur a explicitement demandé l'arrêt de la tâche (voir
+    /// [`AgentPanel`]'s `on_stop`).
+    Stopped,
+}
+
+/// Échec (ou arrêt volontaire) de la tâche agent, affiché dans l'historique
+/// comme une entrée à part entière plutôt que noyé dans un message assistant
+/// ordinaire (voir [`render_panel_entry`]) : c'est ce qui permet de le
+/// distinguer visuellement d'une réponse normale de l'agent.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PanelError {
+    /// Libellé du frame à l'origine de l'échec (voir [`PanelReasoning::agent_label`]),
+    /// vide si l'application hôte ne le précise pas (ex. arrêt volontaire).
+    pub agent_label: String,
+    pub message: String,
+    pub kind: PanelErrorKind,
+}
+
 /// Résumé d'une session de conversation passée, tel que proposé dans la
 /// liste affichée par [`AgentPanel`] (voir `on_list_sessions`/`sessions`).
 /// `label` et `preview` sont déjà mis en forme par la page hôte (date
@@ -284,6 +317,7 @@ pub enum PanelEntry {
     Message(PanelMessage),
     Reasoning(PanelReasoning),
     ToolCall(PanelToolCall),
+    Error(PanelError),
 }
 
 impl PanelEntry {
@@ -302,6 +336,26 @@ impl PanelEntry {
     #[must_use]
     pub fn assistant_from(agent_label: impl Into<String>, content: impl Into<String>) -> Self {
         Self::Message(PanelMessage::assistant_from(agent_label, content))
+    }
+
+    /// Échec de la tâche agent (voir [`PanelErrorKind::Failure`]).
+    #[must_use]
+    pub fn error(agent_label: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::Error(PanelError {
+            agent_label: agent_label.into(),
+            message: message.into(),
+            kind: PanelErrorKind::Failure,
+        })
+    }
+
+    /// Arrêt volontaire de la tâche agent (voir [`PanelErrorKind::Stopped`]).
+    #[must_use]
+    pub fn stopped(message: impl Into<String>) -> Self {
+        Self::Error(PanelError {
+            agent_label: String::new(),
+            message: message.into(),
+            kind: PanelErrorKind::Stopped,
+        })
     }
 }
 
@@ -375,8 +429,12 @@ pub struct DocumentUpload {
 /// `on_document_response` une fois son contenu disponible, encodé en base64
 /// (voir [`DocumentUpload`]) : `FileReader::read_as_data_url` produit
 /// directement une chaîne `data:<mime>;base64,<contenu>`, dont seule la
-/// partie après la virgule nous intéresse.
-fn read_uploaded_file(
+/// partie après la virgule nous intéresse. Exportée (voir
+/// `agent::read_uploaded_file`) : réutilisée telle quelle par
+/// `app::pages::project_documents::ProjectFilesPanel` pour l'upload manuel de
+/// fichiers de projet, qui n'a pas besoin de sa propre copie de cette lecture
+/// de fichier ni des dépendances `web-sys` associées.
+pub fn read_uploaded_file(
     input: web_sys::HtmlInputElement,
     on_document_response: Callback<DocumentUpload>,
 ) {
@@ -543,6 +601,24 @@ fn render_panel_entry(entry: PanelEntry) -> AnyView {
             }
             .into_any()
         }
+        PanelEntry::Error(error) => {
+            let agent_label = error.agent_label.clone();
+            let (severity, title) = match error.kind {
+                PanelErrorKind::Failure => (Severity::Error, "Erreur"),
+                PanelErrorKind::Stopped => (Severity::Warning, "Interrompu"),
+            };
+            view! {
+                <div class="self-start max-w-[80%] flex flex-col gap-1">
+                    {(!agent_label.is_empty()).then(|| view! {
+                        <Badge severity=Severity::Info small=true>{agent_label}</Badge>
+                    })}
+                    <Alert severity=severity title=title small=true>
+                        <p class="whitespace-pre-wrap break-words">{error.message.clone()}</p>
+                    </Alert>
+                </div>
+            }
+            .into_any()
+        }
     }
 }
 
@@ -637,12 +713,77 @@ fn render_supervisor_context_entry(entry: SupervisorContextEntry) -> AnyView {
     }
 }
 
+/// Phrases affichées tour à tour dans [`PendingAgent`] pendant que la boucle
+/// agentique tourne côté serveur : un ton professionnel mais un peu taquin,
+/// pour rendre l'attente moins morne qu'un simple « L'agent réfléchit… »
+/// statique.
+const AGENT_PENDING_PHRASES: &[&str] = &[
+    "L'agent réfléchit…",
+    "Consultation discrète des visas en cours…",
+    "L'agent pèse chaque mot, comme un bon juriste…",
+    "Calibrage de la formule la plus élégante…",
+    "Vérification qu'aucune virgule ne sera contestée…",
+    "L'agent aligne les articles au carré…",
+    "Petit détour par le Journal officiel virtuel…",
+    "Recherche du mot juste — celui qui ne fâche personne…",
+    "Mise en cohérence de l'acte, considérant par considérant…",
+    "L'agent relit une deuxième fois, on ne sait jamais…",
+    "Recalcul de la numérotation avec la plus grande rigueur…",
+    "Encore un instant, la précision administrative a un prix…",
+];
+
+/// Tire un indice pseudo-aléatoire dans `[0, len)`, différent de `previous`
+/// si possible, via `Math.random()` : suffisant pour faire varier une phrase
+/// d'attente à l'écran, sans tirer une dépendance comme `rand` juste pour ça.
+fn random_phrase_index(len: usize, previous: Option<usize>) -> usize {
+    if len <= 1 {
+        return 0;
+    }
+    loop {
+        let index = (js_sys::Math::random() * len as f64) as usize;
+        let index = index.min(len - 1);
+        if Some(index) != previous {
+            return index;
+        }
+    }
+}
+
+/// Anneau tricolore (bleu France / blanc / rouge Marianne) qui tourne en
+/// continu : indicateur d'attente à côté des phrases de [`PendingAgent`].
+#[component]
+fn TricolorSpinner() -> impl IntoView {
+    view! {
+        <span class="relative inline-block size-4 shrink-0" role="status" aria-hidden="true">
+            <span
+                class="absolute inset-0 rounded-full animate-spin shadow-[0_0_0_1px_rgba(0,0,0,0.15)]"
+                style="background: conic-gradient(var(--color-blue-france) 0deg 120deg, \
+                       #ffffff 120deg 240deg, var(--color-red-marianne) 240deg 360deg);"
+            ></span>
+            <span class="absolute inset-[3px] rounded-full bg-blue-france-975 dark:bg-gray-800"></span>
+        </span>
+    }
+}
+
 #[component]
 fn PendingAgent() -> impl IntoView {
+    let phrase_index = RwSignal::new(random_phrase_index(AGENT_PENDING_PHRASES.len(), None));
+
+    if let Ok(handle) = leptos::prelude::set_interval_with_handle(
+        move || {
+            phrase_index.update(|index| {
+                *index = random_phrase_index(AGENT_PENDING_PHRASES.len(), Some(*index));
+            });
+        },
+        std::time::Duration::from_millis(2600),
+    ) {
+        on_cleanup(move || handle.clear());
+    }
+
     view! {
-        <p class="self-start max-w-[80%] rounded-sm px-3 py-1.5 text-sm italic \
+        <p class="self-start max-w-[80%] flex items-center gap-2 rounded-sm px-3 py-1.5 text-sm italic \
                 bg-blue-france-975 dark:bg-gray-800 text-gray-600 dark:text-gray-400">
-            "L'agent réfléchit…"
+            <TricolorSpinner/>
+            {move || AGENT_PENDING_PHRASES[phrase_index.get()]}
         </p>
     }
 }
@@ -689,6 +830,18 @@ pub fn AgentPanel(
     /// le bouton correspondant n'est pas affiché.
     #[prop(optional)]
     on_clear_history: Option<Callback<()>>,
+    /// Invoqué lorsque l'utilisateur demande l'arrêt immédiat de la tâche
+    /// agent en cours (voir `app::ws::RoomHandle::stop_agent`). Si absent,
+    /// aucun bouton « Arrêter » n'est affiché ; sans effet si `pending` est
+    /// `false`.
+    #[prop(optional)]
+    on_stop: Option<Callback<()>>,
+    /// Invoqué lorsque l'utilisateur demande de relancer la dernière tâche
+    /// envoyée à l'agent, par exemple après un arrêt ou une erreur (voir
+    /// `app::ws::RoomHandle::restart_agent`). Si absent, aucun bouton
+    /// « Redémarrer » n'est affiché.
+    #[prop(optional)]
+    on_restart: Option<Callback<()>>,
     /// Requête de document à afficher lorsque l'agent attend un upload
     /// (outil `request_document`). Comme `interaction`, remplace la zone de
     /// saisie texte tant qu'elle est `Some`.
@@ -827,6 +980,33 @@ pub fn AgentPanel(
                             on:click=move |_| on_clear.run(())
                         >
                             "Nouvelle session"
+                        </button>
+                    })}
+                    {on_stop.map(|on_stop| view! {
+                        <button
+                            type="button"
+                            title="Arrêter immédiatement la tâche en cours"
+                            class="text-xs font-normal normal-case text-error \
+                                   hover:underline underline-offset-2 cursor-pointer disabled:cursor-not-allowed \
+                                   disabled:opacity-40 disabled:hover:no-underline"
+                            disabled=move || !pending.get()
+                            on:click=move |_| on_stop.run(())
+                        >
+                            "Arrêter"
+                        </button>
+                    })}
+                    {on_restart.map(|on_restart| view! {
+                        <button
+                            type="button"
+                            title="Relancer la dernière tâche envoyée à l'agent"
+                            class="text-xs font-normal normal-case text-gray-500 dark:text-gray-400 \
+                                   hover:text-blue-france dark:hover:text-blue-france-925 \
+                                   underline-offset-2 hover:underline cursor-pointer disabled:cursor-not-allowed \
+                                   disabled:opacity-40 disabled:hover:no-underline"
+                            disabled=move || pending.get() || messages.get().is_empty()
+                            on:click=move |_| on_restart.run(())
+                        >
+                            "Redémarrer"
                         </button>
                     })}
                 </p>

@@ -21,7 +21,36 @@ struct AgentProfileRow {
     system_prompt: String,
     tool_names: Vec<String>,
     max_steps: i32,
+    /// Modèle IA dédié à cet expert (voir `/admin/ai-models`), à la place du
+    /// modèle actif par défaut. `None` = modèle par défaut.
+    ai_model_id: Option<String>,
     enabled: bool,
+}
+
+/// Option du sélecteur de modèle IA dédié (voir `/admin/ai-models`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct AiModelOption {
+    id: String,
+    name: String,
+}
+
+#[server]
+async fn list_ai_models_for_agent_profiles_admin() -> Result<Vec<AiModelOption>, ServerFnError> {
+    let actor_id = crate::auth::current_user_id().await?;
+    let pool = expect_context::<storage::Pool>();
+    crate::auth::require_admin(&pool, &actor_id).await?;
+
+    let models = storage::ai_model::list_ai_models(&pool)
+        .await
+        .map_err(|error| ServerFnError::new(error.to_string()))?;
+
+    Ok(models
+        .into_iter()
+        .map(|model| AiModelOption {
+            id: model.id.to_string(),
+            name: model.name,
+        })
+        .collect())
 }
 
 /// Option du catalogue d'outils assignables à un profil (voir
@@ -66,9 +95,21 @@ async fn list_agent_profiles_admin() -> Result<Vec<AgentProfileRow>, ServerFnErr
             system_prompt: profile.system_prompt,
             tool_names: profile.tool_names,
             max_steps: profile.max_steps,
+            ai_model_id: profile.ai_model_id.map(|id| id.to_string()),
             enabled: profile.enabled,
         })
         .collect())
+}
+
+/// Parse l'identifiant de modèle IA dédié transmis par le formulaire :
+/// chaîne vide (option « Modèle par défaut ») équivaut à `None`.
+fn parse_ai_model_id(raw: &str) -> Result<Option<shared::id::ID>, ServerFnError> {
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    raw.parse()
+        .map(Some)
+        .map_err(|_| ServerFnError::new("modèle IA invalide"))
 }
 
 #[server]
@@ -78,6 +119,7 @@ async fn create_agent_profile_admin(
     system_prompt: String,
     tool_names: Vec<String>,
     max_steps: i32,
+    ai_model_id: String,
 ) -> Result<(), ServerFnError> {
     let actor_id = crate::auth::current_user_id().await?;
     let pool = expect_context::<storage::Pool>();
@@ -90,6 +132,7 @@ async fn create_agent_profile_admin(
             "l'identifiant technique et le libellé sont obligatoires",
         ));
     }
+    let ai_model_id = parse_ai_model_id(&ai_model_id)?;
 
     let profile = storage::agent_profile::create_agent_profile(
         &pool,
@@ -99,6 +142,7 @@ async fn create_agent_profile_admin(
             system_prompt: system_prompt.trim().to_string(),
             tool_names,
             max_steps: max_steps.max(1),
+            ai_model_id,
         },
     )
     .await
@@ -116,6 +160,7 @@ async fn update_agent_profile_admin(
     system_prompt: String,
     tool_names: Vec<String>,
     max_steps: i32,
+    ai_model_id: String,
 ) -> Result<(), ServerFnError> {
     let actor_id = crate::auth::current_user_id().await?;
     let pool = expect_context::<storage::Pool>();
@@ -124,6 +169,7 @@ async fn update_agent_profile_admin(
     let profile_id: shared::id::ID = profile_id
         .parse()
         .map_err(|_| ServerFnError::new("profil invalide"))?;
+    let ai_model_id = parse_ai_model_id(&ai_model_id)?;
 
     storage::agent_profile::update_agent_profile(
         &pool,
@@ -134,6 +180,7 @@ async fn update_agent_profile_admin(
             system_prompt: Some(system_prompt.trim().to_string()),
             tool_names: Some(tool_names),
             max_steps: Some(max_steps.max(1)),
+            ai_model_id: Some(ai_model_id),
             enabled: None,
         },
     )
@@ -219,12 +266,15 @@ fn AgentProfilesPanel() -> impl IntoView {
     let bump = move || version.update(|v| *v += 1);
     let profiles = Resource::new(move || version.get(), |_| list_agent_profiles_admin());
     let available_tools = Resource::new(|| (), |_| list_available_tools_admin());
+    let available_ai_models = Resource::new(|| (), |_| list_ai_models_for_agent_profiles_admin());
 
     let (name, set_name) = signal(String::new());
     let (display_name, set_display_name) = signal(String::new());
     let (system_prompt, set_system_prompt) = signal(String::new());
     let selected_tools = RwSignal::new(Vec::<String>::new());
     let (max_steps, set_max_steps) = signal("8".to_string());
+    // Chaîne vide = modèle actif par défaut (voir `parse_ai_model_id`).
+    let (ai_model_id, set_ai_model_id) = signal(String::new());
     let (form_error, set_form_error) = signal(Option::<String>::None);
     let editing_id = RwSignal::new(Option::<String>::None);
 
@@ -234,14 +284,25 @@ fn AgentProfilesPanel() -> impl IntoView {
         set_system_prompt.set(String::new());
         selected_tools.set(Vec::new());
         set_max_steps.set("8".to_string());
+        set_ai_model_id.set(String::new());
         set_form_error.set(None);
         editing_id.set(None);
     };
 
-    let create_action = Action::new(move |input: &(String, String, String, Vec<String>, i32)| {
-        let (name, display_name, system_prompt, tool_names, max_steps) = input.clone();
-        create_agent_profile_admin(name, display_name, system_prompt, tool_names, max_steps)
-    });
+    let create_action = Action::new(
+        move |input: &(String, String, String, Vec<String>, i32, String)| {
+            let (name, display_name, system_prompt, tool_names, max_steps, ai_model_id) =
+                input.clone();
+            create_agent_profile_admin(
+                name,
+                display_name,
+                system_prompt,
+                tool_names,
+                max_steps,
+                ai_model_id,
+            )
+        },
+    );
     Effect::new(move |_| {
         if let Some(result) = create_action.value().get() {
             match result {
@@ -255,9 +316,18 @@ fn AgentProfilesPanel() -> impl IntoView {
     });
 
     let update_action = Action::new(
-        move |input: &(String, String, String, String, Vec<String>, i32)| {
-            let (id, name, display_name, system_prompt, tool_names, max_steps) = input.clone();
-            update_agent_profile_admin(id, name, display_name, system_prompt, tool_names, max_steps)
+        move |input: &(String, String, String, String, Vec<String>, i32, String)| {
+            let (id, name, display_name, system_prompt, tool_names, max_steps, ai_model_id) =
+                input.clone();
+            update_agent_profile_admin(
+                id,
+                name,
+                display_name,
+                system_prompt,
+                tool_names,
+                max_steps,
+                ai_model_id,
+            )
         },
     );
     Effect::new(move |_| {
@@ -318,6 +388,27 @@ fn AgentProfilesPanel() -> impl IntoView {
                     value=max_steps
                     on_input=move |v| set_max_steps.set(v)
                 />
+                <Suspense fallback=|| view! { <p class="text-sm text-gray-500 dark:text-gray-400">"Chargement des modèles…"</p> }>
+                    {move || Suspend::new(async move {
+                        let mut options = vec![SelectOption::new(String::new(), "Modèle par défaut")];
+                        options.extend(
+                            available_ai_models
+                                .await
+                                .unwrap_or_default()
+                                .into_iter()
+                                .map(|model| SelectOption::new(model.id, model.name)),
+                        );
+                        view! {
+                            <Select
+                                label="Modèle IA"
+                                hint="Exécute cet expert avec un modèle dédié plutôt que le modèle actif par défaut (voir /admin/ai-models)."
+                                options=options
+                                value=ai_model_id
+                                on_change=move |v| set_ai_model_id.set(v)
+                            />
+                        }
+                    })}
+                </Suspense>
             </div>
             <Textarea
                 label="Prompt système"
@@ -423,6 +514,7 @@ fn AgentProfilesPanel() -> impl IntoView {
                                     system_prompt.get(),
                                     selected_tools.get(),
                                     max_steps,
+                                    ai_model_id.get(),
                                 ));
                             }
                             None => {
@@ -432,6 +524,7 @@ fn AgentProfilesPanel() -> impl IntoView {
                                     system_prompt.get(),
                                     selected_tools.get(),
                                     max_steps,
+                                    ai_model_id.get(),
                                 ));
                             }
                         }
@@ -465,6 +558,7 @@ fn AgentProfilesPanel() -> impl IntoView {
                                     row.system_prompt.clone(),
                                     row.tool_names.clone(),
                                     row.max_steps,
+                                    row.ai_model_id.clone().unwrap_or_default(),
                                 );
                                 let enabled = row.enabled;
                                 let tool_count = row.tool_names.len();
@@ -491,12 +585,13 @@ fn AgentProfilesPanel() -> impl IntoView {
                                                 <Button
                                                     variant=ButtonVariant::TertiaryNoOutline
                                                     on_click=move |_| {
-                                                        let (id, name, display_name, system_prompt, tool_names, max_steps) = edit_snapshot.clone();
+                                                        let (id, name, display_name, system_prompt, tool_names, max_steps, ai_model_id) = edit_snapshot.clone();
                                                         set_name.set(name);
                                                         set_display_name.set(display_name);
                                                         set_system_prompt.set(system_prompt);
                                                         selected_tools.set(tool_names);
                                                         set_max_steps.set(max_steps.to_string());
+                                                        set_ai_model_id.set(ai_model_id);
                                                         set_form_error.set(None);
                                                         editing_id.set(Some(id));
                                                     }

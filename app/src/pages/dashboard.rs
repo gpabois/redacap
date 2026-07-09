@@ -11,6 +11,8 @@ use dsfr::{Badge, Header, Severity, Table};
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use super::project_delete::DeleteProjectButton;
+
 /// Identité affichée dans la zone outils de l'en-tête : bulle d'avatar menant
 /// à `/account`, et lien vers `/admin` si administrateur (voir `Claude.md`
 /// § Modèle de permissions et [`crate::auth::HeaderIdentity`]).
@@ -37,6 +39,11 @@ struct ProjectSummary {
     authority_name: String,
     domain_name: String,
     updated_at: String,
+    /// `true` si l'utilisateur courant peut éditer ce projet (auteur, ou
+    /// droit direct/hérité de ses groupes — voir
+    /// `crate::auth::require_legal_act_edit_access`) : seule condition sous
+    /// laquelle l'action de suppression est proposée.
+    can_delete: bool,
 }
 
 #[cfg(feature = "ssr")]
@@ -84,6 +91,7 @@ async fn dashboard_projects() -> Result<Vec<ProjectSummary>, ServerFnError> {
             .map(|domain| domain.name)
             .unwrap_or_else(|_| "Domaine inconnu".to_string());
         let (status_label, status_severity_index) = status_label_and_severity(legal_act.status);
+        let can_delete = legal_act.created_by == user_id || accessible_ids.contains(&legal_act.id);
 
         summaries.push(ProjectSummary {
             id: legal_act.id.to_string(),
@@ -93,6 +101,7 @@ async fn dashboard_projects() -> Result<Vec<ProjectSummary>, ServerFnError> {
             authority_name,
             domain_name,
             updated_at: legal_act.updated_at.format("%d/%m/%Y %H:%M").to_string(),
+            can_delete,
         });
     }
 
@@ -101,7 +110,9 @@ async fn dashboard_projects() -> Result<Vec<ProjectSummary>, ServerFnError> {
 
 #[component]
 pub fn PageDashboard() -> impl IntoView {
-    let projects = Resource::new(|| (), |_| dashboard_projects());
+    let version = RwSignal::new(0u32);
+    let bump = move || version.update(|v| *v += 1);
+    let projects = Resource::new(move || version.get(), |_| dashboard_projects());
     let user_summary = Resource::new(|| (), |_| dashboard_header_summary());
 
     view! {
@@ -173,9 +184,17 @@ pub fn PageDashboard() -> impl IntoView {
                                                 <td class="px-3 py-2">{project.domain_name}</td>
                                                 <td class="px-3 py-2 whitespace-nowrap">{project.updated_at}</td>
                                                 <td class="px-3 py-2">
-                                                    <a href=href class="text-blue-france dark:text-blue-france-925 font-bold hover:underline">
-                                                        "Ouvrir"
-                                                    </a>
+                                                    <div class="flex items-center gap-3">
+                                                        <a href=href class="text-blue-france dark:text-blue-france-925 font-bold hover:underline">
+                                                            "Ouvrir"
+                                                        </a>
+                                                        {project.can_delete.then(|| view! {
+                                                            <DeleteProjectButton
+                                                                legal_act_id=project.id.clone()
+                                                                on_deleted=Callback::new(move |()| bump())
+                                                            />
+                                                        })}
+                                                    </div>
                                                 </td>
                                             </tr>
                                         }

@@ -32,7 +32,7 @@ use crate::{
     error::{AgentError, ModelError, ToolError},
     model::{ChatMessage, LanguageModel, Role, StreamEvent, ToolCall, ToolDefinition},
     observer::AgentObserver,
-    ports::{DocumentRef, QuestionAnswer},
+    ports::{ContextSnapshotPort, DocumentRef, QuestionAnswer},
     tool::{DelegateRequest, DelegateTarget, PauseRequest, ToolRegistry},
 };
 
@@ -43,6 +43,13 @@ use crate::{
 /// le borner naturellement ; cette limite fait échouer proprement une
 /// délégation en trop plutôt que de laisser la pile croître sans limite.
 const MAX_STACK_DEPTH: usize = 8;
+
+/// Outils dont le rôle est de porter une interaction structurée avec
+/// l'inspecteur (voir `agent::tools::interaction`) : leur présence dans les
+/// outils d'un frame signale qu'une question ou une demande de document doit
+/// passer par un appel d'outil plutôt que par du texte libre — voir l'usage
+/// dans [`Orchestrator::drive`] (`asked_in_free_text`).
+const INTERACTION_TOOL_NAMES: &[&str] = &["ask_user", "ask_questions", "request_document"];
 
 /// Un frame de la pile d'orchestration : le Superviseur (`profile_id: None`)
 /// ou un agent expert éphémère instancié depuis un [`AgentProfile`]. Sa
@@ -56,6 +63,16 @@ pub struct AgentFrame {
     pub system_prompt: String,
     pub tool_names: Vec<String>,
     pub max_steps: u32,
+    /// Modèle de langage dédié à ce frame (voir [`AgentProfile::model_id`]),
+    /// figé à la création comme le reste de la configuration : résolu par
+    /// [`Orchestrator::model_for`] à chaque tour plutôt que stocké
+    /// directement, ce champ n'étant qu'un identifiant sérialisable. `None`
+    /// pour le Superviseur et tout Superviseur imbriqué (`spawn_expert`),
+    /// toujours exécutés par le modèle par défaut de l'Orchestrateur.
+    /// `#[serde(default)]` pour rester compatible avec les runs persistés
+    /// avant l'introduction de ce champ.
+    #[serde(default)]
+    pub model_id: Option<String>,
     pub history: Vec<ChatMessage>,
     pub steps_taken: u32,
     /// `Some` si ce frame est bloqué au milieu d'un tour : soit en attente
@@ -65,17 +82,28 @@ pub struct AgentFrame {
 }
 
 impl AgentFrame {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         agent_label: String,
         profile_id: Option<String>,
         system_prompt: String,
         tool_names: Vec<String>,
         max_steps: u32,
+        model_id: Option<String>,
+        context_snapshot: &str,
         task: &str,
     ) -> Self {
         let mut history = Vec::new();
         if !system_prompt.trim().is_empty() {
             history.push(ChatMessage::system(system_prompt.clone()));
+        }
+        // Instantané de l'état courant du projet (voir
+        // `crate::ports::ContextSnapshotPort`), inséré comme un message
+        // système distinct plutôt que concaténé à `system_prompt` : ce champ
+        // reste ainsi la configuration figée du profil/gabarit, indépendante
+        // de l'état du projet au moment de la délégation.
+        if !context_snapshot.trim().is_empty() {
+            history.push(ChatMessage::system(context_snapshot.to_string()));
         }
         history.push(ChatMessage::user(task));
         Self {
@@ -84,13 +112,18 @@ impl AgentFrame {
             system_prompt,
             tool_names,
             max_steps,
+            model_id,
             history,
             steps_taken: 0,
             pending: None,
         }
     }
 
-    /// Frame racine d'une [`OrchestrationRun`] : le Superviseur.
+    /// Frame racine d'une [`OrchestrationRun`] : le Superviseur. Ne reçoit
+    /// pas d'instantané de contexte (voir `crate::ports::ContextSnapshotPort`)
+    /// : l'application hôte compose déjà le contexte du domaine/des
+    /// intentions directement dans `system_prompt` avant l'appel (voir
+    /// `server::editor::ws::build_agent_context`).
     #[must_use]
     pub fn supervisor(
         system_prompt: impl Into<String>,
@@ -104,17 +137,21 @@ impl AgentFrame {
             system_prompt.into(),
             tool_names,
             max_steps,
+            None,
+            "",
             task,
         )
     }
 
-    fn from_profile(profile: &AgentProfile, task: &str) -> Self {
+    fn from_profile(profile: &AgentProfile, context_snapshot: &str, task: &str) -> Self {
         Self::new(
             profile.display_name.clone(),
             Some(profile.id.clone()),
             profile.system_prompt.clone(),
             profile.tool_names.clone(),
             profile.max_steps,
+            profile.model_id.clone(),
+            context_snapshot,
             task,
         )
     }
@@ -125,15 +162,19 @@ impl AgentFrame {
     /// frame racine (`run.stack[0]`, seul frame garanti être le Superviseur)
     /// — pour que cette instance dispose des mêmes capacités de délégation
     /// que lui, mais démarre avec son propre historique et son propre
-    /// compteur de tours, indépendants de `template`.
+    /// compteur de tours, indépendants de `template`. Toujours exécuté par le
+    /// modèle par défaut, même si `template` en porte un (le Superviseur
+    /// racine, seul gabarit possible, n'en porte jamais).
     #[must_use]
-    fn nested_supervisor(template: &AgentFrame, task: &str) -> Self {
+    fn nested_supervisor(template: &AgentFrame, context_snapshot: &str, task: &str) -> Self {
         Self::new(
             template.agent_label.clone(),
             None,
             template.system_prompt.clone(),
             template.tool_names.clone(),
             template.max_steps,
+            None,
+            context_snapshot,
             task,
         )
     }
@@ -294,7 +335,17 @@ fn frame_answer_text(history: &[ChatMessage]) -> String {
 /// (voir `server::editor::ws`), il pilote autant de [`OrchestrationRun`]
 /// qu'il en reçoit, sans conserver lui-même d'état entre deux appels.
 pub struct Orchestrator {
-    model: Arc<dyn LanguageModel>,
+    /// Modèle utilisé par tout frame sans [`AgentFrame::model_id`] (le
+    /// Superviseur, tout Superviseur imbriqué, et tout expert dont le profil
+    /// ne dédie pas de modèle spécifique) — voir [`Self::model_for`].
+    default_model: Arc<dyn LanguageModel>,
+    /// Modèles dédiés à certains profils d'experts, indexés par
+    /// [`AgentProfile::model_id`] — voir [`Self::model_for`]. Résolu une fois
+    /// par l'application hôte à la construction plutôt qu'à chaque tour :
+    /// l'Orchestrateur ne sait pas comment un identifiant se traduit en
+    /// [`LanguageModel`] (déchiffrement de clé API, etc.), il ne fait que
+    /// choisir parmi ceux qu'on lui a fournis.
+    models: HashMap<String, Arc<dyn LanguageModel>>,
     /// Registre complet des outils disponibles pour cette session ; chaque
     /// frame n'en voit qu'un sous-ensemble (voir [`ToolRegistry::subset`]).
     tools: ToolRegistry,
@@ -304,24 +355,58 @@ pub struct Orchestrator {
     /// [`crate::tool::Tool::requires_confirmation`] s'exécutent sans passer
     /// par une confirmation humaine.
     auto_accept: Arc<AtomicBool>,
+    /// Fournit l'instantané de l'état du projet (voir
+    /// [`crate::ports::ContextSnapshotPort`]) injecté dans chaque frame
+    /// délégué (voir [`Self::resolve_delegate_target`]) — `None` si
+    /// l'application hôte n'a pas de projet associé à cette session (aucun
+    /// instantané n'est alors injecté). Réglé via [`Self::with_context_snapshot`]
+    /// plutôt qu'un paramètre de [`Self::new`], pour ne pas casser les
+    /// appelants existants.
+    context_snapshot: Option<Arc<dyn ContextSnapshotPort>>,
 }
 
 impl Orchestrator {
     #[must_use]
     pub fn new(
-        model: Arc<dyn LanguageModel>,
+        default_model: Arc<dyn LanguageModel>,
+        models: HashMap<String, Arc<dyn LanguageModel>>,
         tools: ToolRegistry,
         catalog: Arc<dyn AgentCatalog>,
         observer: Arc<dyn AgentObserver>,
         auto_accept: Arc<AtomicBool>,
     ) -> Self {
         Self {
-            model,
+            default_model,
+            models,
             tools,
             catalog,
             observer,
             auto_accept,
+            context_snapshot: None,
         }
+    }
+
+    /// Fournit la source d'instantané de contexte à injecter dans chaque
+    /// frame délégué (voir [`Self::resolve_delegate_target`]). Sans appel à
+    /// cette méthode, aucun instantané n'est injecté (comportement identique
+    /// à avant son introduction).
+    #[must_use]
+    pub fn with_context_snapshot(mut self, port: Arc<dyn ContextSnapshotPort>) -> Self {
+        self.context_snapshot = Some(port);
+        self
+    }
+
+    /// Modèle à utiliser pour le prochain tour de `frame` : celui dédié à son
+    /// profil (voir [`AgentFrame::model_id`]) s'il est présent dans
+    /// [`Self::models`], sinon [`Self::default_model`] — y compris quand
+    /// `model_id` est renseigné mais ne résout à rien (profil pointant vers
+    /// un modèle supprimé depuis, par ex.) plutôt que d'échouer la tâche.
+    fn model_for(&self, frame: &AgentFrame) -> &Arc<dyn LanguageModel> {
+        frame
+            .model_id
+            .as_deref()
+            .and_then(|id| self.models.get(id))
+            .unwrap_or(&self.default_model)
     }
 
     /// Exécute `run` jusqu'à ce qu'il se termine ([`RunOutcome::Done`]) ou
@@ -354,17 +439,60 @@ impl Orchestrator {
             }
 
             let agent_label = run.stack[frame_index].agent_label.clone();
+            let model = self.model_for(&run.stack[frame_index]).clone();
             let tool_definitions = self
                 .tools
                 .subset(&run.stack[frame_index].tool_names)
                 .definitions();
-            let response = self
+            let mut response = self
                 .run_turn(
+                    &model,
                     &agent_label,
                     &run.stack[frame_index].history,
                     &tool_definitions,
+                    false,
                 )
                 .await?;
+
+            let stayed_silent = response.tool_calls.is_empty()
+                && response.content.as_deref().unwrap_or("").trim().is_empty();
+            let asked_in_free_text = response.tool_calls.is_empty()
+                && response
+                    .content
+                    .as_deref()
+                    .is_some_and(|content| content.trim_end().ends_with('?'))
+                && tool_definitions
+                    .iter()
+                    .any(|tool| INTERACTION_TOOL_NAMES.contains(&tool.name.as_str()));
+
+            if !tool_definitions.is_empty() && (stayed_silent || asked_in_free_text) {
+                // Ni contenu ni appel d'outil (`stayed_silent`), ou question
+                // rédigée en texte libre alors qu'un outil d'interaction
+                // (`ask_user`/`ask_questions`/`request_document`) était
+                // disponible pour la poser dans les règles
+                // (`asked_in_free_text`) : dans les deux cas, jamais une fin
+                // de tour légitime (voir `SUPERVISOR_SYSTEM_PROMPT` /
+                // `server::editor::ws::build_agent_context`, qui imposent un
+                // appel d'outil pour toute interaction avec l'inspecteur). Un
+                // petit modèle local (ex: Qwen 3B/3.5:4b) échoue parfois
+                // silencieusement à produire un appel valide sous
+                // `tool_choice: "auto"` — la même requête sous `"required"`
+                // y parvient de façon fiable — d'où une reprise forcée avant
+                // d'abandonner, plutôt que de terminer l'orchestration sur
+                // une réponse vide ou une question que l'inspecteur ne pourra
+                // pas traiter (ex: pas de zone d'upload pour un document
+                // demandé en texte plutôt que via `request_document`).
+                response = self
+                    .run_turn(
+                        &model,
+                        &agent_label,
+                        &run.stack[frame_index].history,
+                        &tool_definitions,
+                        true,
+                    )
+                    .await?;
+            }
+
             self.observer.on_turn_finished(&agent_label).await;
             run.stack[frame_index].steps_taken += 1;
 
@@ -373,6 +501,12 @@ impl Orchestrator {
             run.stack[frame_index].history.push(response);
 
             if tool_calls.is_empty() {
+                if final_content.as_deref().unwrap_or("").trim().is_empty() {
+                    return Err(AgentError::Model(ModelError::InvalidResponse(
+                        "le modèle n'a produit ni contenu ni appel d'outil".to_string(),
+                    )));
+                }
+
                 if frame_index == 0 {
                     // Le Superviseur a terminé : contrairement à un frame
                     // expert, on ne le dépile pas — son historique complet
@@ -515,15 +649,33 @@ impl Orchestrator {
                  directement avec ce que tu sais déjà plutôt que de déléguer à nouveau"
             ));
         }
+
+        // Récupéré à chaque délégation plutôt qu'une fois par run : les
+        // métadonnées/documents peuvent avoir changé depuis la dernière
+        // délégation (un autre expert vient d'écrire une métadonnée, par
+        // ex.), l'instantané doit donc rester à jour pour l'expert suivant.
+        // Une erreur ne bloque jamais la délégation, seulement l'instantané
+        // (voir `ContextSnapshotPort::snapshot`).
+        let context_snapshot = match &self.context_snapshot {
+            Some(port) => port.snapshot().await.unwrap_or_default(),
+            None => String::new(),
+        };
+
         match &request.target {
             DelegateTarget::Profile(profile_id) => match self.catalog.get(profile_id).await {
-                Ok(Some(profile)) => Ok(AgentFrame::from_profile(&profile, &request.task)),
+                Ok(Some(profile)) => Ok(AgentFrame::from_profile(
+                    &profile,
+                    &context_snapshot,
+                    &request.task,
+                )),
                 Ok(None) => Err(format!("expert inconnu : « {profile_id} »")),
                 Err(error) => Err(error.to_string()),
             },
-            DelegateTarget::Supervisor => {
-                Ok(AgentFrame::nested_supervisor(&run.stack[0], &request.task))
-            }
+            DelegateTarget::Supervisor => Ok(AgentFrame::nested_supervisor(
+                &run.stack[0],
+                &context_snapshot,
+                &request.task,
+            )),
         }
     }
 
@@ -697,17 +849,23 @@ impl Orchestrator {
         }
     }
 
-    /// Consomme le flux d'un tour de modèle jusqu'à son terme, en notifiant
-    /// [`Self::observer`] (labellisé `agent_label`) de chaque fragment de
-    /// réflexion/contenu reçu, et accumule les fragments d'appels d'outils en
-    /// [`ToolCall`]s complets une fois le flux terminé.
+    /// Consomme le flux d'un tour de `model` (voir [`Self::model_for`])
+    /// jusqu'à son terme, en notifiant [`Self::observer`] (labellisé
+    /// `agent_label`) de chaque fragment de réflexion/contenu reçu, et
+    /// accumule les fragments d'appels d'outils en [`ToolCall`]s complets une
+    /// fois le flux terminé. `require_tool_call` est répercuté tel quel sur
+    /// [`LanguageModel::stream`] — voir sa documentation.
     async fn run_turn(
         &self,
+        model: &Arc<dyn LanguageModel>,
         agent_label: &str,
         messages: &[ChatMessage],
         tool_definitions: &[ToolDefinition],
+        require_tool_call: bool,
     ) -> Result<ChatMessage, AgentError> {
-        let mut events = self.model.stream(messages, tool_definitions).await?;
+        let mut events = model
+            .stream(messages, tool_definitions, require_tool_call)
+            .await?;
 
         let mut content = String::new();
         let mut tool_calls: BTreeMap<usize, PartialToolCall> = BTreeMap::new();
@@ -771,12 +929,18 @@ mod tests {
     /// de tours (voir chaque test pour le détail de la séquence attendue).
     struct ScriptedModel {
         responses: std::sync::Mutex<Vec<ChatMessage>>,
+        /// Valeur de `require_tool_call` reçue à chaque appel, dans l'ordre —
+        /// sert à vérifier qu'une reprise après réponse vide (voir
+        /// `retries_with_a_required_tool_call_after_an_empty_turn`) force
+        /// bien `tool_choice: "required"` plutôt que de répéter `"auto"`.
+        require_tool_call_calls: std::sync::Mutex<Vec<bool>>,
     }
 
     impl ScriptedModel {
         fn new(responses: Vec<ChatMessage>) -> Arc<Self> {
             Arc::new(Self {
                 responses: std::sync::Mutex::new(responses),
+                require_tool_call_calls: std::sync::Mutex::new(Vec::new()),
             })
         }
     }
@@ -791,7 +955,12 @@ mod tests {
             &self,
             _messages: &[ChatMessage],
             _tools: &[ToolDefinition],
+            require_tool_call: bool,
         ) -> Result<mpsc::UnboundedReceiver<Result<StreamEvent, ModelError>>, ModelError> {
+            self.require_tool_call_calls
+                .lock()
+                .expect("verrou non empoisonné")
+                .push(require_tool_call);
             let response = self
                 .responses
                 .lock()
@@ -831,6 +1000,19 @@ mod tests {
         }])
     }
 
+    /// Tour sans contenu ni appel d'outil : le symptôme observé avec un petit
+    /// modèle local (ex: Qwen 3B) sous `tool_choice: "auto"` face à un
+    /// système prompt long — voir
+    /// `retries_with_a_required_tool_call_after_an_empty_turn`.
+    fn empty_turn() -> ChatMessage {
+        ChatMessage {
+            role: Role::Assistant,
+            content: None,
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+        }
+    }
+
     struct StaticCatalog(Vec<AgentProfile>);
 
     #[async_trait]
@@ -855,6 +1037,7 @@ mod tests {
                 "spawn_expert".to_string(),
             ],
             max_steps,
+            model_id: None,
         }
     }
 
@@ -879,6 +1062,18 @@ mod tests {
         }
     }
 
+    /// [`ContextSnapshotPort`] de test qui renvoie toujours le même texte,
+    /// pour vérifier qu'il est bien injecté dans chaque frame délégué (voir
+    /// `resolve_delegate_target_injects_the_context_snapshot_into_the_delegated_frame`).
+    struct StaticContextSnapshot(String);
+
+    #[async_trait]
+    impl ContextSnapshotPort for StaticContextSnapshot {
+        async fn snapshot(&self) -> Result<String, ToolError> {
+            Ok(self.0.clone())
+        }
+    }
+
     fn orchestrator(model: Arc<dyn LanguageModel>, catalog: StaticCatalog) -> Orchestrator {
         let profiles = catalog.0.clone();
         let mut tools = ToolRegistry::new();
@@ -888,6 +1083,7 @@ mod tests {
         tools.register(Box::new(LoopTool));
         Orchestrator::new(
             model,
+            HashMap::new(),
             tools,
             Arc::new(catalog),
             Arc::new(NullAgentObserver),
@@ -925,6 +1121,190 @@ mod tests {
             run.stack.len(),
             1,
             "le frame expert doit avoir été dépilé, mais pas le superviseur (historique conservé)"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_expert_profile_with_a_dedicated_model_is_run_by_that_model_not_the_default_one() {
+        // Le Superviseur (modèle par défaut) délègue à Expert A, dont le
+        // profil dédie un modèle spécifique (voir `AgentProfile::model_id`) :
+        // seul ce tour doit être exécuté par le modèle dédié, le Superviseur
+        // restant sur le modèle par défaut avant et après la délégation.
+        let default_model = ScriptedModel::new(vec![
+            tool_call(
+                "call_1",
+                "delegate_to_expert",
+                json!({ "expert_id": "expert_a", "task": "fais x" }),
+            ),
+            final_answer("terminé"),
+        ]);
+        let dedicated_model = ScriptedModel::new(vec![final_answer("réponse dédiée")]);
+
+        let mut profile = expert_a_profile(8);
+        profile.model_id = Some("dedicated".to_string());
+
+        let mut tools = ToolRegistry::new();
+        tools.register(Box::new(DelegateToExpertTool::new(&[profile.clone()])));
+        tools.register(Box::new(SpawnExpertTool));
+        tools.register(Box::new(AskUserTool));
+        let mut models: HashMap<String, Arc<dyn LanguageModel>> = HashMap::new();
+        models.insert("dedicated".to_string(), dedicated_model.clone());
+        let orchestrator = Orchestrator::new(
+            default_model.clone(),
+            models,
+            tools,
+            Arc::new(StaticCatalog(vec![profile])),
+            Arc::new(NullAgentObserver),
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        let mut run = OrchestrationRun::new(AgentFrame::supervisor(
+            "tu es le superviseur",
+            vec!["delegate_to_expert".to_string()],
+            8,
+            "rédige l'acte",
+        ));
+
+        let outcome = orchestrator
+            .drive(&mut run)
+            .await
+            .expect("exécution réussie");
+        assert!(matches!(outcome, RunOutcome::Done(text) if text == "terminé"));
+        assert_eq!(
+            dedicated_model
+                .require_tool_call_calls
+                .lock()
+                .expect("verrou non empoisonné")
+                .len(),
+            1,
+            "le modèle dédié doit avoir été appelé exactement pour le tour de l'expert"
+        );
+        assert_eq!(
+            default_model
+                .require_tool_call_calls
+                .lock()
+                .expect("verrou non empoisonné")
+                .len(),
+            2,
+            "le Superviseur doit rester sur le modèle par défaut avant et après la délégation"
+        );
+    }
+
+    #[tokio::test]
+    async fn retries_with_a_required_tool_call_after_an_empty_turn() {
+        // Reproduit le symptôme observé avec un petit modèle local (Qwen 3B
+        // via Ollama) : sous `tool_choice: "auto"` et un système prompt
+        // long, le premier tour ne produit ni contenu ni appel d'outil ; la
+        // même requête sous `"required"` y parvient de façon fiable. La
+        // reprise forcée doit rattraper ce cas plutôt que de terminer
+        // l'orchestration sur une réponse vide (voir `Orchestrator::drive`).
+        let model = ScriptedModel::new(vec![
+            empty_turn(),
+            tool_call(
+                "call_1",
+                "delegate_to_expert",
+                json!({ "expert_id": "expert_a", "task": "fais x" }),
+            ),
+            final_answer("réponse de l'expert"),
+            final_answer("terminé"),
+        ]);
+        let model_handle = model.clone();
+        let orchestrator = orchestrator(model, StaticCatalog(vec![expert_a_profile(8)]));
+
+        let mut run = OrchestrationRun::new(AgentFrame::supervisor(
+            "tu es le superviseur",
+            vec!["delegate_to_expert".to_string()],
+            8,
+            "rédige l'acte",
+        ));
+
+        let outcome = orchestrator
+            .drive(&mut run)
+            .await
+            .expect("la reprise forcée doit rattraper le tour vide");
+        assert!(matches!(outcome, RunOutcome::Done(text) if text == "terminé"));
+
+        let calls = model_handle
+            .require_tool_call_calls
+            .lock()
+            .expect("verrou non empoisonné");
+        assert_eq!(
+            calls.as_slice(),
+            [false, true, false, false],
+            "le tour vide initial doit être repris avec tool_choice=required"
+        );
+    }
+
+    #[tokio::test]
+    async fn fails_instead_of_completing_silently_when_a_turn_stays_empty_after_retry() {
+        let model = ScriptedModel::new(vec![empty_turn(), empty_turn()]);
+        let orchestrator = orchestrator(model, StaticCatalog(vec![expert_a_profile(8)]));
+
+        let mut run = OrchestrationRun::new(AgentFrame::supervisor(
+            "tu es le superviseur",
+            vec!["delegate_to_expert".to_string()],
+            8,
+            "rédige l'acte",
+        ));
+
+        let error = orchestrator
+            .drive(&mut run)
+            .await
+            .expect_err("un tour toujours vide après reprise ne doit jamais terminer le run");
+        assert!(matches!(
+            error,
+            AgentError::Model(ModelError::InvalidResponse(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn retries_with_a_required_tool_call_after_a_free_text_question() {
+        // Reproduit le symptôme observé avec Qwen : au lieu d'appeler
+        // `ask_user`/`request_document`, le modèle pose sa question en texte
+        // libre — un tour non vide, donc ignoré par la reprise sur tour vide
+        // seule. La reprise forcée doit aussi rattraper ce cas plutôt que de
+        // terminer le run sur une question que l'inspecteur ne peut pas
+        // traiter (pas de formulaire ni de zone d'upload associés).
+        let model = ScriptedModel::new(vec![
+            final_answer("Quelle est la valeur limite d'émission ?"),
+            tool_call(
+                "call_1",
+                "ask_user",
+                json!({ "question": "quelle valeur ?" }),
+            ),
+        ]);
+        let model_handle = model.clone();
+        let orchestrator = orchestrator(model, StaticCatalog(vec![expert_a_profile(8)]));
+
+        let mut run = OrchestrationRun::new(AgentFrame::supervisor(
+            "tu es le superviseur",
+            vec!["ask_user".to_string()],
+            8,
+            "rédige l'acte",
+        ));
+
+        let outcome = orchestrator
+            .drive(&mut run)
+            .await
+            .expect("la reprise forcée doit rattraper la question en texte libre");
+        let (agent_label, question) = match outcome {
+            RunOutcome::Paused {
+                agent_label,
+                request: PauseRequest::Ask { question },
+            } => (agent_label, question),
+            other => panic!("attendu une pause, obtenu {other:?}"),
+        };
+        assert_eq!(agent_label, "Superviseur");
+        assert_eq!(question, "quelle valeur ?");
+
+        let calls = model_handle
+            .require_tool_call_calls
+            .lock()
+            .expect("verrou non empoisonné");
+        assert_eq!(
+            calls.as_slice(),
+            [false, true],
+            "la question en texte libre doit être reprise avec tool_choice=required"
         );
     }
 
@@ -1108,7 +1488,7 @@ mod tests {
             "tâche initiale",
         );
 
-        let nested = AgentFrame::nested_supervisor(&template, "sous-tâche");
+        let nested = AgentFrame::nested_supervisor(&template, "", "sous-tâche");
 
         assert_eq!(nested.agent_label, "Superviseur");
         assert_eq!(nested.profile_id, None);
@@ -1119,6 +1499,83 @@ mod tests {
         assert!(nested.pending.is_none());
         // système + tâche : historique propre, indépendant de `template`.
         assert_eq!(nested.history.len(), 2);
+    }
+
+    #[test]
+    fn from_profile_inserts_a_non_empty_context_snapshot_as_a_separate_system_message() {
+        let profile = expert_a_profile(8);
+
+        let frame = AgentFrame::from_profile(&profile, "installation_nom = X déjà renseignée", "fais x");
+
+        assert_eq!(
+            frame.history.len(),
+            3,
+            "prompt système du profil + instantané de contexte + tâche"
+        );
+        assert_eq!(frame.history[1].role, Role::System);
+        assert_eq!(
+            frame.history[1].content.as_deref(),
+            Some("installation_nom = X déjà renseignée")
+        );
+    }
+
+    #[test]
+    fn from_profile_skips_an_empty_context_snapshot() {
+        let profile = expert_a_profile(8);
+
+        let frame = AgentFrame::from_profile(&profile, "", "fais x");
+
+        assert_eq!(
+            frame.history.len(),
+            2,
+            "prompt système du profil + tâche, pas de message vide pour un instantané absent"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_delegate_target_injects_the_context_snapshot_into_the_delegated_frame() {
+        // L'instantané de contexte (voir `ContextSnapshotPort`) doit
+        // atteindre l'expert délégué, pas seulement le Superviseur racine —
+        // c'est le mécanisme qui corrige le défaut de propagation
+        // (métadonnées/documents déjà connus d'un autre agent, invisibles à
+        // un expert délégué avant ce changement).
+        let model = ScriptedModel::new(vec![
+            tool_call(
+                "call_1",
+                "delegate_to_expert",
+                json!({ "expert_id": "expert_a", "task": "fais x" }),
+            ),
+            tool_call(
+                "call_2",
+                "ask_user",
+                json!({ "question": "quelle valeur ?" }),
+            ),
+        ]);
+        let orchestrator = orchestrator(model, StaticCatalog(vec![expert_a_profile(8)]))
+            .with_context_snapshot(Arc::new(StaticContextSnapshot(
+                "contexte du projet".to_string(),
+            )));
+
+        let mut run = OrchestrationRun::new(AgentFrame::supervisor(
+            "tu es le superviseur",
+            vec!["delegate_to_expert".to_string()],
+            8,
+            "rédige l'acte",
+        ));
+
+        orchestrator
+            .drive(&mut run)
+            .await
+            .expect("exécution réussie jusqu'à la pause de l'expert");
+
+        let expert_frame = &run.stack[1];
+        assert!(
+            expert_frame
+                .history
+                .iter()
+                .any(|message| message.content.as_deref() == Some("contexte du projet")),
+            "l'instantané de contexte doit apparaître dans l'historique de l'expert délégué"
+        );
     }
 
     #[tokio::test]

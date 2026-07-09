@@ -1,9 +1,10 @@
-//! Outils `read_metadata` et `write_metadata`, qui délèguent à
-//! l'application hôte via [`MetadataPort`].
+//! Outils `read_metadata`, `write_metadata` et `search_metadata`, qui
+//! délèguent à l'application hôte via [`MetadataPort`].
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use regex::RegexBuilder;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -116,5 +117,89 @@ impl Tool for WriteMetadataTool {
 
         self.metadata.write(&args.key, args.value).await?;
         Ok(ToolOutput::new("métadonnée mise à jour"))
+    }
+}
+
+#[derive(Deserialize)]
+struct SearchMetadataArguments {
+    query: Option<String>,
+}
+
+/// Outil `search_metadata` : recherche parmi les métadonnées contextuelles
+/// déjà renseignées pour l'acte en cours, par clé (expression régulière,
+/// insensible à la casse). Permet de retrouver une clé sans que l'inspecteur
+/// ou l'agent aient à se souvenir exactement de son nom avant d'appeler
+/// `read_metadata`/`write_metadata`.
+pub struct SearchMetadataTool {
+    metadata: Arc<dyn MetadataPort>,
+}
+
+impl SearchMetadataTool {
+    #[must_use]
+    pub fn new(metadata: Arc<dyn MetadataPort>) -> Self {
+        Self { metadata }
+    }
+}
+
+#[async_trait]
+impl Tool for SearchMetadataTool {
+    fn name(&self) -> &str {
+        "search_metadata"
+    }
+
+    fn description(&self) -> &str {
+        "Recherche parmi les métadonnées contextuelles déjà renseignées pour l'acte en cours \
+         (installation, rubriques ICPE, émissaires...), par clé (expression régulière, insensible \
+         à la casse). Sans le paramètre `query`, liste toutes les métadonnées disponibles. Renvoie \
+         pour chaque métadonnée sa clé et sa valeur."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Motif (expression régulière, insensible à la casse) à rechercher dans la clé des métadonnées ; si absent, liste toutes les métadonnées disponibles"
+                }
+            }
+        })
+    }
+
+    async fn call(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
+        let args: SearchMetadataArguments = serde_json::from_value(arguments)
+            .map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
+
+        let entries = self.metadata.list().await?;
+
+        let matches = match &args.query {
+            Some(pattern) => {
+                let regex = RegexBuilder::new(pattern)
+                    .case_insensitive(true)
+                    .build()
+                    .map_err(|error| {
+                        ToolError::InvalidArguments(format!("motif query invalide : {error}"))
+                    })?;
+                entries
+                    .into_iter()
+                    .filter(|entry| regex.is_match(&entry.key))
+                    .collect::<Vec<_>>()
+            }
+            None => entries,
+        };
+
+        if matches.is_empty() {
+            return Ok(ToolOutput::new(
+                "aucune métadonnée ne correspond à la recherche".to_string(),
+            ));
+        }
+
+        let value = serde_json::json!(
+            matches
+                .into_iter()
+                .map(|entry| serde_json::json!({ "key": entry.key, "value": entry.value }))
+                .collect::<Vec<_>>()
+        );
+        Ok(ToolOutput::new(value.to_string()))
     }
 }

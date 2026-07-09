@@ -13,7 +13,7 @@ use crate::db::Pool;
 use crate::error::StorageError;
 use crate::id;
 use shared::id::ID;
-use shared::model::{AgentRun, AgentRunDocument};
+use shared::model::AgentRun;
 
 fn from_row(row: PgRow) -> Result<AgentRun, StorageError> {
     Ok(AgentRun {
@@ -27,17 +27,6 @@ fn from_row(row: PgRow) -> Result<AgentRun, StorageError> {
         version: row.try_get("version")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
-    })
-}
-
-fn document_from_row(row: PgRow) -> Result<AgentRunDocument, StorageError> {
-    Ok(AgentRunDocument {
-        id: id::column(&row, "id")?,
-        run_id: id::column(&row, "run_id")?,
-        file_name: row.try_get("file_name")?,
-        mime_type: row.try_get("mime_type")?,
-        bytes: row.try_get("bytes")?,
-        created_at: row.try_get("created_at")?,
     })
 }
 
@@ -139,6 +128,28 @@ pub async fn fail_orphaned_running_runs(pool: &Pool) -> Result<u64, StorageError
     Ok(result.rows_affected())
 }
 
+/// Bascule le run actif `run_id` à `"stopped"` à la demande de l'utilisateur
+/// (voir `ClientMessage::StopAgent`) : pendant de [`fail_orphaned_running_runs`]
+/// pour un arrêt volontaire plutôt qu'un abandon détecté au redémarrage du
+/// serveur. Conserve `stack`/`final_answer` tels quels — seule la tâche Tokio
+/// qui pilotait l'orchestration est interrompue (voir
+/// `server::editor::state::EditorRoom::agent_task`), jamais rejouée. N'a
+/// d'effet que si `version` correspond encore à la valeur lue et que le run
+/// est toujours `running`/`paused`, pour ne pas écraser une issue légitime
+/// (`done`/`failed`) déjà persistée entretemps par la tâche elle-même.
+pub async fn stop_run(pool: &Pool, run_id: &ID, version: i32) -> Result<AgentRun, StorageError> {
+    let row = sqlx::query(
+        "UPDATE agent_runs SET status = 'stopped', version = version + 1, updated_at = now() \
+         WHERE id = $1 AND version = $2 AND status IN ('running', 'paused') RETURNING *",
+    )
+    .bind(id::encode(run_id))
+    .bind(version)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(StorageError::Conflict)?;
+    from_row(row)
+}
+
 /// Persiste l'avancement d'un run : n'a d'effet que si `version` correspond
 /// encore à la valeur en base (verrou optimiste), pour détecter une reprise
 /// concurrente plutôt que d'écraser silencieusement l'état d'une
@@ -166,42 +177,4 @@ pub async fn save_run(
     .await?
     .ok_or(StorageError::Conflict)?;
     from_row(row)
-}
-
-/// Enregistre un document uploadé par l'inspecteur en réponse à une pause de
-/// type `request_document`, rattaché à `run_id`.
-pub async fn store_document(
-    pool: &Pool,
-    run_id: &ID,
-    file_name: &str,
-    mime_type: &str,
-    bytes: Vec<u8>,
-) -> Result<AgentRunDocument, StorageError> {
-    let new_id = shared::id::generate_id();
-    let row = sqlx::query(
-        "INSERT INTO agent_run_documents (id, run_id, file_name, mime_type, bytes) \
-         VALUES ($1, $2, $3, $4, $5) RETURNING *",
-    )
-    .bind(id::encode(&new_id))
-    .bind(id::encode(run_id))
-    .bind(file_name)
-    .bind(mime_type)
-    .bind(bytes)
-    .fetch_one(pool)
-    .await?;
-    document_from_row(row)
-}
-
-/// Relit un document précédemment stocké via [`store_document`], pour
-/// l'outil `read_document` de l'agent.
-pub async fn fetch_document(
-    pool: &Pool,
-    document_id: &ID,
-) -> Result<AgentRunDocument, StorageError> {
-    let row = sqlx::query("SELECT * FROM agent_run_documents WHERE id = $1")
-        .bind(id::encode(document_id))
-        .fetch_optional(pool)
-        .await?
-        .ok_or(StorageError::NotFound)?;
-    document_from_row(row)
 }

@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use agent::ToolError;
 use agent::ports::{
-    DocumentContent, DocumentContentPort, IntentionPort, IntentionSummary, LegalActEditorPort,
-    ValidationReport,
+    ContextSnapshotPort, DocumentContent, DocumentContentPort, DocumentRef, IntentionPort,
+    IntentionSummary, LegalActEditorPort, MetadataEntry, MetadataPort, ValidationReport,
 };
 use agent::{AgentObserver, ToolCall};
 use content::{List, ListItem, ListMarker, Span};
@@ -328,6 +328,105 @@ impl IntentionPort for WsIntentions {
         .map_err(|error| ToolError::Other(error.to_string()))?;
         self.audit("remove", intention_id).await;
         Ok(())
+    }
+}
+
+/// Implémentation de [`MetadataPort`] qui lit/écrit les métadonnées
+/// contextuelles du projet `legal_act_id` dans `storage::legal_act_metadata`,
+/// en journalisant chaque écriture comme le fait [`WsIntentions`] pour les
+/// intentions : seule l'écriture est journalisée (une lecture n'a pas
+/// d'effet de bord à tracer). Diffuse aussi chaque écriture sur
+/// [`EditorRoom::agent_events`] (voir [`Self::write`]) pour que les
+/// `ProjectMetadataPanel` ouverts sur la salle se resynchronisent en temps
+/// réel (voir `shared::broadcast::MetadataChangedEvent`), au même titre que
+/// [`WsUserInteraction`] pour la progression de l'agent.
+pub struct WsMetadata {
+    pool: storage::Pool,
+    legal_act_id: ID,
+    author_id: ID,
+    agent_events: broadcast::Sender<String>,
+}
+
+impl WsMetadata {
+    #[must_use]
+    pub fn new(
+        pool: storage::Pool,
+        legal_act_id: ID,
+        author_id: ID,
+        agent_events: broadcast::Sender<String>,
+    ) -> Self {
+        Self {
+            pool,
+            legal_act_id,
+            author_id,
+            agent_events,
+        }
+    }
+
+    fn broadcast(&self, event: shared::broadcast::MetadataChangedEvent) {
+        if let Ok(text) = serde_json::to_string(&ServerMessage::MetadataChanged(event)) {
+            let _ = self.agent_events.send(text);
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl MetadataPort for WsMetadata {
+    async fn read(&self, key: &str) -> Result<Option<Value>, ToolError> {
+        let entry = storage::legal_act_metadata::get_metadata(&self.pool, &self.legal_act_id, key)
+            .await
+            .map_err(|error| ToolError::Other(error.to_string()))?;
+        Ok(entry.map(|entry| entry.value))
+    }
+
+    async fn write(&self, key: &str, value: Value) -> Result<(), ToolError> {
+        let entry =
+            storage::legal_act_metadata::upsert_metadata(&self.pool, &self.legal_act_id, key, value)
+                .await
+                .map_err(|error| ToolError::Other(error.to_string()))?;
+
+        let _ = storage::audit_log::record_audit_event(
+            &self.pool,
+            shared::model::CreateAuditEvent {
+                actor_id: Some(self.author_id),
+                actor_ip: None,
+                action: "write".to_string(),
+                resource_type: "legal_act_metadata".to_string(),
+                resource_id: Some(self.legal_act_id),
+                details: Some(serde_json::json!({ "key": key })),
+            },
+        )
+        .await;
+
+        // Une création laisse `created_at`/`updated_at` égaux (tous deux
+        // fixés par le `now()` de l'unique `INSERT` de la ligne, voir
+        // `storage::legal_act_metadata::upsert_metadata`) ; une mise à jour
+        // les distingue, `updated_at` seul étant rafraîchi.
+        let kind = if entry.created_at == entry.updated_at {
+            shared::broadcast::MetadataChangeKind::Created
+        } else {
+            shared::broadcast::MetadataChangeKind::Updated
+        };
+        self.broadcast(shared::broadcast::MetadataChangedEvent {
+            key: key.to_string(),
+            kind,
+            by_agent: true,
+            actor_id: Some(self.author_id.to_string()),
+        });
+        Ok(())
+    }
+
+    async fn list(&self) -> Result<Vec<MetadataEntry>, ToolError> {
+        let entries = storage::legal_act_metadata::list_metadata(&self.pool, &self.legal_act_id)
+            .await
+            .map_err(|error| ToolError::Other(error.to_string()))?;
+        Ok(entries
+            .into_iter()
+            .map(|entry| MetadataEntry {
+                key: entry.key,
+                value: entry.value,
+            })
+            .collect())
     }
 }
 
@@ -871,9 +970,7 @@ fn check_structure(body: &YrsBody, node: BodyNodeId, errors: &mut Vec<String>) {
 /// Relaie à tous les clients websocket connectés à la salle les réflexions
 /// du modèle et les appels d'outils que l'orchestration déclenche (voir
 /// [`AgentObserver`]), pour affichage dans `agent::AgentPanel` au fil de
-/// l'eau plutôt qu'une fois la tâche entièrement terminée, et lit le contenu
-/// des documents précédemment fournis par l'inspecteur (voir
-/// [`DocumentContentPort`]).
+/// l'eau plutôt qu'une fois la tâche entièrement terminée.
 ///
 /// Contrairement à l'ancienne implémentation, cette struct ne relaie plus
 /// elle-même les questions de l'agent ni n'attend leur réponse en bloquant :
@@ -891,13 +988,12 @@ fn check_structure(body: &YrsBody, node: BodyNodeId, errors: &mut Vec<String>) {
 /// d'une tâche déjà en cours, plutôt que de la perdre silencieusement.
 pub struct WsUserInteraction {
     agent_events: broadcast::Sender<String>,
-    pool: storage::Pool,
 }
 
 impl WsUserInteraction {
     #[must_use]
-    pub fn new(agent_events: broadcast::Sender<String>, pool: storage::Pool) -> Self {
-        Self { agent_events, pool }
+    pub fn new(agent_events: broadcast::Sender<String>) -> Self {
+        Self { agent_events }
     }
 
     /// Sérialise puis diffuse `message` à tous les pairs connectés à la
@@ -914,22 +1010,152 @@ impl WsUserInteraction {
     }
 }
 
+/// Implémentation de [`DocumentContentPort`] adossée aux documents du projet
+/// `legal_act_id` (voir `storage::legal_act_document`, migration
+/// `0020_legal_act_documents`) : ces documents sont désormais rattachés au
+/// projet lui-même plutôt qu'à une session de conversation avec l'agent,
+/// pour rester disponibles d'une session à l'autre et être administrables
+/// depuis le panneau « Fichiers » de l'éditeur (voir
+/// `app::pages::project_documents::ProjectFilesPanel`).
+pub struct WsDocuments {
+    pool: storage::Pool,
+    legal_act_id: ID,
+}
+
+impl WsDocuments {
+    #[must_use]
+    pub fn new(pool: storage::Pool, legal_act_id: ID) -> Self {
+        Self { pool, legal_act_id }
+    }
+}
+
 #[async_trait::async_trait]
-impl DocumentContentPort for WsUserInteraction {
+impl DocumentContentPort for WsDocuments {
     async fn fetch_content(&self, document_id: &str) -> Result<DocumentContent, ToolError> {
         let id: ID = document_id.parse().map_err(|_| {
             ToolError::InvalidArguments(format!("identifiant de document invalide : {document_id}"))
         })?;
-        let document = storage::agent_run::fetch_document(&self.pool, &id)
+        let document = storage::legal_act_document::fetch_document(&self.pool, &id)
             .await
             .map_err(|_| {
                 ToolError::InvalidArguments(format!("document introuvable : {document_id}"))
             })?;
+        // Empêche un document d'un autre projet d'être relu en falsifiant
+        // simplement `document_id` : les identifiants sont générés
+        // aléatoirement (voir `shared::id::generate_id`) mais rien ne les lie
+        // syntaxiquement à un projet, cette vérification est donc la seule
+        // barrière.
+        if document.legal_act_id != self.legal_act_id {
+            return Err(ToolError::InvalidArguments(format!(
+                "document introuvable : {document_id}"
+            )));
+        }
         Ok(DocumentContent {
             bytes: document.bytes,
             mime_type: document.mime_type,
             file_name: document.file_name,
         })
+    }
+
+    async fn list_documents(&self) -> Result<Vec<DocumentRef>, ToolError> {
+        let documents =
+            storage::legal_act_document::list_documents_for_legal_act(&self.pool, &self.legal_act_id)
+                .await
+                .map_err(|error| ToolError::Other(error.to_string()))?;
+
+        Ok(documents
+            .into_iter()
+            .map(|document| DocumentRef {
+                id: document.id.to_string(),
+                file_name: document.file_name,
+                mime_type: document.mime_type,
+                label: document.label,
+            })
+            .collect())
+    }
+}
+
+/// Implémentation de [`ContextSnapshotPort`] adossée au projet
+/// `legal_act_id` : compose, à chaque appel, un instantané texte du contexte
+/// du domaine (`domain.agent_context`, qui peut aussi porter le vocabulaire
+/// de clés de métadonnées attendu — voir `app::pages::admin::domains`), des
+/// métadonnées déjà renseignées et des documents déjà fournis. Consommé par
+/// `agent::orchestration::Orchestrator::resolve_delegate_target` à chaque
+/// délégation : sans cet instantané, un expert délégué ne voit ni le
+/// contexte métier ni ce que d'autres agents ont déjà écrit dans la même
+/// tâche, et ne le découvre qu'en appelant lui-même
+/// `search_metadata`/`search_documents` — ce qu'il ne fait pas toujours,
+/// menant à des clés de métadonnées ou des références de documents
+/// dupliquées d'un agent à l'autre.
+pub struct WsContextSnapshot {
+    pool: storage::Pool,
+    legal_act_id: ID,
+}
+
+impl WsContextSnapshot {
+    #[must_use]
+    pub fn new(pool: storage::Pool, legal_act_id: ID) -> Self {
+        Self { pool, legal_act_id }
+    }
+}
+
+#[async_trait::async_trait]
+impl ContextSnapshotPort for WsContextSnapshot {
+    async fn snapshot(&self) -> Result<String, ToolError> {
+        let mut sections = Vec::new();
+
+        if let Ok(legal_act) =
+            storage::legal_act::get_legal_act(&self.pool, &self.legal_act_id).await
+            && let Ok(domain) = storage::domain::get_domain(&self.pool, &legal_act.domain_id).await
+            && !domain.agent_context.trim().is_empty()
+        {
+            sections.push(format!(
+                "Contexte du domaine « {} » (peut inclure le vocabulaire de clés de métadonnées \
+                 attendu) :\n{}",
+                domain.name, domain.agent_context
+            ));
+        }
+
+        if let Ok(entries) =
+            storage::legal_act_metadata::list_metadata(&self.pool, &self.legal_act_id).await
+            && !entries.is_empty()
+        {
+            let lines = entries
+                .iter()
+                .map(|entry| format!("- {} = {}", entry.key, entry.value))
+                .collect::<Vec<_>>()
+                .join("\n");
+            sections.push(format!(
+                "Métadonnées déjà renseignées pour ce projet (réutilise ces clés plutôt que \
+                 d'en inventer de nouvelles pour la même information) :\n{lines}"
+            ));
+        }
+
+        if let Ok(documents) = storage::legal_act_document::list_documents_for_legal_act(
+            &self.pool,
+            &self.legal_act_id,
+        )
+        .await
+            && !documents.is_empty()
+        {
+            let lines = documents
+                .iter()
+                .map(|document| {
+                    if document.label.trim().is_empty() {
+                        format!("- {}", document.file_name)
+                    } else {
+                        format!("- {} ({})", document.label, document.file_name)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            sections.push(format!(
+                "Documents déjà disponibles pour ce projet (voir `search_documents` pour les \
+                 retrouver, y compris par leur libellé) :\n{lines}"
+            ));
+        }
+
+        Ok(sections.join("\n\n"))
     }
 }
 
@@ -1004,6 +1230,7 @@ fn to_catalog_profile(stored: shared::model::AgentProfile) -> agent::AgentProfil
         system_prompt: stored.system_prompt,
         tool_names: stored.tool_names,
         max_steps: u32::try_from(stored.max_steps).unwrap_or(1).max(1),
+        model_id: stored.ai_model_id.map(|id| id.to_string()),
     }
 }
 

@@ -1,12 +1,16 @@
-//! Outil `read_document` : extrait le contenu textuel d'un document externe
-//! (PDF, ODT, DOCX, HTML ou texte brut), fourni soit par référence
-//! (`document_id`, obtenu via `request_document`), soit par une URL directe.
+//! Outils de lecture de document : `read_document` extrait le contenu
+//! textuel d'un document externe (PDF, ODT, DOCX, HTML ou texte brut) déjà
+//! fourni par l'inspecteur (référencé par `document_id`, obtenu via
+//! `request_document` ou `search_documents`) ; `fetch_document_by_url` fait
+//! de même pour un document accessible directement par une URL ;
+//! `search_documents` recherche parmi les documents déjà fournis dans la
+//! session.
 
 use std::io::{Cursor, Read};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -16,14 +20,96 @@ use crate::{
     tool::{Tool, ToolOutput},
 };
 
+/// Paramètres de filtrage communs à `read_document` et
+/// `fetch_document_by_url`, pour éviter de renvoyer un texte trop long au
+/// modèle : au plus un des trois peut être fourni.
 #[derive(Deserialize)]
-struct ReadDocumentArguments {
-    document_id: Option<String>,
-    url: Option<String>,
+struct DocumentFilters {
     grep: Option<String>,
     grep_context: Option<usize>,
     sed_range: Option<String>,
     tail: Option<usize>,
+}
+
+impl DocumentFilters {
+    fn validate(&self) -> Result<(), ToolError> {
+        let filter_count = [
+            self.grep.is_some(),
+            self.sed_range.is_some(),
+            self.tail.is_some(),
+        ]
+        .into_iter()
+        .filter(|present| *present)
+        .count();
+        if filter_count > 1 {
+            return Err(ToolError::InvalidArguments(
+                "fournir au plus un des paramètres grep, sed_range ou tail".to_string(),
+            ));
+        }
+        if self.grep_context.is_some() && self.grep.is_none() {
+            return Err(ToolError::InvalidArguments(
+                "grep_context ne peut être utilisé qu'avec grep".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn apply(&self, text: String) -> Result<String, ToolError> {
+        if let Some(pattern) = &self.grep {
+            grep_text(&text, pattern, self.grep_context.unwrap_or(0))
+        } else if let Some(range) = &self.sed_range {
+            sed_range_text(&text, range)
+        } else if let Some(count) = self.tail {
+            Ok(tail_text(&text, count))
+        } else {
+            Ok(text)
+        }
+    }
+}
+
+/// Schéma JSON des propriétés de filtrage partagées par `read_document` et
+/// `fetch_document_by_url` (voir [`DocumentFilters`]), à fusionner dans le
+/// schéma `properties` de chaque outil.
+fn filter_parameters_schema() -> Value {
+    serde_json::json!({
+        "grep": {
+            "type": "string",
+            "description": "Motif (expression régulière) : ne renvoie que les lignes correspondantes, numérotées ; les blocs non contigus sont séparés par une ligne « -- »"
+        },
+        "grep_context": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Nombre de lignes de contexte à inclure avant/après chaque ligne correspondant à `grep` (par défaut 0) ; utilisable uniquement avec `grep`"
+        },
+        "sed_range": {
+            "type": "string",
+            "description": "Plage de lignes à extraire, au format « DEBUT,FIN » (numéros 1-indexés, inclusifs), ex : « 10,25 »"
+        },
+        "tail": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Ne renvoie que les N dernières lignes du texte extrait, numérotées"
+        }
+    })
+}
+
+#[derive(Deserialize)]
+struct ReadDocumentArguments {
+    document_id: String,
+    #[serde(flatten)]
+    filters: DocumentFilters,
+}
+
+#[derive(Deserialize)]
+struct FetchDocumentByUrlArguments {
+    url: String,
+    #[serde(flatten)]
+    filters: DocumentFilters,
+}
+
+#[derive(Deserialize)]
+struct SearchDocumentsArguments {
+    query: Option<String>,
 }
 
 /// Format de document supporté par [`ReadDocumentTool`], déterminé à partir
@@ -62,24 +148,40 @@ impl DocumentFormat {
     }
 }
 
-/// Outil `read_document` : lit un document externe (PDF ou ODT) et en
-/// extrait le texte, pour le rendre disponible à l'agent sans que
-/// l'inspecteur ait à le recopier manuellement.
+/// Détecte le format de `bytes` à partir de `mime_type`/`file_name` puis en
+/// extrait le texte, pour `read_document` comme pour `fetch_document_by_url`.
+async fn extract_text(bytes: &[u8], mime_type: &str, file_name: &str) -> Result<String, ToolError> {
+    let format = DocumentFormat::detect(mime_type, file_name).ok_or_else(|| {
+        ToolError::Other(format!(
+            "format de document non supporté (type MIME : « {mime_type} », fichier : « \
+             {file_name} ») ; seuls PDF, ODT, DOCX, HTML et texte brut sont pris en charge"
+        ))
+    })?;
+
+    match format {
+        DocumentFormat::Pdf => extract_pdf_text(bytes).await,
+        DocumentFormat::Odt => extract_odt_text(bytes),
+        DocumentFormat::Docx => extract_docx_text(bytes),
+        DocumentFormat::Html => extract_html_text(bytes),
+        DocumentFormat::PlainText => extract_plain_text(bytes),
+    }
+}
+
+/// Outil `read_document` : lit un document déjà fourni par l'inspecteur (via
+/// `request_document`, référencé par `document_id`) et en extrait le texte,
+/// pour le rendre disponible à l'agent sans que l'inspecteur ait à le
+/// recopier manuellement.
 pub struct ReadDocumentTool {
     /// `None` si la session n'a pas de moyen de relire un document par
-    /// identifiant (voir `agent::ports::DocumentContentPort`) : seul le
-    /// paramètre `url` reste alors utilisable.
+    /// identifiant (voir `agent::ports::DocumentContentPort`) : l'outil
+    /// échoue alors systématiquement.
     document_content: Option<Arc<dyn DocumentContentPort>>,
-    http_client: reqwest::Client,
 }
 
 impl ReadDocumentTool {
     #[must_use]
     pub fn new(document_content: Option<Arc<dyn DocumentContentPort>>) -> Self {
-        Self {
-            document_content,
-            http_client: reqwest::Client::new(),
-        }
+        Self { document_content }
     }
 }
 
@@ -91,133 +193,218 @@ impl Tool for ReadDocumentTool {
 
     fn description(&self) -> &str {
         "Extrait le texte d'un document externe au format PDF, ODT, DOCX, HTML ou texte brut, \
-         fourni soit par `document_id` (référence obtenue via un appel précédent à \
-         `request_document`), soit par `url` (lien direct vers le fichier). Pour éviter de \
-         renvoyer un texte trop long, le \
-         résultat peut être filtré avec au plus un des paramètres `grep`, `sed_range` ou `tail` \
-         (chaque ligne renvoyée est précédée de son numéro dans le document, pour pouvoir \
-         ensuite cibler une plage avec `sed_range`)."
+         déjà fourni par l'inspecteur et référencé par `document_id` (obtenu via un appel \
+         précédent à `request_document` ou `search_documents`). Pour lire un document accessible \
+         directement par une URL, utiliser `fetch_document_by_url`. Pour éviter de renvoyer un \
+         texte trop long, le résultat peut être filtré avec au plus un des paramètres `grep`, \
+         `sed_range` ou `tail` (chaque ligne renvoyée est précédée de son numéro dans le document, \
+         pour pouvoir ensuite cibler une plage avec `sed_range`)."
     }
 
     fn parameters_schema(&self) -> Value {
+        let mut properties = filter_parameters_schema();
+        properties["document_id"] = serde_json::json!({
+            "type": "string",
+            "description": "Identifiant renvoyé par un appel précédent à `request_document` ou `search_documents`"
+        });
         serde_json::json!({
             "type": "object",
-            "properties": {
-                "document_id": {
-                    "type": "string",
-                    "description": "Identifiant renvoyé par un appel précédent à `request_document`"
-                },
-                "url": {
-                    "type": "string",
-                    "description": "URL directe vers un fichier PDF ou ODT"
-                },
-                "grep": {
-                    "type": "string",
-                    "description": "Motif (expression régulière) : ne renvoie que les lignes correspondantes, numérotées ; les blocs non contigus sont séparés par une ligne « -- »"
-                },
-                "grep_context": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "description": "Nombre de lignes de contexte à inclure avant/après chaque ligne correspondant à `grep` (par défaut 0) ; utilisable uniquement avec `grep`"
-                },
-                "sed_range": {
-                    "type": "string",
-                    "description": "Plage de lignes à extraire, au format « DEBUT,FIN » (numéros 1-indexés, inclusifs), ex : « 10,25 »"
-                },
-                "tail": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": "Ne renvoie que les N dernières lignes du texte extrait, numérotées"
-                }
-            }
+            "properties": properties,
+            "required": ["document_id"]
         })
     }
 
     async fn call(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
         let args: ReadDocumentArguments = serde_json::from_value(arguments)
             .map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
+        args.filters.validate()?;
 
-        let filter_count = [
-            args.grep.is_some(),
-            args.sed_range.is_some(),
-            args.tail.is_some(),
-        ]
-        .into_iter()
-        .filter(|present| *present)
-        .count();
-        if filter_count > 1 {
-            return Err(ToolError::InvalidArguments(
-                "fournir au plus un des paramètres grep, sed_range ou tail".to_string(),
-            ));
-        }
-        if args.grep_context.is_some() && args.grep.is_none() {
-            return Err(ToolError::InvalidArguments(
-                "grep_context ne peut être utilisé qu'avec grep".to_string(),
-            ));
-        }
-
-        let (bytes, mime_type, file_name) = match (args.document_id, args.url) {
-            (Some(_), Some(_)) => {
-                return Err(ToolError::InvalidArguments(
-                    "fournir document_id ou url, pas les deux".to_string(),
-                ));
-            }
-            (Some(document_id), None) => {
-                let port = self.document_content.as_ref().ok_or_else(|| {
-                    ToolError::Other(
-                        "lecture de document par identifiant non disponible sur cette session"
-                            .to_string(),
-                    )
-                })?;
-                let content = port.fetch_content(&document_id).await?;
-                (content.bytes, content.mime_type, content.file_name)
-            }
-            (None, Some(url)) => {
-                let response = self.http_client.get(&url).send().await?;
-                let mime_type = response
-                    .headers()
-                    .get(reqwest::header::CONTENT_TYPE)
-                    .and_then(|value| value.to_str().ok())
-                    .and_then(|value| value.split(';').next())
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string();
-                let bytes = response.bytes().await?.to_vec();
-                (bytes, mime_type, url)
-            }
-            (None, None) => {
-                return Err(ToolError::InvalidArguments(
-                    "fournir document_id ou url".to_string(),
-                ));
-            }
-        };
-
-        let format = DocumentFormat::detect(&mime_type, &file_name).ok_or_else(|| {
-            ToolError::Other(format!(
-                "format de document non supporté (type MIME : « {mime_type} », fichier : « \
-                 {file_name} ») ; seuls PDF, ODT, DOCX, HTML et texte brut sont pris en charge"
-            ))
+        let port = self.document_content.as_ref().ok_or_else(|| {
+            ToolError::Other(
+                "lecture de document par identifiant non disponible sur cette session".to_string(),
+            )
         })?;
+        let content = port.fetch_content(&args.document_id).await?;
 
-        let text = match format {
-            DocumentFormat::Pdf => extract_pdf_text(&bytes).await?,
-            DocumentFormat::Odt => extract_odt_text(&bytes)?,
-            DocumentFormat::Docx => extract_docx_text(&bytes)?,
-            DocumentFormat::Html => extract_html_text(&bytes)?,
-            DocumentFormat::PlainText => extract_plain_text(&bytes)?,
-        };
-
-        let text = if let Some(pattern) = &args.grep {
-            grep_text(&text, pattern, args.grep_context.unwrap_or(0))?
-        } else if let Some(range) = &args.sed_range {
-            sed_range_text(&text, range)?
-        } else if let Some(count) = args.tail {
-            tail_text(&text, count)
-        } else {
-            text
-        };
+        let text = extract_text(&content.bytes, &content.mime_type, &content.file_name).await?;
+        let text = args.filters.apply(text)?;
 
         Ok(ToolOutput::new(text))
+    }
+}
+
+/// Outil `fetch_document_by_url` : récupère un document externe directement
+/// par son URL et en extrait le texte, sans passer par un document déjà
+/// fourni par l'inspecteur (voir `read_document`).
+pub struct FetchDocumentByUrlTool {
+    http_client: reqwest::Client,
+}
+
+impl FetchDocumentByUrlTool {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            http_client: reqwest::Client::new(),
+        }
+    }
+}
+
+impl Default for FetchDocumentByUrlTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for FetchDocumentByUrlTool {
+    fn name(&self) -> &str {
+        "fetch_document_by_url"
+    }
+
+    fn description(&self) -> &str {
+        "Récupère un document externe au format PDF, ODT, DOCX, HTML ou texte brut directement \
+         par une URL (lien direct vers le fichier) et en extrait le texte. Pour lire un document \
+         déjà fourni par l'inspecteur (voir `request_document`) ou retrouvé via \
+         `search_documents`, utiliser plutôt `read_document`. Pour éviter de renvoyer un texte \
+         trop long, le résultat peut être filtré avec au plus un des paramètres `grep`, \
+         `sed_range` ou `tail` (chaque ligne renvoyée est précédée de son numéro dans le document, \
+         pour pouvoir ensuite cibler une plage avec `sed_range`)."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        let mut properties = filter_parameters_schema();
+        properties["url"] = serde_json::json!({
+            "type": "string",
+            "description": "URL directe vers le document à récupérer"
+        });
+        serde_json::json!({
+            "type": "object",
+            "properties": properties,
+            "required": ["url"]
+        })
+    }
+
+    async fn call(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
+        let args: FetchDocumentByUrlArguments = serde_json::from_value(arguments)
+            .map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
+        args.filters.validate()?;
+
+        let response = self.http_client.get(&args.url).send().await?;
+        let mime_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next())
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let bytes = response.bytes().await?.to_vec();
+
+        let text = extract_text(&bytes, &mime_type, &args.url).await?;
+        let text = args.filters.apply(text)?;
+
+        Ok(ToolOutput::new(text))
+    }
+}
+
+/// Outil `search_documents` : recherche par nom de fichier parmi les
+/// documents déjà fournis par l'inspecteur au cours de la session (voir
+/// `request_document`), pour retrouver le `document_id` à passer à
+/// `read_document` sans avoir à se souvenir de tous les documents fournis
+/// jusqu'ici.
+pub struct SearchDocumentsTool {
+    /// `None` si la session n'a pas de moyen de lister les documents fournis
+    /// (voir `agent::ports::DocumentContentPort`) : l'outil échoue alors
+    /// systématiquement.
+    document_content: Option<Arc<dyn DocumentContentPort>>,
+}
+
+impl SearchDocumentsTool {
+    #[must_use]
+    pub fn new(document_content: Option<Arc<dyn DocumentContentPort>>) -> Self {
+        Self { document_content }
+    }
+}
+
+#[async_trait]
+impl Tool for SearchDocumentsTool {
+    fn name(&self) -> &str {
+        "search_documents"
+    }
+
+    fn description(&self) -> &str {
+        "Recherche parmi les documents déjà fournis par l'inspecteur au cours de la session (voir \
+         `request_document`), par nom de fichier OU par libellé (expression régulière, insensible \
+         à la casse : ex. « rapport.*inspection » retrouve un document libellé « rapport \
+         d'inspection ICPE » même s'il est stocké sous un nom de fichier opaque comme \
+         « scan003.pdf »). Sans le paramètre `query`, liste tous les documents disponibles. \
+         Renvoie pour chaque document son `document_id` (à passer à `read_document`), son libellé \
+         s'il en a un, son nom de fichier et son type MIME."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Motif (expression régulière, insensible à la casse) à rechercher dans le nom de fichier ou le libellé des documents ; si absent, liste tous les documents disponibles"
+                }
+            }
+        })
+    }
+
+    async fn call(&self, arguments: Value) -> Result<ToolOutput, ToolError> {
+        let args: SearchDocumentsArguments = serde_json::from_value(arguments)
+            .map_err(|error| ToolError::InvalidArguments(error.to_string()))?;
+
+        let port = self.document_content.as_ref().ok_or_else(|| {
+            ToolError::Other(
+                "recherche parmi les documents fournis non disponible sur cette session"
+                    .to_string(),
+            )
+        })?;
+        let documents = port.list_documents().await?;
+
+        let matches = match &args.query {
+            Some(pattern) => {
+                let regex = RegexBuilder::new(pattern)
+                    .case_insensitive(true)
+                    .build()
+                    .map_err(|error| {
+                        ToolError::InvalidArguments(format!("motif query invalide : {error}"))
+                    })?;
+                documents
+                    .into_iter()
+                    .filter(|document| {
+                        regex.is_match(&document.file_name) || regex.is_match(&document.label)
+                    })
+                    .collect::<Vec<_>>()
+            }
+            None => documents,
+        };
+
+        if matches.is_empty() {
+            return Ok(ToolOutput::new(
+                "aucun document ne correspond à la recherche".to_string(),
+            ));
+        }
+
+        let mut output = String::new();
+        for document in matches {
+            if document.label.trim().is_empty() {
+                output.push_str(&format!(
+                    "{} — {} ({})\n",
+                    document.id, document.file_name, document.mime_type
+                ));
+            } else {
+                output.push_str(&format!(
+                    "{} — {} [{}] ({})\n",
+                    document.id, document.file_name, document.label, document.mime_type
+                ));
+            }
+        }
+        Ok(ToolOutput::new(output))
     }
 }
 

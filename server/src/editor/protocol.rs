@@ -5,6 +5,7 @@
 //! qu'elle déclenche le font.
 
 use serde::{Deserialize, Serialize};
+use shared::broadcast::{DocumentsChangedEvent, MetadataChangedEvent};
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -68,6 +69,14 @@ pub enum ClientMessage {
     /// de [`Self::GetAgentSessionHistory`] qui n'en donne qu'une lecture
     /// simplifiée destinée à l'inspecteur.
     GetSupervisorContext,
+    /// Demande l'arrêt immédiat du run agent en cours pour cette salle (voir
+    /// `crate::editor::state::EditorRoom::agent_task`) : la tâche Tokio qui
+    /// pilote l'orchestration est interrompue à son prochain point d'attente
+    /// et le run est basculé à `"stopped"` (voir `storage::agent_run::stop_run`)
+    /// — contrairement à [`Self::ClearHistory`], la conversation elle-même
+    /// n'est pas effacée, l'inspecteur peut relancer la même tâche. Sans effet
+    /// si aucun run n'est actuellement `running`/`paused` pour cette salle.
+    StopAgent,
 }
 
 #[derive(Debug, Serialize)]
@@ -80,6 +89,10 @@ pub enum ServerMessage {
     AgentDone,
     /// La boucle agentique a échoué (erreur de modèle, outil, etc.).
     AgentError { message: String },
+    /// Le run agent en cours a été interrompu à la demande d'un utilisateur
+    /// (voir [`ClientMessage::StopAgent`]) : distinct de [`Self::AgentError`],
+    /// qui signale un échec plutôt qu'un arrêt volontaire.
+    AgentStopped,
     /// L'agent pose une question ouverte (outil `ask_user`). `agent_label`
     /// identifie le frame à l'origine de la question (`"Superviseur"` ou le
     /// libellé d'un expert délégué, voir `agent::orchestration::AgentFrame`).
@@ -182,6 +195,21 @@ pub enum ServerMessage {
     SupervisorContext {
         entries: Vec<SupervisorContextEntryWire>,
     },
+    /// Diffusé à chaque écriture ou suppression d'une métadonnée du projet,
+    /// par l'agent (voir `agent::tools::metadata::WriteMetadataTool`, via
+    /// [`super::ports::WsMetadata::write`]) ou par un autre utilisateur (voir
+    /// `app::pages::project_metadata::set_project_metadata`/
+    /// `delete_project_metadata`) : permet à tous les
+    /// `ProjectMetadataPanel` ouverts sur la salle de se resynchroniser sans
+    /// recharger la page.
+    MetadataChanged(MetadataChangedEvent),
+    /// Diffusé à chaque ajout ou suppression d'un document du projet, par
+    /// l'agent (réponse à `request_document`, voir
+    /// `crate::editor::ws::decode_pause_answer`) ou par un autre utilisateur
+    /// (voir `app::pages::project_documents::upload_project_document`/
+    /// `delete_project_document`) : permet à tous les `ProjectFilesPanel`
+    /// ouverts sur la salle de se resynchroniser sans recharger la page.
+    DocumentsChanged(DocumentsChangedEvent),
 }
 
 /// Résumé d'une session de conversation passée (voir
