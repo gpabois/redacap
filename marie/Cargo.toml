@@ -1,0 +1,20 @@
+[package]
+name = "marie"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-trait.workspace = true
+shared = { path = "../shared" }
+thiserror = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+libp2p = { version = "0.56.0", features = ["mdns", "tcp", "noise", "yamux", "tokio", "macros", "request-response", "json", "ed25519"] }
+openraft = { version = "0.9.24", features = ["serde", "storage-v2"] }
+futures = "0.3"
+reqwest.workspace = true
+tokio.workspace = true
+reqwest-sse = "0.1.0"
+tokio-stream = "0.1.18"
+async-stream = "0.3.6"
+async-openai = {version = "0.41.1", features = ["_api", "responses", "response-types"]}
