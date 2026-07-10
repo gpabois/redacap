@@ -2,6 +2,8 @@ use shared::id::ID;
 
 use crate::{agent::frame::AgentFrame, tools::ToolCall};
 
+pub type SessionId = ID;
+
 pub struct Session {
     logs: SessionLog,
     frames: Vec<AgentFrame>

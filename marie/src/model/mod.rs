@@ -1,4 +1,5 @@
 use async_openai::{Client, config::OpenAIConfig, error::OpenAIError, types::responses::{CreateResponseArgs, FunctionTool, Tool}};
+use shared::id::ID;
 use thiserror::Error;
 
 use crate::{model::declaration::ModelDeclaration, tools::{ToolCall, ToolSignature}};
@@ -57,6 +58,7 @@ pub async fn execute(decl: ModelDeclaration, tools: &[ToolSignature]) -> Result<
         match tool {
             Tool::Function(function_tool) => {
                 Some(ToolCall {
+                    id : shared::id::generate_id(),
                     name: function_tool.name,
                     parameters: function_tool.parameters
                 })

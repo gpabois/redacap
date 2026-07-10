@@ -7,9 +7,9 @@ edition = "2024"
 async-trait.workspace = true
 shared = { path = "../shared" }
 thiserror = { workspace = true }
+anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-libp2p = { version = "0.56.0", features = ["mdns", "tcp", "noise", "yamux", "tokio", "macros", "request-response", "json", "ed25519"] }
 openraft = { version = "0.9.24", features = ["serde", "storage-v2"] }
 futures = "0.3"
 reqwest.workspace = true
@@ -17,4 +17,39 @@ tokio.workspace = true
 reqwest-sse = "0.1.0"
 tokio-stream = "0.1.18"
 async-stream = "0.3.6"
+tracing.workspace = true
+strum.workspace = true
+strum_macros.workspace = true
+# Network
+libp2p = { version = "0.56.0", 
+    features = [
+        "gossipsub", 
+        "mdns", 
+        "identify",
+        "tcp", 
+        "noise", 
+        "yamux",
+        "tokio", 
+        "macros", 
+        "request-response", 
+        "json", 
+        "ed25519"
+    ] 
+}
+
+
+# IA Model
 async-openai = {version = "0.41.1", features = ["_api", "responses", "response-types"]}
+
+# Cryptography & Secrets
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+ed25519-dalek = "2"
+x25519-dalek = "2"
+rand = "0.8"
+zeroize = { version = "1", features = ["derive"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+ 

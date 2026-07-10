@@ -1,8 +1,10 @@
 use std::ops::Deref;
 
+use serde::{Deserialize, Serialize};
+
 use crate::agent::role::Role;
 
-#[derive(Default)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Context(Vec<ContextEntry>);
 
 impl Deref for Context {
@@ -20,6 +22,7 @@ impl Context {
 
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextEntry {
     pub role: Role,
     pub content: String

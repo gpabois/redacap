@@ -1,3 +1,4 @@
+use libp2p::PeerId;
 use shared::id::ID;
 
 use crate::agent::{context::Context, status::AgentStatus};
@@ -14,5 +15,17 @@ pub struct AgentFrame {
     /// Allowed tools 
     pub allowed_tools: Vec<String>,
     /// Context
-    pub context: Context
+    pub context: Context,
+}
+
+pub struct AgentState {
+    pub frame: AgentFrame,
+    pub lamport_clock: u64,      // ← ordre de causalité
+    pub node_id: PeerId,          // ← briseur d'égalité
+}
+
+pub struct AgentFrameUpdate {
+    pub id: ID,
+    pub previous_version: u64,
+    
 }

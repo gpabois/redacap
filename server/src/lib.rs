@@ -65,6 +65,7 @@ pub async fn run() -> anyhow::Result<()> {
 
     let database_url = std::env::var("DATABASE_URL")?;
     let store = storage::connect(&database_url).await?;
+    
 
     // Purge les runs orphelins d'un précédent processus (voir
     // `Claude.md` § « L'agent IA... » et la doc de
