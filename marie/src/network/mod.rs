@@ -7,15 +7,15 @@ pub mod peer;
 pub mod worker;
 pub mod cp;
 pub mod actor;
+pub mod persistency;
 
 #[derive(NetworkBehaviour)]
 pub struct MarieBehaviour {
     pub worker_gossip: gossipsub::Behaviour,
     pub node_gossip: gossipsub::Behaviour,
-    pub job_negociation: request_response::json::Behaviour<job::JobStealRequest, job::JobStealResponse>,
     pub mdns: mdns::tokio::Behaviour,
     pub identify: identify::Behaviour,
-    pub cp_rpc: cp::rpc::Behaviour
+    pub rpc: cp::rpc::Behaviour
 }
 
 pub type MarieSwarm = Swarm<MarieBehaviour>;
@@ -38,17 +38,12 @@ pub async fn start_swarm<Init: Fn(&mut MarieSwarm)>(kind: NodeKind, init: Init) 
                 gossipsub::MessageAuthenticity::Signed(key.clone()), gossipsub::Config::default()
             ).unwrap();
 
-            let job_negociation = request_response::json::Behaviour::new([
-                (StreamProtocol::new("/marie/job/1.0.0"), request_response::ProtocolSupport::Full)
-                ], request_response::Config::default()
-            );
-
             let cp_rpc = request_response::json::Behaviour::new([
                 (StreamProtocol::new("/marie/control-plane/1.0.0"), request_response::ProtocolSupport::Full)
                 ], request_response::Config::default()
             );
 
-            MarieBehaviour { mdns, identify, worker_gossip, job_negociation, cp_rpc, node_gossip }
+            MarieBehaviour { mdns, identify, worker_gossip, rpc: cp_rpc, node_gossip }
         })?
         .build();
 

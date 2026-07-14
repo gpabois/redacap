@@ -1,5 +1,5 @@
 use libp2p::PeerId;
-use shared::id::ID;
+use crate::id::ID;
 
 use crate::agent::{context::Context, status::AgentStatus};
 
@@ -16,6 +16,10 @@ pub struct AgentFrame {
     pub allowed_tools: Vec<String>,
     /// Context
     pub context: Context,
+    /// Standard input/output
+    pub stdio: String,
+    /// Standard error
+    pub stderr: String
 }
 
 pub struct AgentState {

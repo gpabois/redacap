@@ -1,21 +1,23 @@
-pub mod handler;
 pub mod catalog;
+pub mod client;
+pub mod declaration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use shared::id::ID;
+use crate::id::ID;
 
 use crate::agent::GlobalAgentId;
 
 pub type ToolName = String;
 
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolSignature {
     pub name: ToolName,
     pub description: String,
     pub parameters_schema: Value
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ToolCallScope {
     Global,
     Session(ID)
@@ -35,10 +37,15 @@ pub enum ToolCallError {
     Custom(String)
 }
 
+/// Requête d'exécution d'un tool relayée jusqu'à son exécuteur (voir
+/// `tools::client::ToolClient::call`/`register_executor`) — `agent_id`
+/// identifie l'appelant, pas seulement à titre informatif : un exécuteur
+/// peut s'en servir pour retrouver le contexte de session (voir
+/// `network::worker::session_client::SessionClient`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallRequest {
-    agent_id: GlobalAgentId,
-    call: ToolCall
+    pub agent_id: GlobalAgentId,
+    pub call: ToolCall
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

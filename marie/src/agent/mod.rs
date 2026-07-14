@@ -1,7 +1,12 @@
 use serde::{Deserialize, Serialize};
-use shared::id::ID;
+use crate::id::ID;
 
-use crate::{agent::{context::Context, frame::AgentFrame}, model::{self, ModelError, catalog::ModelCatalog}, tools::{ToolCall, ToolName, catalog::ToolCatalog}};
+use crate::{
+    agent::{context::Context, frame::AgentFrame},
+    model::{self, ModelClient},
+    network::worker::session_client::SessionClient,
+    tools::{ToolCall, client::ToolClient},
+};
 
 pub mod status;
 pub mod frame;
@@ -37,19 +42,16 @@ pub struct AgentSpawnRequest {
 
 pub async fn run(
     frame: &mut AgentFrame,
-    models: &ModelCatalog,
-    tools: &ToolCatalog
-) -> Result<model::ModelResponse, ModelError> {
-    let signatures = frame
-        .allowed_tools
-        .iter()
-        .flat_map(|tool_id| tools.get(tool_id))
-        .map(|tool| tool.signature().clone())
-        .collect::<Vec<_>>();
+    model: &ModelClient,
+    tools: &ToolClient,
+    sessions: &SessionClient,
+) -> Result<model::ModelResponse, anyhow::Error> {
+    let declaration = model.get(frame.model_id.clone()).await?;
 
-    let Some(model) = models.get(&frame.model_id).await else {
-        return Err(ModelError::UnknownModel(frame.model_id.clone()));
-    };
+    let mut signatures = Vec::with_capacity(frame.allowed_tools.len());
+    for name in &frame.allowed_tools {
+        signatures.push(tools.get(name.as_str()).await?.signature);
+    }
 
-    model::execute(model, &signatures).await
+    Ok(model::execute(declaration, &signatures).await?)
 }
