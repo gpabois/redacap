@@ -1,6 +1,7 @@
-use shared::id::ID;
+use serde::{Deserialize, Serialize};
+use crate::id::ID;
 
-#[derive(Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 pub enum AgentStatus {
     #[default]
     Initial,
@@ -11,7 +12,7 @@ pub enum AgentStatus {
     Finished
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum YieldStatus {
     WaitingToolReply {
         tool_call_id: ID

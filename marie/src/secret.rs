@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 use chacha20poly1305::{AeadCore as _, ChaCha20Poly1305, KeyInit as _, Nonce, aead::{self, Aead}};
 use hkdf::{Hkdf, InvalidLength};
+use hmac::{Hmac, Mac};
 use libp2p::PeerId;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -13,10 +14,14 @@ use crate::session::SessionId;
 pub type SecretResult<T> = Result<T, SecretError>;
 pub type SecretKey = [u8; 32];
 
+type HmacSha256 = Hmac<Sha256>;
+
 #[derive(Debug, Error)]
 pub enum SecretError {
     #[error("HKDF expand failed: {0}")]
     HkdfExpandFailed(InvalidLength),
+    #[error("HMAC init failed: {0}")]
+    MacInitFailed(hmac::digest::InvalidLength),
     #[error("Encryption failed: {0}")]
     EncryptionFailed(aead::Error),
     #[error("Decryption failed: {0}")]
@@ -50,13 +55,57 @@ impl SecretManager {
 
         let hkdf = Hkdf::<Sha256>::new(None, self.master_key.as_ref());
         let mut key = [0u8; 32];
-        
+
         hkdf.expand(node_id.to_bytes().as_ref(), &mut key)
             .map_err(HkdfExpandFailed)?;
 
         Ok(key)
     }
+
+    /// Dérive la clé utilisée pour chiffrer un secret *au repos* (voir
+    /// `model::catalog::store`), par opposition à [`Self::derive_node_key`]
+    /// (spécifique à un pair) ou [`Self::derive_session_key`] (spécifique à
+    /// une session) : contexte HKDF fixe, donc identique sur tous les nœuds
+    /// partageant la même master key et stable d'un redémarrage à l'autre
+    /// (contrairement au `PeerId`, régénéré à chaque démarrage — voir
+    /// `network::cp::derive_node_id`). Nécessaire pour qu'un nœud puisse
+    /// déchiffrer, à froid, ce qu'il a lui-même persisté avant redémarrage.
+    pub fn derive_storage_key(&self) -> SecretResult<SecretKey> {
+        use SecretError::HkdfExpandFailed;
+
+        let hkdf = Hkdf::<Sha256>::new(None, self.master_key.as_ref());
+        let mut key = [0u8; 32];
+
+        hkdf.expand(b"marie/at-rest-storage/v1", &mut key)
+            .map_err(HkdfExpandFailed)?;
+
+        Ok(key)
+    }
     
+    /// Calcule la preuve d'appartenance au cluster pour `node_id` sur `nonce` :
+    /// HMAC-SHA256(clé dérivée pour `node_id`, nonce). Toute instance de
+    /// `SecretManager` construite avec la même master key calcule exactement
+    /// la même preuve pour un couple `(node_id, nonce)` donné — la master key
+    /// elle-même ne transite jamais sur le réseau. Utilisée pour authentifier
+    /// automatiquement les nœuds `control plane` du cluster (voir
+    /// `network::actor::NetworkActor`).
+    pub fn prove_membership(&self, node_id: &PeerId, nonce: &[u8]) -> SecretResult<[u8; 32]> {
+        let node_key = self.derive_node_key(node_id)?;
+        let mut mac = <HmacSha256 as Mac>::new_from_slice(&node_key).map_err(SecretError::MacInitFailed)?;
+        mac.update(nonce);
+        Ok(mac.finalize().into_bytes().into())
+    }
+
+    /// Vérifie une preuve produite par [`Self::prove_membership`] pour le
+    /// couple `(node_id, nonce)`. La comparaison est en temps constant
+    /// (déléguée à `hmac::Mac::verify_slice`).
+    pub fn verify_membership(&self, node_id: &PeerId, nonce: &[u8], proof: &[u8]) -> SecretResult<bool> {
+        let node_key = self.derive_node_key(node_id)?;
+        let mut mac = <HmacSha256 as Mac>::new_from_slice(&node_key).map_err(SecretError::MacInitFailed)?;
+        mac.update(nonce);
+        Ok(mac.verify_slice(proof).is_ok())
+    }
+
     /// Dérive une clé par session
     pub fn derive_session_key(
         &self,
@@ -131,7 +180,7 @@ impl Drop for SecretManager {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EncryptedSecret {
     pub ciphertext: Vec<u8>,
     pub nonce: Vec<u8>,

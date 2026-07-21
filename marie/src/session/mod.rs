@@ -1,4 +1,8 @@
-use shared::id::ID;
+pub mod crdt;
+pub mod sync;
+
+use serde::{Deserialize, Serialize};
+use crate::id::ID;
 
 use crate::{agent::frame::AgentFrame, tools::ToolCall};
 
@@ -11,11 +15,13 @@ pub struct Session {
 
 pub struct SessionLogBook(Vec<SessionLog>);
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionLog {
     id: ID,
     data: SessionLogSpec
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SessionLogSpec {
     AgentMessage {
         label: String,

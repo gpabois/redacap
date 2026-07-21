@@ -22,6 +22,12 @@ impl Context {
 
 }
 
+impl From<Vec<ContextEntry>> for Context {
+    fn from(entries: Vec<ContextEntry>) -> Self {
+        Self(entries)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextEntry {
     pub role: Role,
