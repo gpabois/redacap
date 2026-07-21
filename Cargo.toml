@@ -1,8 +1,21 @@
 [workspace]
 resolver = "2"
-members = ["agent","app", "content", "frontend", "dsfr", "legal_act", "server", "shared", "render", "worker", "storage", "cli", "marie"]
+members = [
+    "app", 
+    "content", 
+    "frontend", 
+    "dsfr", 
+    "legal_act", 
+    "server", 
+    "shared", 
+    "render", 
+    "storage", 
+    "cli"
+]
 
 [workspace.dependencies]
+futures-util = "0.3.33"
+marie = { path = "../marie/marie" }
 leptos = { version = "0.8.0" }
 leptos_router = { version = "0.8.0" }
 leptos_ws = { version = "0.9.8" }
@@ -50,6 +63,8 @@ time = "0.3"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 
+georisques-client = "0.1.1"
+legifrance-client = "0.1.0"
 
 # Defines a size-optimized profile for the WASM bundle in release mode
 [profile.wasm-release]

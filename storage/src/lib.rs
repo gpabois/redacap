@@ -12,11 +12,6 @@ mod db;
 mod error;
 mod id;
 
-pub mod agent_profile;
-pub mod agent_run;
-pub mod agent_session;
-pub mod agent_tool_scope;
-pub mod ai_model;
 pub mod audit_log;
 pub mod authority;
 pub mod bootstrap;
@@ -32,7 +27,6 @@ pub mod legal_act_metadata;
 pub mod legal_act_review;
 pub mod oidc_provider;
 pub mod permission;
-pub mod session;
 pub mod user;
 pub mod user_group;
 

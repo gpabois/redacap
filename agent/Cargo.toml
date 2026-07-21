@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow.workspace = true
+futures-util.workspace = true
+marie = {workspace = true, features = ["catalog"]}
+storage = {path = "../storage"}
+georisques-client.workspace = true
+legifrance-client.workspace = true
 dsfr = { path = "../dsfr" }
 async-trait = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }

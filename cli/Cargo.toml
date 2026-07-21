@@ -8,8 +8,8 @@ name = "redacap"
 path = "src/main.rs"
 
 [dependencies]
+marie = {workspace = true, features = ["catalog"]}
 server = { path = "../server" }
-worker = { path = "../worker" }
 storage = { path = "../storage" }
 shared = { path = "../shared" }
 clap.workspace = true
