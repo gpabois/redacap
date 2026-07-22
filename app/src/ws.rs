@@ -29,7 +29,7 @@ use agent::{
     PanelToolCallStatus, SupervisorContextEntry, SupervisorContextToolCall,
 };
 use base64::Engine;
-use legal_act::{Body, BodyNodeId, DirectBody, Review, YrsBody, YrsReview};
+use legal_act::{Body, NodeId, DirectBody, Review, YrsBody, YrsReview};
 use leptos::prelude::*;
 use shared::broadcast::{DocumentsChangedEvent, MetadataChangedEvent};
 use web_sys::wasm_bindgen::JsCast;
@@ -178,7 +178,7 @@ impl RoomHandle {
     /// pour que l'agent puisse le viser via le mot-clé `"selection"` sans
     /// que l'utilisateur ait à connaître ni transmettre son identifiant
     /// technique.
-    pub fn set_selection(&self, node_id: Option<BodyNodeId>) {
+    pub fn set_selection(&self, node_id: Option<NodeId>) {
         self.send(&ClientMessage::SetSelection {
             node_id: node_id.map(|id| id.to_string()),
         });

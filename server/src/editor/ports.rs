@@ -13,7 +13,7 @@ use agent::ports::{
 };
 use agent::{AgentObserver, ToolCall};
 use content::{List, ListItem, ListMarker, Span};
-use legal_act::{BodyNodeId, BodyRead, BodyWrite, NodeKind, NodeSpec, YrsBody};
+use legal_act::{NodeId, BodyAccess, NodeKind, NodeSpec, YrsBody};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use serde_json::Value;
 use shared::id::ID;
@@ -42,7 +42,7 @@ pub struct WsLegalActEditor {
     /// connexion (voir `ClientMessage::SetSelection` côté `crate::ws`),
     /// résolu par les outils de l'agent lorsqu'ils reçoivent le mot-clé
     /// [`SELECTION_KEYWORD`] plutôt qu'un identifiant explicite.
-    selection: Arc<StdMutex<Option<BodyNodeId>>>,
+    selection: Arc<StdMutex<Option<NodeId>>>,
     /// Utilisateur de la connexion à l'origine de la tâche agent en cours,
     /// au nom duquel chaque mutation est journalisée (voir
     /// [`EditorRoom::record_and_broadcast`]).
@@ -53,7 +53,7 @@ impl WsLegalActEditor {
     #[must_use]
     pub fn new(
         room: Arc<EditorRoom>,
-        selection: Arc<StdMutex<Option<BodyNodeId>>>,
+        selection: Arc<StdMutex<Option<NodeId>>>,
         author_id: ID,
     ) -> Self {
         Self {
@@ -85,7 +85,7 @@ impl WsLegalActEditor {
     /// [`SELECTION_KEYWORD`] — ce qui évite d'exposer l'utilisateur aux
     /// identifiants internes des nœuds (l'agent n'a alors besoin ni de les
     /// connaître à l'avance, ni de les lui demander).
-    async fn resolve(&self, raw: &str) -> Result<BodyNodeId, ToolError> {
+    async fn resolve(&self, raw: &str) -> Result<NodeId, ToolError> {
         match raw {
             ROOT_KEYWORD => {
                 let body = self.room.body.lock().await;
@@ -434,7 +434,7 @@ impl MetadataPort for WsMetadata {
 /// text?, children? }`, pour l'outil `read_structure` : `number` n'apparaît
 /// que pour les nœuds numérotés, `text` que pour les nœuds `Plain`, et
 /// `children` que pour les nœuds ayant au moins un enfant.
-fn serialize_node(body: &YrsBody, id: BodyNodeId) -> Value {
+fn serialize_node(body: &YrsBody, id: NodeId) -> Value {
     let kind = body.kind_of(id);
     let mut node = serde_json::json!({ "id": id.to_string(), "kind": kind.to_string() });
 
@@ -461,7 +461,7 @@ fn serialize_node(body: &YrsBody, id: BodyNodeId) -> Value {
 /// pour un `Article`, voir [`legal_act::NodeKind::content_container_kind`])
 /// s'il en a un, sinon `id` lui-même. Évite qu'un contenu généré pour un
 /// `Article` atterrisse dans son `LibelleArticle` plutôt que dans son corps.
-fn content_target(body: &YrsBody, id: BodyNodeId) -> BodyNodeId {
+fn content_target(body: &YrsBody, id: NodeId) -> NodeId {
     body.kind_of(id)
         .content_container_kind()
         .and_then(|container_kind| {
@@ -486,7 +486,7 @@ fn content_target(body: &YrsBody, id: BodyNodeId) -> BodyNodeId {
 /// - un nœud déjà terminal (`Plain` visé directement, par ex. depuis un
 ///   identifiant renvoyé par `read_structure`) garde l'ancien comportement :
 ///   remplacement direct de son texte, sans interprétation Markdown.
-fn fill_leaf(body: &mut YrsBody, id: BodyNodeId, content: &str) -> anyhow::Result<()> {
+fn fill_leaf(body: &mut YrsBody, id: NodeId, content: &str) -> anyhow::Result<()> {
     let target = content_target(body, id);
     let target_kind = body.kind_of(target);
 
@@ -573,9 +573,9 @@ struct InlineStyle {
 /// l'appelant puisse choisir de les aplatir (nœud cible n'acceptant que de
 /// l'inline) ou de les envelopper (nœud cible acceptant des blocs).
 enum MdBlock {
-    Paragraph(Vec<BodyNodeId>),
+    Paragraph(Vec<NodeId>),
     /// Liste ou tableau déjà entièrement construits (non aplatissables).
-    Node(BodyNodeId),
+    Node(NodeId),
 }
 
 type MdEvents<'a> = std::iter::Peekable<std::vec::IntoIter<Event<'a>>>;
@@ -672,7 +672,7 @@ fn parse_blocks(body: &mut YrsBody, events: &mut MdEvents) -> Vec<MdBlock> {
 /// suites de texte consécutif de même style en un seul nœud. S'arrête (sans
 /// le consommer) sur le premier événement qui n'est pas de l'inline reconnu
 /// (fin du bloc englobant, sous-bloc imbriqué...).
-fn parse_inline(body: &mut YrsBody, events: &mut MdEvents) -> Vec<BodyNodeId> {
+fn parse_inline(body: &mut YrsBody, events: &mut MdEvents) -> Vec<NodeId> {
     let mut children = Vec::new();
     let mut style = InlineStyle::default();
     let mut style_stack = Vec::new();
@@ -739,7 +739,7 @@ fn flush_pending(
     body: &mut YrsBody,
     pending: &mut String,
     style: InlineStyle,
-    out: &mut Vec<BodyNodeId>,
+    out: &mut Vec<NodeId>,
 ) {
     if pending.is_empty() {
         return;
@@ -763,7 +763,7 @@ fn flush_pending(
 /// Construit un nœud `List` à partir des `Item` consécutifs, jusqu'au
 /// `TagEnd::List` correspondant (le `Start` a déjà été consommé par
 /// l'appelant).
-fn parse_list(body: &mut YrsBody, events: &mut MdEvents, start: Option<u64>) -> BodyNodeId {
+fn parse_list(body: &mut YrsBody, events: &mut MdEvents, start: Option<u64>) -> NodeId {
     let marker = if start.is_some() {
         ListMarker::Decimal
     } else {
@@ -802,7 +802,7 @@ fn parse_list(body: &mut YrsBody, events: &mut MdEvents, start: Option<u64>) -> 
 /// liste « compacte ». Tout contenu de bloc restant (sous-liste, second
 /// paragraphe...) est consommé puis ignoré, `ListItem` n'acceptant que du
 /// contenu inline (voir [`NodeKind::CHILDREN_TABLE`]).
-fn parse_item(body: &mut YrsBody, events: &mut MdEvents) -> Vec<BodyNodeId> {
+fn parse_item(body: &mut YrsBody, events: &mut MdEvents) -> Vec<NodeId> {
     let children = if matches!(events.peek(), Some(Event::Start(Tag::Paragraph))) {
         events.next();
         let children = parse_inline(body, events);
@@ -840,7 +840,7 @@ fn parse_item(body: &mut YrsBody, events: &mut MdEvents) -> Vec<BodyNodeId> {
 /// Construit un nœud `Table` à partir des lignes (`TableHead`/`TableRow`,
 /// traitées de façon identique, ce modèle de contenu ne distinguant pas
 /// l'en-tête) rencontrées, jusqu'au `TagEnd::Table` correspondant.
-fn parse_table(body: &mut YrsBody, events: &mut MdEvents) -> BodyNodeId {
+fn parse_table(body: &mut YrsBody, events: &mut MdEvents) -> NodeId {
     let table = body.create_node(NodeSpec::Table);
     while let Some(event) = events.peek().cloned() {
         match event {
@@ -863,7 +863,7 @@ fn parse_table(body: &mut YrsBody, events: &mut MdEvents) -> BodyNodeId {
 
 /// Construit un nœud `TableRow` à partir des `TableCell` rencontrées,
 /// jusqu'au `TagEnd::TableHead`/`TagEnd::TableRow` correspondant.
-fn parse_table_row(body: &mut YrsBody, events: &mut MdEvents) -> BodyNodeId {
+fn parse_table_row(body: &mut YrsBody, events: &mut MdEvents) -> NodeId {
     let row = body.create_node(NodeSpec::TableRow);
     while let Some(event) = events.peek().cloned() {
         match event {
@@ -906,15 +906,15 @@ fn parse_table_row(body: &mut YrsBody, events: &mut MdEvents) -> BodyNodeId {
 }
 
 /// Crée un nœud de type `kind` sous `parent` (voir
-/// [`legal_act::BodyWrite::append_node`] pour les invariants respectés :
+/// [`legal_act::BodyAccess::append_node`] pour les invariants respectés :
 /// enfants autorisés, ordre sous Root, feuilles `Plain` obligatoires), et y
 /// insère `content` le cas échéant via [`fill_leaf`].
 fn create_node(
     body: &mut YrsBody,
-    parent: BodyNodeId,
+    parent: NodeId,
     kind: NodeKind,
     content: Option<&str>,
-) -> anyhow::Result<BodyNodeId> {
+) -> anyhow::Result<NodeId> {
     let id = body.append_node(parent, kind.default_spec())?;
     if let Some(content) = content {
         fill_leaf(body, id, content)?;
@@ -923,9 +923,9 @@ fn create_node(
 }
 
 /// Recalcule la numérotation de tous les nœuds numérotés de l'arbre, en
-/// réutilisant l'invariant [`legal_act::BodyWrite::renumber_siblings`] pour
+/// réutilisant l'invariant [`legal_act::BodyAccess::renumber_siblings`] pour
 /// chaque groupe de frères de même type numéroté.
-fn renumber_tree(body: &mut YrsBody, node: BodyNodeId) -> anyhow::Result<()> {
+fn renumber_tree(body: &mut YrsBody, node: NodeId) -> anyhow::Result<()> {
     let mut seen: Vec<NodeKind> = Vec::new();
     for child in body.children_of(node) {
         let kind = body.kind_of(child);
@@ -941,9 +941,9 @@ fn renumber_tree(body: &mut YrsBody, node: BodyNodeId) -> anyhow::Result<()> {
 }
 
 /// Vérifie récursivement les mêmes invariants structurels que
-/// [`legal_act::BodyWrite::append_node`] impose à la construction :
+/// [`legal_act::BodyAccess::append_node`] impose à la construction :
 /// types d'enfants autorisés et ordre des groupes sous `Root`.
-fn check_structure(body: &YrsBody, node: BodyNodeId, errors: &mut Vec<String>) {
+fn check_structure(body: &YrsBody, node: NodeId, errors: &mut Vec<String>) {
     let kind = body.kind_of(node);
     let children = body.children_of(node);
     let mut last_group = 0u8;
@@ -1263,7 +1263,7 @@ mod tests {
         storage::connect_lazy("postgres://localhost/unused").expect("pool paresseux valide")
     }
 
-    fn room_with_article() -> (Arc<EditorRoom>, BodyNodeId) {
+    fn room_with_article() -> (Arc<EditorRoom>, NodeId) {
         let mut body = YrsBody::new();
         let root = body.root();
         let article = body
@@ -1288,7 +1288,7 @@ mod tests {
     /// Feuille `Plain` du corps (`ArticleBody`) d'un article, où le contenu
     /// généré par `fill_section`/`insert_node` doit atterrir en priorité,
     /// par opposition à son `LibelleArticle`.
-    fn article_body_leaf(body: &YrsBody, article: BodyNodeId) -> BodyNodeId {
+    fn article_body_leaf(body: &YrsBody, article: NodeId) -> NodeId {
         let article_body = body
             .children_of(article)
             .into_iter()
@@ -1299,9 +1299,9 @@ mod tests {
 
     /// Concatène le texte de tous les descendants `Plain` de `id`, pour
     /// vérifier le texte rendu d'un nœud sans se soucier de son
-    /// enveloppement éventuel dans des `Span` (`BodyRead::text_of` ne
+    /// enveloppement éventuel dans des `Span` (`BodyAccess::text_of` ne
     /// renvoie du texte que pour un nœud `Plain` pris isolément).
-    fn text_of_subtree(body: &YrsBody, id: BodyNodeId) -> String {
+    fn text_of_subtree(body: &YrsBody, id: NodeId) -> String {
         if body.kind_of(id) == NodeKind::Plain {
             return body.text_of(id);
         }
@@ -1550,7 +1550,7 @@ mod tests {
         let editor = new_editor(&room);
 
         let result = editor
-            .fill_section(&BodyNodeId::new().to_string(), "x")
+            .fill_section(&NodeId::new().to_string(), "x")
             .await;
         assert!(result.is_err());
     }
@@ -1574,7 +1574,7 @@ mod tests {
         assert!(!diff.is_empty());
 
         let body = room.body.lock().await;
-        let id: BodyNodeId = new_id.parse().unwrap();
+        let id: NodeId = new_id.parse().unwrap();
         assert_eq!(body.kind_of(id), NodeKind::Article);
         let leaf = article_body_leaf(&body, id);
         assert_eq!(body.text_of(leaf), "Contenu de l'article");
@@ -1613,7 +1613,7 @@ mod tests {
 
         let body = room.body.lock().await;
         let root = body.root();
-        let id: BodyNodeId = new_id.parse().unwrap();
+        let id: NodeId = new_id.parse().unwrap();
         assert!(body.children_of(root).contains(&id));
     }
 
@@ -1666,7 +1666,7 @@ mod tests {
         let (room, _) = room_with_article();
         let editor = new_editor(&room);
 
-        let result = editor.remove_node(&BodyNodeId::new().to_string()).await;
+        let result = editor.remove_node(&NodeId::new().to_string()).await;
         assert!(result.is_err());
     }
 

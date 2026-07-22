@@ -1,11 +1,11 @@
-//! Rendition du corps d'un acte légal ([`legal_act::traits::node::BodyRead`])
+//! Rendition du corps d'un acte légal ([`legal_act::traits::node::BodyAccess`])
 //! en contenu `<office:text>` d'un `content.xml` ODF.
 
 use std::borrow::Cow;
 use std::io::Write;
 
 use content::{ListMarker, Span};
-use legal_act::{BodyNodeId, BodyRead, NodeKind, NodeSpec};
+use legal_act::{NodeId, BodyAccess, NodeKind, NodeSpec};
 use quick_xml::Writer;
 
 use crate::error::RenderError;
@@ -20,7 +20,7 @@ use crate::odt::xml::{write_element, write_text_run};
 /// invariants structurels de `Root`) reçoit le style
 /// [`first_page_style_name`] pour démarrer sur le master-page
 /// [`s::FIRST_PAGE_MASTER`] plutôt que `Standard`.
-pub(crate) fn render_office_text<W: Write, B: BodyRead>(
+pub(crate) fn render_office_text<W: Write, B: BodyAccess>(
     writer: &mut Writer<W>,
     body: &B,
     first_page_header: bool,
@@ -94,9 +94,9 @@ fn span_style_name(span: &Span) -> String {
     )
 }
 
-fn render_node<W: Write, B: BodyRead>(
+fn render_node<W: Write, B: BodyAccess>(
     body: &B,
-    id: BodyNodeId,
+    id: NodeId,
     writer: &mut Writer<W>,
     first_page: bool,
 ) -> Result<(), RenderError> {
@@ -160,9 +160,9 @@ fn render_node<W: Write, B: BodyRead>(
 
 /// Rend un paragraphe dont les enfants directs sont des nœuds de contenu
 /// en ligne (`Plain`/`Span`) : `Visa`, `Considerant`, `Sur`, `Paragraphe`.
-fn render_paragraph_like<W: Write, B: BodyRead>(
+fn render_paragraph_like<W: Write, B: BodyAccess>(
     body: &B,
-    id: BodyNodeId,
+    id: NodeId,
     style: &str,
     writer: &mut Writer<W>,
 ) -> Result<(), RenderError> {
@@ -173,9 +173,9 @@ fn render_paragraph_like<W: Write, B: BodyRead>(
 
 /// Rend une subdivision numérotée (Titre/Chapitre/Section/Annexe) : un
 /// paragraphe d'en-tête suivi de ses enfants structurels, dans l'ordre.
-fn render_subdivision<W: Write, B: BodyRead>(
+fn render_subdivision<W: Write, B: BodyAccess>(
     body: &B,
-    id: BodyNodeId,
+    id: NodeId,
     style: &str,
     heading: &str,
     label_kind: NodeKind,
@@ -204,9 +204,9 @@ fn render_subdivision<W: Write, B: BodyRead>(
 
 /// Rend un article : en-tête numéroté puis contenu de son `ArticleBody`
 /// (paragraphes, tableaux, listes).
-fn render_article<W: Write, B: BodyRead>(
+fn render_article<W: Write, B: BodyAccess>(
     body: &B,
-    id: BodyNodeId,
+    id: NodeId,
     number: u32,
     style: &str,
     writer: &mut Writer<W>,
@@ -236,9 +236,9 @@ fn render_article<W: Write, B: BodyRead>(
     Ok(())
 }
 
-fn render_table<W: Write, B: BodyRead>(
+fn render_table<W: Write, B: BodyAccess>(
     body: &B,
-    id: BodyNodeId,
+    id: NodeId,
     writer: &mut Writer<W>,
 ) -> Result<(), RenderError> {
     let rows = body.children_of(id);
@@ -269,9 +269,9 @@ fn render_table<W: Write, B: BodyRead>(
     )
 }
 
-fn render_table_row<W: Write, B: BodyRead>(
+fn render_table_row<W: Write, B: BodyAccess>(
     body: &B,
-    id: BodyNodeId,
+    id: NodeId,
     writer: &mut Writer<W>,
 ) -> Result<(), RenderError> {
     write_element(
@@ -287,9 +287,9 @@ fn render_table_row<W: Write, B: BodyRead>(
     )
 }
 
-fn render_table_cell<W: Write, B: BodyRead>(
+fn render_table_cell<W: Write, B: BodyAccess>(
     body: &B,
-    id: BodyNodeId,
+    id: NodeId,
     writer: &mut Writer<W>,
 ) -> Result<(), RenderError> {
     write_element(
@@ -318,9 +318,9 @@ fn render_table_cell<W: Write, B: BodyRead>(
     )
 }
 
-fn render_list<W: Write, B: BodyRead>(
+fn render_list<W: Write, B: BodyAccess>(
     body: &B,
-    id: BodyNodeId,
+    id: NodeId,
     marker: ListMarker,
     start: Option<u32>,
     writer: &mut Writer<W>,
@@ -350,9 +350,9 @@ fn render_list<W: Write, B: BodyRead>(
     )
 }
 
-fn render_inline_children<W: Write, B: BodyRead>(
+fn render_inline_children<W: Write, B: BodyAccess>(
     body: &B,
-    id: BodyNodeId,
+    id: NodeId,
     writer: &mut Writer<W>,
 ) -> Result<(), RenderError> {
     for child in body.children_of(id) {
@@ -361,9 +361,9 @@ fn render_inline_children<W: Write, B: BodyRead>(
     Ok(())
 }
 
-fn render_inline<W: Write, B: BodyRead>(
+fn render_inline<W: Write, B: BodyAccess>(
     body: &B,
-    id: BodyNodeId,
+    id: NodeId,
     writer: &mut Writer<W>,
 ) -> Result<(), RenderError> {
     match body.spec_of(id) {

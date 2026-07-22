@@ -4,7 +4,7 @@ use web_sys::HtmlDocument;
 use web_sys::wasm_bindgen::JsCast;
 
 use super::context::expect_editor_context;
-use crate::BodyNodeId;
+use crate::NodeId;
 
 pub(super) const TOOLBAR_BTN_CLASS: &str = "no-print text-xs border border-teal-600 text-teal-600 rounded px-2 py-0.5 \
      hover:bg-teal-50 cursor-pointer";
@@ -227,7 +227,7 @@ pub(super) fn RichEditableDiv(
     #[prop(optional)] class: &'static str,
     /// Nœud du corps représenté par ce div (pour le suivi du focus contextuel).
     #[prop(optional)]
-    focus_node_id: Option<BodyNodeId>,
+    focus_node_id: Option<NodeId>,
     /// Callback appelé quand Entrée est pressée (annule l'action navigateur).
     #[prop(optional)]
     on_enter: Option<Callback<()>>,

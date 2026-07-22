@@ -59,7 +59,7 @@ use axum::response::{IntoResponse, Response};
 use axum_extra::extract::PrivateCookieJar;
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
-use legal_act::BodyNodeId;
+use legal_act::NodeId;
 use shared::broadcast::{DocumentChangeKind, DocumentsChangedEvent};
 use shared::id::ID;
 use tokio::sync::mpsc;
@@ -404,7 +404,7 @@ async fn handle_socket(
     // connexion (voir `ClientMessage::SetSelection` ci-dessous) : propre à
     // chaque connexion plutôt qu'à la `Room`, puisque deux inspecteurs
     // collaborant sur le même acte peuvent cibler des nœuds différents.
-    let selection: Arc<StdMutex<Option<BodyNodeId>>> = Arc::new(StdMutex::new(None));
+    let selection: Arc<StdMutex<Option<NodeId>>> = Arc::new(StdMutex::new(None));
     let editor: Arc<dyn LegalActEditorPort> = Arc::new(WsLegalActEditor::new(
         room.clone(),
         selection.clone(),
@@ -502,7 +502,7 @@ async fn handle_socket(
                 Ok(ClientMessage::SetSelection { node_id }) => {
                     let parsed = node_id
                         .as_deref()
-                        .and_then(|raw| raw.parse::<BodyNodeId>().ok());
+                        .and_then(|raw| raw.parse::<NodeId>().ok());
                     *selection.lock().expect("verrou non empoisonné") = parsed;
                 }
                 Ok(ClientMessage::ClearHistory) => {

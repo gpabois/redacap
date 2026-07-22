@@ -1,61 +1,66 @@
-use crate::cursor::{Cursor, Selection};
+use std::sync::{Arc, Mutex};
 
-/// Amorce d'un commentaire en cours de composition dans le panneau latéral
-/// (voir [`super::context::EditorContext::pending_comment`] et
-/// [`super::review::ReviewPanel`]) : `selection`/`excerpt` sont renseignés
-/// quand le commentaire est ancré à un extrait de texte (voir le bouton
-/// "Commenter" de [`super::header::ContentToolbar`]), `None` pour un
-/// commentaire général.
-#[derive(Debug, Clone, Default)]
-pub struct PendingComment {
-    pub selection: Option<Selection>,
-    pub excerpt: Option<String>,
+use leptos::reactive::signal::RwSignal;
+use loro::ContainerID;
+
+use crate::{id::NodeId, model::LegalActProject};
+
+pub struct NodeSignal {
+    act: LegalActProject,
+    id: NodeId,
+    signal: RwSignal<u64>
 }
 
-/// Identifiant d'un curseur collaboratif (un par pair connecté).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct CursorId(pub u64);
-
-/// Curseur de l'éditeur d'acte légal (caret + souris).
-#[derive(Debug, Clone, Copy)]
-pub struct EditorCursor {
-    pub id: CursorId,
-    pub caret: Cursor,
-    pub mouse: Cursor,
-    /// Le caret est-il visible (focus actif) ?
-    pub display: bool,
-}
-
-/// État de la sélection de l'éditeur.
-#[derive(Debug, Clone, Default)]
-pub struct EditorSelection {
-    pub state: SelectionState,
-    pub anchor: Option<Cursor>,
-    pub focus: Option<Cursor>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub enum SelectionState {
-    #[default]
-    Idle,
-    Dragging,
-}
-
-impl EditorSelection {
-    pub fn selection(&self) -> Option<Selection> {
-        Some(Selection {
-            anchor: self.anchor?,
-            focus: self.focus?,
-        })
+impl NodeSignal {
+    pub fn get(&self) -> Node {
+        let _ = self.signal().get();
+        self.act.node(&self.id).unwrap()
     }
 
-    /// Corrige l'ordre anchor ≤ focus dans le document.
-    pub fn correct<B: crate::traits::node::BodyRead + ?Sized>(&mut self, body: &B) {
-        if let (Some(anchor), Some(focus)) = (self.anchor, self.focus) {
-            let mut sel = Selection { anchor, focus };
-            sel.correct(body);
-            self.anchor = Some(sel.anchor);
-            self.focus = Some(sel.focus);
+    pub fn children(&self) -> Vec<NodeId> {
+        self.act.children_of(self.get().id())
+    }
+}
+
+#[derive(Clone)]
+pub struct EditorState {
+    act: LegalActProject,
+    signals: Arc<Mutex<HashMap<ContainerID, RwSignal<u64>>>>,
+}
+
+impl EditorState {
+    pub fn new(act: LegalActProject) -> Self {
+        let signals = Arc::new(Mutex::new(HashMap::<ContainerID, RwSignal<u64>>::new()));
+
+        let sigs = signals.clone();
+        
+        act.subscribe_root(Arc::new(move |event| {
+            let map = sigs.lock().unwrap();
+            
+            // On ne réveille QUE les composants abonnés aux conteneurs modifiés
+            for container_diff in &event.events {
+                let id = &container_diff.target;
+                if let Some(signal) = map.get(id) {
+                    signal.update(|v| *v += 1);
+                }
+            }
+        }));
+
+        Self {
+            act, 
+            signals
         }
+        
+    }
+
+    pub fn visas(&self) -> NodeSignal {
+        self.node(&self.act.visas()).unwrap()
+    }
+
+    pub fn node(&self, id: &NodeId) -> Option<NodeSignal> {
+        let container_id = act.node(id)?.container_id();
+        let mut map = self.signals.lock().unwrap();
+        let signal = *map.entry(container_id.clone()).or_insert_with(|| RwSignal::new(0));
+        Some(NodeSignal { act: self.act.clone(), id: id.clone(), signal })
     }
 }

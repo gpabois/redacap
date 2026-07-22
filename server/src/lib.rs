@@ -92,6 +92,15 @@ pub async fn run() -> anyhow::Result<()> {
     let session_key = Key::derive_from(session_secret.as_bytes());
 
     let secret_encryption_key = build_secret_encryption_key();
+    // Même clé que `secret_encryption_key`, chargée dans un
+    // `marie::secret::SecretManager` (voir `state::AppState::secret_manager`)
+    // pour les consommateurs qui chiffrent/déchiffrent via `marie` plutôt
+    // que directement via `shared::crypto` (Légifrance/Géorisques, voir
+    // `app::pages::admin::integrations`).
+    let secret_manager = secret_encryption_key
+        .as_deref()
+        .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+        .map(|key| marie::secret::SecretManager::new(&key));
     let public_base_url = std::env::var("PUBLIC_BASE_URL").ok();
     if secret_encryption_key.is_none() {
         log!(
@@ -118,6 +127,7 @@ pub async fn run() -> anyhow::Result<()> {
         store,
         session_key,
         secret_encryption_key,
+        secret_manager,
         public_base_url,
         oidc_http_client,
         bootstrap_required,
@@ -131,6 +141,7 @@ pub async fn run() -> anyhow::Result<()> {
                 let store = app_state.store.clone();
                 let session_key = app_state.session_key.clone();
                 let secret_encryption_key = app_state.secret_encryption_key.clone();
+                let secret_manager = app_state.secret_manager.clone();
                 let public_base_url = app_state.public_base_url.clone();
                 // Coercition explicite en `Arc<dyn RoomBroadcaster>` : `app`
                 // (qui consomme ce contexte, voir
@@ -143,6 +154,7 @@ pub async fn run() -> anyhow::Result<()> {
                     provide_context(store.clone());
                     provide_context(session_key.clone());
                     provide_context(secret_encryption_key.clone());
+                    provide_context(secret_manager.clone());
                     provide_context(public_base_url.clone());
                     provide_context(room_broadcaster.clone());
                 }

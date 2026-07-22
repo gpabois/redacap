@@ -29,6 +29,7 @@ anyhow.workspace = true
 dotenv.workspace = true
 chrono.workspace = true
 shared = { path = "../shared" }
+marie = { workspace = true, features = ["catalog"] }
 openidconnect.workspace = true
 reqwest.workspace = true
 aes-gcm.workspace = true

@@ -14,8 +14,8 @@ use dsfr::{Button, ButtonGroup, ButtonVariant, Header, SubHeader};
 use super::content::is_list_ordered;
 use super::context::expect_editor_context;
 use super::widgets::{FormatToolbar, TOOLBAR_BTN_CLASS};
-use crate::traits::node::{BodyRead, BodyWrite};
-use crate::{BodyNodeId, NodeKind, NodeSpec};
+use crate::traits::node::BodyAccess;
+use crate::{NodeId, NodeKind, NodeSpec};
 
 /// Identité d'un utilisateur connecté à la salle de collaboration, affichée
 /// sous forme de pastille dans l'en-tête de l'éditeur (voir `app::ws::
@@ -318,7 +318,7 @@ fn CommentSelectionButton() -> impl IntoView {
 }
 
 #[component]
-fn ListContentToolbar(item_id: BodyNodeId) -> impl IntoView {
+fn ListContentToolbar(item_id: NodeId) -> impl IntoView {
     let ctx = expect_editor_context();
     let list_id = ctx
         .body
@@ -376,7 +376,7 @@ fn ListContentToolbar(item_id: BodyNodeId) -> impl IntoView {
                 class=TOOLBAR_BTN_CLASS
                 on:mousedown=move |ev| {
                     ev.prevent_default();
-                    let new_id = ctx.body.try_update(|b| -> Option<BodyNodeId> {
+                    let new_id = ctx.body.try_update(|b| -> Option<NodeId> {
                         let item = b.create_node(NodeSpec::ListItem(content::ListItem::default()));
                         let plain = b.create_node(NodeSpec::Plain(String::new()));
                         b.append_child_unchecked(item, plain).ok()?;
@@ -400,7 +400,7 @@ fn ListContentToolbar(item_id: BodyNodeId) -> impl IntoView {
 }
 
 #[component]
-fn ParagraphContentToolbar(para_id: BodyNodeId) -> impl IntoView {
+fn ParagraphContentToolbar(para_id: NodeId) -> impl IntoView {
     let ctx = expect_editor_context();
     let parent_kind = ctx
         .body
@@ -413,7 +413,7 @@ fn ParagraphContentToolbar(para_id: BodyNodeId) -> impl IntoView {
                 class=TOOLBAR_BTN_CLASS
                 on:mousedown=move |ev| {
                     ev.prevent_default();
-                    let new_id = ctx.body.try_update(|b| -> Option<BodyNodeId> {
+                    let new_id = ctx.body.try_update(|b| -> Option<NodeId> {
                         let new_para = b.create_node(NodeSpec::Paragraphe);
                         let plain = b.create_node(NodeSpec::Plain(String::new()));
                         b.append_child_unchecked(new_para, plain).ok()?;
@@ -429,7 +429,7 @@ fn ParagraphContentToolbar(para_id: BodyNodeId) -> impl IntoView {
                 class=TOOLBAR_BTN_CLASS
                 on:mousedown=move |ev| {
                     ev.prevent_default();
-                    let new_id = ctx.body.try_update(|b| -> Option<BodyNodeId> {
+                    let new_id = ctx.body.try_update(|b| -> Option<NodeId> {
                         let list = b.create_node(NodeSpec::List(Default::default()));
                         let item = b.create_node(NodeSpec::ListItem(content::ListItem::default()));
                         let plain = b.create_node(NodeSpec::Plain(String::new()));
@@ -447,7 +447,7 @@ fn ParagraphContentToolbar(para_id: BodyNodeId) -> impl IntoView {
                 class=TOOLBAR_BTN_CLASS
                 on:mousedown=move |ev| {
                     ev.prevent_default();
-                    let new_id = ctx.body.try_update(|b| -> Option<BodyNodeId> {
+                    let new_id = ctx.body.try_update(|b| -> Option<NodeId> {
                         let list = b.create_node(NodeSpec::List(content::List {
                             marker: content::ListMarker::Decimal,
                             start: None,
@@ -469,7 +469,7 @@ fn ParagraphContentToolbar(para_id: BodyNodeId) -> impl IntoView {
                     class=TOOLBAR_BTN_CLASS
                     on:mousedown=move |ev| {
                         ev.prevent_default();
-                        let new_cell = ctx.body.try_update(|b| -> Option<BodyNodeId> {
+                        let new_cell = ctx.body.try_update(|b| -> Option<NodeId> {
                             let table = b.create_node(NodeSpec::Table);
                             let row = b.create_node(NodeSpec::TableRow);
                             let cell = b.create_node(NodeSpec::TableCell);
@@ -493,7 +493,7 @@ fn ParagraphContentToolbar(para_id: BodyNodeId) -> impl IntoView {
 }
 
 #[component]
-fn TableContentToolbar(cell_id: BodyNodeId) -> impl IntoView {
+fn TableContentToolbar(cell_id: NodeId) -> impl IntoView {
     let ctx = expect_editor_context();
 
     view! {
@@ -502,7 +502,7 @@ fn TableContentToolbar(cell_id: BodyNodeId) -> impl IntoView {
                 class=TOOLBAR_BTN_CLASS
                 on:mousedown=move |ev| {
                     ev.prevent_default();
-                    let first_cell = ctx.body.try_update(|b| -> Option<BodyNodeId> {
+                    let first_cell = ctx.body.try_update(|b| -> Option<NodeId> {
                         let row_id = b.parent_of(cell_id)?;
                         let col_count = b.children_of(row_id).len().max(1);
                         let new_row = b.create_node(NodeSpec::TableRow);

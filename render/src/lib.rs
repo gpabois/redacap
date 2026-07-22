@@ -22,7 +22,7 @@ mod tests {
     use std::io::Cursor;
 
     use legal_act::{
-        Article, Body, BodyNodeId, BodyRead, BodyWrite, Chapitre, DirectBody, LegalActKind,
+        Article, Body, NodeId, BodyAccess, Chapitre, DirectBody, LegalActKind,
         LegalActMeta, LegalActRead, NodeKind, NodeSpec, Titre,
     };
 
@@ -62,7 +62,7 @@ mod tests {
         }
     }
 
-    fn set_plain(body: &mut Body, id: BodyNodeId, text: &str) {
+    fn set_plain(body: &mut Body, id: NodeId, text: &str) {
         let leaf = body.first_leaf_of(id);
         body.insert_text(leaf, 0, text);
     }

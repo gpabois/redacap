@@ -179,6 +179,7 @@ pub struct Span {
     pub italic: bool,
     pub underline: bool,
     pub strikeout: bool,
+    pub text: String,
 }
 
 #[derive(Hash, Debug, Clone, Default)]

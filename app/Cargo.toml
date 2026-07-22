@@ -16,6 +16,7 @@ leptos_axum = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
 axum-extra = { workspace = true, optional = true }
 storage = { path = "../storage", optional = true }
+marie = { workspace = true, features = ["catalog"], optional = true }
 shared = { path = "../shared" }
 web-sys = { workspace = true, features = ["WebSocket", "MessageEvent", "BinaryType", "CloseEvent", "Location", "Window", "HtmlInputElement"] }
 yrs.workspace = true
@@ -30,4 +31,4 @@ pulldown-cmark.workspace = true
 [features]
 default = []
 hydrate = ["leptos/hydrate", "content/hydrate", "legal_act/hydrate", "agent/hydrate", "dsfr/hydrate"]
-ssr = ["leptos/ssr", "leptos_meta/ssr", "leptos_router/ssr", "dep:leptos_axum", "dep:axum", "dep:axum-extra", "dep:storage", "content/ssr", "legal_act/ssr", "agent/ssr", "leptos_ws/ssr", "dsfr/ssr"]
+ssr = ["leptos/ssr", "leptos_meta/ssr", "leptos_router/ssr", "dep:leptos_axum", "dep:axum", "dep:axum-extra", "dep:storage", "dep:marie", "content/ssr", "legal_act/ssr", "agent/ssr", "leptos_ws/ssr", "dsfr/ssr"]

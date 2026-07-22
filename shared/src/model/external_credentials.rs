@@ -4,13 +4,14 @@ use serde::{Deserialize, Serialize};
 use crate::id::ID;
 
 /// Accès configuré à l'API GéoRisques (`agent::tools::GeorisquesClient`),
-/// gérable depuis `/admin/integrations`. L'API `v1` est accessible sans
-/// jeton : `api_key_encrypted` est optionnelle, elle ne fait qu'augmenter le
-/// quota de requêtes.
+/// gérable depuis `/admin/integrations`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GeorisquesCredentials {
-    /// Clé API chiffrée au repos ; `None` si non configurée. Le déchiffrement
-    /// est réservé à `server`.
+    /// Clé API chiffrée au repos avec `marie::secret::SecretManager` (voir
+    /// `app::pages::admin::integrations::encrypt_credential`) : un
+    /// `marie::secret::EncryptedSecret` sérialisé en JSON, pas directement
+    /// le résultat de `shared::crypto::encrypt`. `None` si non configurée.
+    /// Le déchiffrement se fait via `agent::tools::secret::decrypt`.
     pub api_key_encrypted: Option<Vec<u8>>,
     pub updated_at: DateTime<Utc>,
     pub updated_by: Option<ID>,
@@ -31,7 +32,9 @@ pub struct SetGeorisquesCredentials {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LegifranceCredentials {
     pub client_id: Option<String>,
-    /// Secret client chiffré au repos ; le déchiffrement est réservé à `server`.
+    /// Secret client chiffré au repos avec `marie::secret::SecretManager`
+    /// (voir la doc de [`GeorisquesCredentials::api_key_encrypted`], même
+    /// convention de stockage). Déchiffré via `agent::tools::secret::decrypt`.
     pub client_secret_encrypted: Option<Vec<u8>>,
     pub updated_at: DateTime<Utc>,
     pub updated_by: Option<ID>,

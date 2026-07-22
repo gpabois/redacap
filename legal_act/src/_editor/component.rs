@@ -11,8 +11,8 @@ use super::context::{expect_editor_context, provide_editor_context};
 use super::header::{ConnectedUser, EditorHeader};
 use super::review::ReviewPanel;
 use super::widgets::{InlineEditableDiv, TOOLBAR_BTN_CLASS};
-use crate::traits::node::{BodyRead, BodyWrite};
-use crate::{Body, BodyNodeId, NodeKind, NodeSpec, Review};
+use crate::traits::node::BodyAccess;
+use crate::{Body, NodeId, NodeKind, NodeSpec, Review};
 
 /// Largeur initiale du panneau agent IA, en pixels (équivalente à l'ancienne
 /// classe Tailwind fixe `w-80`).
@@ -142,7 +142,7 @@ pub fn LegalActEditor(
     /// mot-clé `"selection"`, sans que l'utilisateur ait à en connaître
     /// l'identifiant technique.
     #[prop(optional)]
-    on_agent_target: Option<Callback<Option<BodyNodeId>>>,
+    on_agent_target: Option<Callback<Option<NodeId>>>,
     /// Initiale du nom affiché de l'utilisateur courant, transmise telle
     /// quelle à [`EditorHeader`] pour la bulle d'avatar menant à `/account`.
     /// `None` la masque (page hôte non authentifiée).
@@ -305,7 +305,7 @@ pub fn LegalActEditor(
 /// nœuds `Titre` du corps (subdivisions numérotées « Titre I », « Titre
 /// II »...), c'est une propriété du document dans son ensemble portée
 /// directement par [`Body::title`]/[`Body::set_title`] plutôt que par un
-/// nœud (voir [`crate::traits::node::BodyRead::title`]).
+/// nœud (voir [`crate::traits::node::BodyAccess::title`]).
 #[component]
 fn EditActTitle() -> impl IntoView {
     let ctx = expect_editor_context();
@@ -449,7 +449,7 @@ fn AgentTargetIndicator() -> impl IntoView {
 /// Supprime `node_id`, et retire le ciblage agent s'il pointait dessus (voir
 /// [`super::context::EditorContext::agent_target`]) — évite qu'une cible
 /// reste accrochée à un nœud qui n'existe plus.
-fn remove_targetable_node(ctx: super::context::EditorContext, node_id: BodyNodeId) {
+fn remove_targetable_node(ctx: super::context::EditorContext, node_id: NodeId) {
     ctx.remove_node_with_comments(node_id);
     if ctx.agent_target.get_untracked() == Some(node_id) {
         ctx.agent_target.set(None);
@@ -462,7 +462,7 @@ fn remove_targetable_node(ctx: super::context::EditorContext, node_id: BodyNodeI
 /// saisir l'identifiant technique du nœud. Un second clic retire le
 /// ciblage.
 #[component]
-fn TargetButton(node_id: BodyNodeId) -> impl IntoView {
+fn TargetButton(node_id: NodeId) -> impl IntoView {
     let ctx = expect_editor_context();
     let active = move || ctx.agent_target.get() == Some(node_id);
 
@@ -487,7 +487,7 @@ fn TargetButton(node_id: BodyNodeId) -> impl IntoView {
 
 // ── Nœuds textuels (Visa / Considérant / Sur) ────────────────────────────────
 
-fn plain_text_signal(node_id: BodyNodeId) -> Signal<String> {
+fn plain_text_signal(node_id: NodeId) -> Signal<String> {
     let ctx = expect_editor_context();
     Signal::derive(move || {
         ctx.body
@@ -502,7 +502,7 @@ fn plain_text_signal(node_id: BodyNodeId) -> Signal<String> {
 /// reconstruit un unique enfant `Plain`. Ne jamais mettre en cache l'enfant
 /// visé au-delà d'un appel : l'agent peut avoir remplacé les enfants de
 /// `node_id` entre deux rendus.
-pub(super) fn save_plain_text(node_id: BodyNodeId, new_text: String) {
+pub(super) fn save_plain_text(node_id: NodeId, new_text: String) {
     let ctx = expect_editor_context();
     ctx.body.update(|b| {
         let children = b.children_of(node_id);
@@ -523,7 +523,7 @@ pub(super) fn save_plain_text(node_id: BodyNodeId, new_text: String) {
 }
 
 #[component]
-fn EditVisa(node_id: BodyNodeId) -> impl IntoView {
+fn EditVisa(node_id: NodeId) -> impl IntoView {
     let ctx = expect_editor_context();
     let text = plain_text_signal(node_id);
 
@@ -546,7 +546,7 @@ fn EditVisa(node_id: BodyNodeId) -> impl IntoView {
 }
 
 #[component]
-fn EditConsiderant(node_id: BodyNodeId) -> impl IntoView {
+fn EditConsiderant(node_id: NodeId) -> impl IntoView {
     let ctx = expect_editor_context();
     let text = plain_text_signal(node_id);
 
@@ -569,7 +569,7 @@ fn EditConsiderant(node_id: BodyNodeId) -> impl IntoView {
 }
 
 #[component]
-fn EditSur(node_id: BodyNodeId) -> impl IntoView {
+fn EditSur(node_id: NodeId) -> impl IntoView {
     let ctx = expect_editor_context();
     let text = plain_text_signal(node_id);
 
@@ -595,7 +595,7 @@ fn EditSur(node_id: BodyNodeId) -> impl IntoView {
 
 /// Dispatcher : redirige vers le composant d'édition selon le type du nœud.
 #[component]
-pub fn EditStructuralNode(node_id: BodyNodeId) -> impl IntoView {
+pub fn EditStructuralNode(node_id: NodeId) -> impl IntoView {
     let ctx = expect_editor_context();
     let kind = ctx.body.with_untracked(|b| b.kind_of(node_id));
     match kind {
@@ -608,7 +608,7 @@ pub fn EditStructuralNode(node_id: BodyNodeId) -> impl IntoView {
 }
 
 #[component]
-fn EditTitre(node_id: BodyNodeId) -> impl IntoView {
+fn EditTitre(node_id: NodeId) -> impl IntoView {
     let ctx = expect_editor_context();
     let number = move || ctx.body.with(|b| b.spec_of(node_id).number().unwrap_or(1));
     let label_id = move || {
@@ -659,7 +659,7 @@ fn EditTitre(node_id: BodyNodeId) -> impl IntoView {
 }
 
 #[component]
-fn EditChapitre(node_id: BodyNodeId) -> impl IntoView {
+fn EditChapitre(node_id: NodeId) -> impl IntoView {
     let ctx = expect_editor_context();
     let number = move || ctx.body.with(|b| b.spec_of(node_id).number().unwrap_or(1));
     let label_id = move || {
@@ -707,7 +707,7 @@ fn EditChapitre(node_id: BodyNodeId) -> impl IntoView {
 }
 
 #[component]
-fn EditSection(node_id: BodyNodeId) -> impl IntoView {
+fn EditSection(node_id: NodeId) -> impl IntoView {
     let ctx = expect_editor_context();
     let number = move || ctx.body.with(|b| b.spec_of(node_id).number().unwrap_or(1));
     let label_id = move || {
@@ -751,7 +751,7 @@ fn EditSection(node_id: BodyNodeId) -> impl IntoView {
 }
 
 #[component]
-fn EditArticle(node_id: BodyNodeId) -> impl IntoView {
+fn EditArticle(node_id: NodeId) -> impl IntoView {
     let ctx = expect_editor_context();
     let number = move || ctx.body.with(|b| b.spec_of(node_id).number().unwrap_or(1));
     let label_id = move || {
@@ -788,7 +788,7 @@ fn EditArticle(node_id: BodyNodeId) -> impl IntoView {
 }
 
 #[component]
-fn EditAnnexe(node_id: BodyNodeId) -> impl IntoView {
+fn EditAnnexe(node_id: NodeId) -> impl IntoView {
     let ctx = expect_editor_context();
     let number = move || ctx.body.with(|b| b.spec_of(node_id).number().unwrap_or(1));
     let label_id = move || {
@@ -835,7 +835,7 @@ fn EditAnnexe(node_id: BodyNodeId) -> impl IntoView {
 
 /// Édition inline du premier enfant `Plain` d'un nœud `Libellé*`.
 #[component]
-pub fn EditLabel(node_id: BodyNodeId) -> impl IntoView {
+pub fn EditLabel(node_id: NodeId) -> impl IntoView {
     let text = plain_text_signal(node_id);
 
     view! {

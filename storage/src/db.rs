@@ -25,7 +25,7 @@ pub fn connect_lazy(database_url: &str) -> Result<Pool, StorageError> {
 
 /// Applique les migrations en attente de `storage/migrations`.
 pub async fn migrate(pool: &Pool) -> Result<(), StorageError> {
-    marie::persistency::postgres::run_migration(pool).await?;;
+    marie::persistency::postgres::run_migrations(pool).await?;
     sqlx::migrate!("./migrations").run(pool).await?;
     Ok(())
 }

@@ -13,9 +13,9 @@ use leptos::prelude::document;
 use web_sys::Element;
 use web_sys::wasm_bindgen::JsCast;
 
-use crate::BodyNodeId;
+use crate::NodeId;
 use crate::cursor::{Cursor, Selection};
-use crate::traits::node::BodyRead;
+use crate::traits::node::BodyAccess;
 
 /// Capture la sélection navigateur courante si elle est non vide et
 /// entièrement comprise dans `boundary` (la racine DOM du
@@ -24,7 +24,7 @@ use crate::traits::node::BodyRead;
 /// de `boundary`, ou si le mapping échoue (nœud `data-plain-id` introuvable).
 pub(super) fn capture_content_selection(
     boundary: &Element,
-    body: &impl BodyRead,
+    body: &impl BodyAccess,
 ) -> Option<(Selection, String)> {
     let sel = document().get_selection().ok()??;
     if sel.is_collapsed() || sel.range_count() == 0 {
@@ -58,7 +58,7 @@ fn cursor_at_start(container: &web_sys::Node, offset: u32) -> Option<Cursor> {
         return cursor_in_text_node(container, offset);
     }
     let el = first_plain_descendant(container)?;
-    let plain_id: BodyNodeId = el.get_attribute("data-plain-id")?.parse().ok()?;
+    let plain_id: NodeId = el.get_attribute("data-plain-id")?.parse().ok()?;
     Some(Cursor {
         node_id: plain_id,
         offset: 0,
@@ -72,7 +72,7 @@ fn cursor_at_end(container: &web_sys::Node, offset: u32) -> Option<Cursor> {
         return cursor_in_text_node(container, offset);
     }
     let el = last_plain_descendant(container)?;
-    let plain_id: BodyNodeId = el.get_attribute("data-plain-id")?.parse().ok()?;
+    let plain_id: NodeId = el.get_attribute("data-plain-id")?.parse().ok()?;
     let full_len = el.text_content().unwrap_or_default().chars().count();
     Some(Cursor {
         node_id: plain_id,
@@ -82,7 +82,7 @@ fn cursor_at_end(container: &web_sys::Node, offset: u32) -> Option<Cursor> {
 
 fn cursor_in_text_node(text_node: &web_sys::Node, utf16_offset: u32) -> Option<Cursor> {
     let parent = text_node.parent_element()?;
-    let plain_id: BodyNodeId = parent.get_attribute("data-plain-id")?.parse().ok()?;
+    let plain_id: NodeId = parent.get_attribute("data-plain-id")?.parse().ok()?;
     let text = text_node.text_content().unwrap_or_default();
     Some(Cursor {
         node_id: plain_id,

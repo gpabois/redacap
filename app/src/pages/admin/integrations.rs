@@ -1,15 +1,29 @@
 //! Page `/admin/integrations` : configuration chiffrée des accès aux API
 //! externes GéoRisques et Légifrance — voir `Claude.md` § Pages de
 //! l'application et `shared::model::{GeorisquesCredentials, LegifranceCredentials}`.
-//! Ces secrets partagent la même clé de chiffrement (`SECRET_ENCRYPTION_KEY`)
-//! que les modèles IA (`/admin/ai-models`) et les fournisseurs OIDC
-//! (`/admin/oidc`).
+//! Ces secrets sont chiffrés au repos avec `marie::secret::SecretManager`
+//! (voir [`encrypt_credential`]), dérivé de la même variable d'environnement
+//! `SECRET_ENCRYPTION_KEY` que les modèles IA (`/admin/ai-models`) et les
+//! fournisseurs OIDC (`/admin/oidc`) — qui continuent, eux, à passer par
+//! `shared::crypto` (AES-256-GCM direct, sans passer par `marie`).
 
 use dsfr::{Alert, Button, ButtonVariant, Input, Severity};
 use leptos::prelude::*;
+use marie::secret::{SecretCodec, SecretManager};
 use serde::{Deserialize, Serialize};
 
 use super::{AdminAccessDenied, AdminHeader, AdminNav, AdminSection, ConfirmButton, admin_context};
+
+/// Chiffre `value` au repos avec la clé de stockage dérivée de `secret` (voir
+/// `marie::secret::SecretManager::derive_storage_key`) — même principe que
+/// `marie::model::catalog::store::StoredModel::encrypt`, appliqué à un
+/// secret isolé plutôt qu'à un modèle entier. Pendant de
+/// `agent::tools::secret::decrypt` côté lecture.
+fn encrypt_credential(secret: &SecretManager, value: &str) -> anyhow::Result<Vec<u8>> {
+    let storage_key = secret.derive_storage_key()?;
+    let encrypted = storage_key.encrypt_str(value)?;
+    Ok(serde_json::to_vec(&encrypted)?)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct IntegrationsStatus {
@@ -45,10 +59,10 @@ async fn set_georisques_api_key_admin(api_key: String) -> Result<(), ServerFnErr
     let pool = expect_context::<storage::Pool>();
     crate::auth::require_admin(&pool, &actor_id).await?;
 
-    let encryption_key = expect_context::<Option<Vec<u8>>>().ok_or_else(|| {
+    let secret = expect_context::<Option<SecretManager>>().ok_or_else(|| {
         ServerFnError::new("chiffrement indisponible (SECRET_ENCRYPTION_KEY absente)")
     })?;
-    let api_key_encrypted = shared::crypto::encrypt(&encryption_key, &api_key)
+    let api_key_encrypted = encrypt_credential(&secret, &api_key)
         .map_err(|_| ServerFnError::new("échec du chiffrement de la clé API"))?;
 
     storage::external_credentials::set_georisques_credentials(
@@ -98,12 +112,12 @@ async fn set_legifrance_credentials_admin(
     }
 
     let client_secret_encrypted = match client_secret.filter(|secret| !secret.is_empty()) {
-        Some(secret) => {
-            let encryption_key = expect_context::<Option<Vec<u8>>>().ok_or_else(|| {
+        Some(client_secret) => {
+            let secret_manager = expect_context::<Option<SecretManager>>().ok_or_else(|| {
                 ServerFnError::new("chiffrement indisponible (SECRET_ENCRYPTION_KEY absente)")
             })?;
             Some(
-                shared::crypto::encrypt(&encryption_key, &secret)
+                encrypt_credential(&secret_manager, &client_secret)
                     .map_err(|_| ServerFnError::new("échec du chiffrement du secret"))?,
             )
         }

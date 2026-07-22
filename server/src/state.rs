@@ -21,6 +21,13 @@ pub struct AppState {
     /// fonctionnalités sont alors indisponibles plutôt que de faire planter le
     /// serveur au démarrage.
     pub secret_encryption_key: Option<Vec<u8>>,
+    /// Gestionnaire de secrets `marie` dérivé de `secret_encryption_key`,
+    /// utilisé pour chiffrer/déchiffrer au repos les identifiants
+    /// Légifrance/Géorisques (voir `app::pages::admin::integrations`,
+    /// `agent::tools::secret`) — même principe que
+    /// `marie::model::catalog::store::StoredModel`. `None` dans les mêmes
+    /// conditions que `secret_encryption_key`.
+    pub secret_manager: Option<marie::secret::SecretManager>,
     /// URL publique de base de l'application (ex. `https://redacap.example.org`),
     /// nécessaire pour construire les `redirect_uri` OIDC. `None` si absente :
     /// l'authentification OIDC est alors indisponible.

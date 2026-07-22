@@ -21,6 +21,7 @@ leptos_router = { version = "0.8.0" }
 leptos_ws = { version = "0.9.8" }
 leptos_axum = { version = "0.8.0" }
 leptos_meta = { version = "0.8.0" }
+loro = "1.13.7"
 axum = { version = "0.8.0" }
 axum-extra = { version = "0.10", features = ["cookie", "cookie-private"] }
 cookie = { version = "0.18", features = ["key-expansion"] }
@@ -62,7 +63,7 @@ base64 = "0.22"
 time = "0.3"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-
+derive_more = "2.1.1"
 georisques-client = "0.1.1"
 legifrance-client = "0.1.0"
 

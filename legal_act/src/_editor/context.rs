@@ -5,9 +5,9 @@ use dsfr::ButtonVariant;
 use leptos::prelude::*;
 
 use super::state::{EditorSelection, PendingComment};
-use crate::traits::node::{BodyRead, BodyWrite};
-use crate::traits::review::{ReviewRead, ReviewWrite};
-use crate::{Body, BodyNodeId, Review};
+use crate::traits::node::BodyAccess;
+use crate::traits::review::ReviewAccess;
+use crate::{Body, NodeId, Review};
 
 /// Action contextuelle injectée dans la zone portail de l'en-tête.
 ///
@@ -54,7 +54,7 @@ pub struct EditorContext {
     /// set_selection`) pour que l'agent puisse viser ce nœud via le mot-clé
     /// `"selection"`, sans jamais exposer d'identifiant technique à
     /// l'utilisateur. Voir [`Self::toggle_agent_target`].
-    pub agent_target: RwSignal<Option<BodyNodeId>>,
+    pub agent_target: RwSignal<Option<NodeId>>,
     /// Actions contextuelles affichées dans la zone portail de l'en-tête.
     /// Les composants enfants écrivent ici ; [`super::header::EditorHeader`] lit.
     pub portal_actions: RwSignal<Vec<PortalAction>>,
@@ -68,12 +68,12 @@ pub struct EditorContext {
     /// Identifiant du nœud de contenu dont le [`super::widgets::RichEditableDiv`]
     /// a actuellement le focus clavier. `None` si aucun. Utilisé par
     /// [`super::header::ContentToolbar`] pour afficher des boutons contextuels.
-    pub content_focus_node: RwSignal<Option<BodyNodeId>>,
+    pub content_focus_node: RwSignal<Option<NodeId>>,
     /// Requête de focus programmatique : `Some((node_id, at_end))` demande au
     /// [`super::widgets::RichEditableDiv`] dont `focus_node_id == node_id` de
     /// prendre le focus. Quand `at_end` est vrai, le curseur est placé à la
     /// fin du contenu (utile après une fusion).
-    pub content_focus_request: RwSignal<Option<(BodyNodeId, bool)>>,
+    pub content_focus_request: RwSignal<Option<(NodeId, bool)>>,
     /// Identité affichée de l'utilisateur courant, utilisée comme auteur des
     /// commentaires qu'il crée et comme clé de permission (suppression
     /// réservée à l'auteur). `None` tant que l'utilisateur n'est pas
@@ -81,7 +81,7 @@ pub struct EditorContext {
     pub current_user: RwSignal<Option<String>>,
     /// `true` si l'utilisateur courant a les droits d'édition sur ce projet.
     /// Un commentaire peut être résolu par son auteur ou par un rédacteur
-    /// (voir [`crate::traits::review::ReviewWrite::try_resolve_comment`]).
+    /// (voir [`crate::traits::review::ReviewAccess::try_resolve_comment`]).
     pub can_edit: RwSignal<bool>,
     /// Amorce du commentaire en cours de composition dans le panneau
     /// latéral (voir [`super::review::ReviewPanel`]) ; `None` si le
@@ -121,13 +121,13 @@ impl EditorContext {
 
     /// Demande le focus programmatique sur `node_id`.
     /// Si `at_end` est vrai, le curseur est placé à la fin du contenu.
-    pub fn request_focus(&self, node_id: BodyNodeId, at_end: bool) {
+    pub fn request_focus(&self, node_id: NodeId, at_end: bool) {
         self.content_focus_request.set(Some((node_id, at_end)));
     }
 
     /// Cible `node_id` pour l'agent IA, ou retire la cible si `node_id`
     /// était déjà ciblé (bascule).
-    pub fn toggle_agent_target(&self, node_id: BodyNodeId) {
+    pub fn toggle_agent_target(&self, node_id: NodeId) {
         self.agent_target.update(|t| {
             *t = if *t == Some(node_id) {
                 None
@@ -151,9 +151,9 @@ impl EditorContext {
     /// commentaire dont la sélection couvre une feuille de ce sous-arbre :
     /// un commentaire ne doit jamais survivre à la disparition de la
     /// section qu'il annote (voir `Claude.md`). Utilise
-    /// [`crate::traits::review::ReviewWrite::delete_comment_thread`] pour
+    /// [`crate::traits::review::ReviewAccess::delete_comment_thread`] pour
     /// emporter aussi les réponses du commentaire supprimé.
-    pub fn remove_node_with_comments(&self, node_id: BodyNodeId) {
+    pub fn remove_node_with_comments(&self, node_id: NodeId) {
         let orphaned = self.body.with_untracked(|b| {
             let removed = subtree_ids(b, node_id);
             self.reviews.with_untracked(|r| {
@@ -189,7 +189,7 @@ impl EditorContext {
 /// `node_id` et l'ensemble de ses descendants, utilisé par
 /// [`EditorContext::remove_node_with_comments`] pour déterminer les
 /// commentaires devenus orphelins.
-fn subtree_ids(body: &impl BodyRead, node_id: BodyNodeId) -> HashSet<BodyNodeId> {
+fn subtree_ids(body: &impl BodyAccess, node_id: NodeId) -> HashSet<NodeId> {
     let mut ids = HashSet::new();
     let mut stack = vec![node_id];
     while let Some(current) = stack.pop() {

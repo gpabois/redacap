@@ -9,7 +9,7 @@ use dsfr::{Button, ButtonVariant, Size, Textarea};
 
 use super::context::expect_editor_context;
 use super::state::PendingComment;
-use crate::traits::review::{Comment, ReviewRead, ReviewWrite};
+use crate::traits::review::{Comment, ReviewAccess};
 
 /// Panneau listant tous les commentaires du projet (racines, avec leurs
 /// réponses imbriquées), et le compositeur pour en créer un nouveau.

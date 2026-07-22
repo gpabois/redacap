@@ -4,9 +4,9 @@ use leptos::prelude::*;
 
 use super::context::expect_editor_context;
 use super::widgets::RichEditableDiv;
-use crate::traits::node::{BodyRead, BodyWrite};
-use crate::traits::review::ReviewRead;
-use crate::{Body, BodyNodeId, NodeKind, NodeSpec};
+use crate::traits::node::BodyAccess;
+use crate::traits::review::ReviewAccess;
+use crate::{Body, NodeId, NodeKind, NodeSpec};
 
 // ─── Sérialisation HTML ───────────────────────────────────────────────────────
 
@@ -22,10 +22,10 @@ fn html_escape(text: &str) -> String {
 /// a été référencée dans un commentaire »). Une feuille absente de la map
 /// n'est référencée par aucun commentaire non résolu.
 fn commented_leaf_authors(
-    body: &impl BodyRead,
-    reviews: &impl ReviewRead,
-) -> HashMap<BodyNodeId, Vec<String>> {
-    let mut authors_by_leaf: HashMap<BodyNodeId, Vec<String>> = HashMap::new();
+    body: &impl BodyAccess,
+    reviews: &impl ReviewAccess,
+) -> HashMap<NodeId, Vec<String>> {
+    let mut authors_by_leaf: HashMap<NodeId, Vec<String>> = HashMap::new();
     for comment in reviews.comments() {
         if comment.resolved {
             continue;
@@ -44,9 +44,9 @@ fn commented_leaf_authors(
 }
 
 fn node_to_inline_html(
-    body: &impl BodyRead,
-    id: BodyNodeId,
-    commented: &HashMap<BodyNodeId, Vec<String>>,
+    body: &impl BodyAccess,
+    id: NodeId,
+    commented: &HashMap<NodeId, Vec<String>>,
 ) -> String {
     match body.kind_of(id) {
         // L'enveloppe `data-plain-id` permet de retracer une sélection
@@ -101,9 +101,9 @@ fn node_to_inline_html(
 }
 
 fn build_inline_html(
-    body: &impl BodyRead,
-    node_id: BodyNodeId,
-    commented: &HashMap<BodyNodeId, Vec<String>>,
+    body: &impl BodyAccess,
+    node_id: NodeId,
+    commented: &HashMap<NodeId, Vec<String>>,
 ) -> String {
     body.children_of(node_id)
         .into_iter()
@@ -115,7 +115,7 @@ fn build_inline_html(
 /// pour tester la vacuité réelle du contenu indépendamment de l'enveloppe
 /// `data-plain-id` posée par [`node_to_inline_html`] (qui rend `build_inline_html`
 /// toujours non-vide, même pour un `Plain` vide).
-pub(super) fn inline_text_of(body: &impl BodyRead, node_id: BodyNodeId) -> String {
+pub(super) fn inline_text_of(body: &impl BodyAccess, node_id: NodeId) -> String {
     body.children_of(node_id)
         .into_iter()
         .map(|id| match body.kind_of(id) {
@@ -172,7 +172,7 @@ fn find_matching_close(html: &str, tag_name: &str) -> Option<usize> {
 
 /// Analyse récursivement le sous-ensemble HTML inline produit par `execCommand`
 /// et construit les nœuds `Plain` / `Span` correspondants sous `parent`.
-fn parse_inline_html(html: &str, body: &mut Body, parent: BodyNodeId) -> anyhow::Result<()> {
+fn parse_inline_html(html: &str, body: &mut Body, parent: NodeId) -> anyhow::Result<()> {
     let mut remaining = html;
 
     while !remaining.is_empty() {
@@ -250,7 +250,7 @@ fn parse_inline_html(html: &str, body: &mut Body, parent: BodyNodeId) -> anyhow:
 
 /// Remplace les enfants inline (Plain / Span) de `node_id` par l'arbre
 /// correspondant au HTML `html`.
-fn save_rich_content(body: &mut Body, node_id: BodyNodeId, html: &str) -> anyhow::Result<()> {
+fn save_rich_content(body: &mut Body, node_id: NodeId, html: &str) -> anyhow::Result<()> {
     for child in body.children_of(node_id) {
         body.remove_subtree(child)?;
     }
@@ -269,7 +269,7 @@ mod tests {
     use crate::direct::DirectBody;
     use crate::kind::Article;
 
-    fn new_paragraph() -> (Body, BodyNodeId) {
+    fn new_paragraph() -> (Body, NodeId) {
         let mut body = Body::from(DirectBody::new());
         let article = body
             .append_node(body.root(), NodeSpec::Article(Article::default()))
@@ -325,7 +325,7 @@ mod tests {
     fn test_commented_leaf_is_highlighted() {
         use crate::cursor::{Cursor, Selection};
         use crate::review::DirectReview;
-        use crate::traits::review::{Comment, ReviewWrite};
+        use crate::traits::review::{Comment, ReviewAccess};
 
         let (mut body, paragraphe) = new_paragraph();
         let plain = body.first_child_of(paragraphe).unwrap();
@@ -369,7 +369,7 @@ mod tests {
 /// Filtre les enfants directs qui sont des nœuds de contenu et délègue
 /// à [`EditParagraph`], [`EditList`] ou [`EditTable`].
 #[component]
-pub fn ContentSubtree(node_id: BodyNodeId) -> impl IntoView {
+pub fn ContentSubtree(node_id: NodeId) -> impl IntoView {
     let ctx = expect_editor_context();
 
     view! {
@@ -401,7 +401,7 @@ pub fn ContentSubtree(node_id: BodyNodeId) -> impl IntoView {
 // ─── Paragraphe ───────────────────────────────────────────────────────────────
 
 #[component]
-fn EditParagraph(node_id: BodyNodeId) -> impl IntoView {
+fn EditParagraph(node_id: NodeId) -> impl IntoView {
     let ctx = expect_editor_context();
 
     let html = Signal::derive(move || {
@@ -414,7 +414,7 @@ fn EditParagraph(node_id: BodyNodeId) -> impl IntoView {
     let on_enter = Callback::new(move |()| {
         let new_id = ctx
             .body
-            .try_update(|b| -> Option<BodyNodeId> {
+            .try_update(|b| -> Option<NodeId> {
                 let new_para = b.create_node(NodeSpec::Paragraphe);
                 let plain = b.create_node(NodeSpec::Plain(String::new()));
                 b.append_child_unchecked(new_para, plain).ok()?;
@@ -430,7 +430,7 @@ fn EditParagraph(node_id: BodyNodeId) -> impl IntoView {
     let on_backspace_start = Callback::new(move |()| {
         let prev = ctx
             .body
-            .try_update(|b| -> Option<BodyNodeId> { b.merge_with_prev(node_id).ok() })
+            .try_update(|b| -> Option<NodeId> { b.merge_with_prev(node_id).ok() })
             .flatten();
         if let Some(id) = prev {
             ctx.request_focus(id, true);
@@ -463,7 +463,7 @@ fn EditParagraph(node_id: BodyNodeId) -> impl IntoView {
 
 // ─── Liste ────────────────────────────────────────────────────────────────────
 
-pub(super) fn is_list_ordered(body: &impl BodyRead, node_id: BodyNodeId) -> bool {
+pub(super) fn is_list_ordered(body: &impl BodyAccess, node_id: NodeId) -> bool {
     if let NodeSpec::List(list) = body.spec_of(node_id) {
         !matches!(
             list.marker,
@@ -475,7 +475,7 @@ pub(super) fn is_list_ordered(body: &impl BodyRead, node_id: BodyNodeId) -> bool
 }
 
 #[component]
-fn EditList(node_id: BodyNodeId) -> impl IntoView {
+fn EditList(node_id: NodeId) -> impl IntoView {
     let ctx = expect_editor_context();
 
     let is_ordered = Signal::derive(move || ctx.body.with(|b| is_list_ordered(b, node_id)));
@@ -508,7 +508,7 @@ fn EditList(node_id: BodyNodeId) -> impl IntoView {
 }
 
 #[component]
-fn EditListItem(node_id: BodyNodeId, list_id: BodyNodeId) -> impl IntoView {
+fn EditListItem(node_id: NodeId, list_id: NodeId) -> impl IntoView {
     let ctx = expect_editor_context();
 
     let html = Signal::derive(move || {
@@ -521,7 +521,7 @@ fn EditListItem(node_id: BodyNodeId, list_id: BodyNodeId) -> impl IntoView {
     let on_enter = Callback::new(move |()| {
         let new_id = ctx
             .body
-            .try_update(|b| -> Option<BodyNodeId> {
+            .try_update(|b| -> Option<NodeId> {
                 let item = b.create_node(NodeSpec::ListItem(content::ListItem::default()));
                 let plain = b.create_node(NodeSpec::Plain(String::new()));
                 b.append_child_unchecked(item, plain).ok()?;
@@ -554,7 +554,7 @@ fn EditListItem(node_id: BodyNodeId, list_id: BodyNodeId) -> impl IntoView {
             // Élément non vide : fusionner ou convertir en paragraphe
             let result = ctx
                 .body
-                .try_update(|b| -> Option<BodyNodeId> {
+                .try_update(|b| -> Option<NodeId> {
                     if b.prev_sibling_of(node_id).is_some() {
                         // Il y a un élément précédent : fusionner
                         b.merge_with_prev(node_id).ok()
@@ -610,7 +610,7 @@ fn EditListItem(node_id: BodyNodeId, list_id: BodyNodeId) -> impl IntoView {
 // ─── Tableau ──────────────────────────────────────────────────────────────────
 
 #[component]
-fn EditTable(node_id: BodyNodeId) -> impl IntoView {
+fn EditTable(node_id: NodeId) -> impl IntoView {
     let ctx = expect_editor_context();
 
     view! {
@@ -629,7 +629,7 @@ fn EditTable(node_id: BodyNodeId) -> impl IntoView {
 }
 
 #[component]
-fn EditTableRow(node_id: BodyNodeId, table_id: BodyNodeId) -> impl IntoView {
+fn EditTableRow(node_id: NodeId, table_id: NodeId) -> impl IntoView {
     let ctx = expect_editor_context();
 
     view! {
@@ -652,7 +652,7 @@ fn EditTableRow(node_id: BodyNodeId, table_id: BodyNodeId) -> impl IntoView {
                         title="Insérer une ligne après"
                         class="no-print opacity-0 group-hover/row:opacity-100 text-blue-500 hover:text-blue-700 text-xs leading-none"
                         on:click=move |_| {
-                            let first_cell = ctx.body.try_update(|b| -> Option<BodyNodeId> {
+                            let first_cell = ctx.body.try_update(|b| -> Option<NodeId> {
                                 let col_count = b.children_of(node_id).len().max(1);
                                 let new_row = b.create_node(NodeSpec::TableRow);
                                 let mut first = None;
@@ -687,7 +687,7 @@ fn EditTableRow(node_id: BodyNodeId, table_id: BodyNodeId) -> impl IntoView {
 }
 
 #[component]
-fn EditTableCell(node_id: BodyNodeId, row_id: BodyNodeId, table_id: BodyNodeId) -> impl IntoView {
+fn EditTableCell(node_id: NodeId, row_id: NodeId, table_id: NodeId) -> impl IntoView {
     let ctx = expect_editor_context();
 
     let para_id = ctx.body.with_untracked(|b| b.first_child_of(node_id));
@@ -733,13 +733,13 @@ fn EditTableCell(node_id: BodyNodeId, row_id: BodyNodeId, table_id: BodyNodeId) 
 /// crée automatiquement une nouvelle ligne et focalise sa première cellule.
 fn navigate_table_cell(
     ctx: super::context::EditorContext,
-    node_id: BodyNodeId,
-    row_id: BodyNodeId,
-    table_id: BodyNodeId,
+    node_id: NodeId,
+    row_id: NodeId,
+    table_id: NodeId,
     forward: bool,
 ) {
     let next = ctx.body.with_untracked(|b| {
-        let all_cells: Vec<BodyNodeId> = b
+        let all_cells: Vec<NodeId> = b
             .children_of(table_id)
             .into_iter()
             .flat_map(|r| b.children_of(r))
@@ -760,7 +760,7 @@ fn navigate_table_cell(
             // Tab sur la dernière cellule → ajoute une ligne
             let first_new_cell = ctx
                 .body
-                .try_update(|b| -> Option<BodyNodeId> {
+                .try_update(|b| -> Option<NodeId> {
                     let col_count = b.children_of(row_id).len().max(1);
                     let new_row = b.create_node(NodeSpec::TableRow);
                     let mut first = None;

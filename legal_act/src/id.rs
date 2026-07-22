@@ -8,42 +8,41 @@ use shared::id;
 /// générable localement sans coordination centrale, utilisable comme
 /// clé dans un `yrs::Doc`.
 #[derive(Debug, Hash, Clone, Copy, PartialEq, Eq)]
-pub struct BodyNodeId(id::ID);
+pub struct NodeId(pub(crate) String);
 
-impl BodyNodeId {
-    pub fn new() -> Self {
-        Self(id::generate_id())
-    }
-
-    pub(crate) fn from_raw(id: id::ID) -> Self {
-        Self(id)
+impl From<NodeId> for loro::LoroValue {
+    fn from(value: NodeId) -> Self {
+        let bytes = value.as_bytes();
+        loro::LoroValue::Binary(bytes.into())
     }
 }
 
-impl Default for BodyNodeId {
+impl From<&str> for NodeId {
+    fn from(value: &str) -> Self {
+        NodeId(value.to_string())
+    }
+}
+
+impl NodeId {
+    pub fn new() -> Self {
+        Self(id::generate_id().to_string())
+    }
+}
+
+impl Default for NodeId {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl std::fmt::Display for BodyNodeId {
+impl std::fmt::Display for NodeId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
 
-impl FromStr for BodyNodeId {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        s.parse().map(Self)
-    }
-}
-
-impl<'a> TryFrom<&'a [u8]> for BodyNodeId {
-    type Error = anyhow::Error;
-
-    fn try_from(value: &'a [u8]) -> Result<Self, Self::Error> {
-        id::ID::try_from(value).map(Self)
+impl AsRef<&str> for NodeId {
+    fn as_ref(&self) -> &str {
+        self.0.as_str()
     }
 }

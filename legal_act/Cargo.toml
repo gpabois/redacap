@@ -6,7 +6,6 @@ edition = "2024"
 [dependencies]
 agent = {path = "../agent", default-features = false}
 shared = {path = "../shared" }
-content = {path = "../content" }
 dsfr = {path = "../dsfr" }
 yrs.workspace = true
 strum.workspace = true
@@ -16,7 +15,10 @@ indextree.workspace = true
 bimap.workspace = true
 leptos.workspace = true
 web-sys.workspace = true
-
+loro.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+derive_more = {workspace = true, features = ["from"]}
 
 [features]
 default = []

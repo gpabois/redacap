@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::id::ID;
 
+pub type UserId = ID;
+
 /// Compte utilisateur applicatif.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct User {
