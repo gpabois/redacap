@@ -1,8 +1,7 @@
 use std::ops::Deref;
 use anyhow::bail;
-use loro::{ContainerID, ContainerTrait, LoroDoc, LoroMap, LoroValue, UpdateOptions, ValueOrContainer, loro_value};
-use shared::id;
-use crate::data::{NodeData, NodeKind};
+use loro::{Container, ContainerID, ContainerTrait, LoroDoc, LoroMap, LoroText, LoroValue, UpdateOptions, ValueOrContainer};
+use crate::data::{BodyRoot, Comment, CommentRoot, ConsiderantRoot, List, NodeData as NodeDataPrelim, NodeKind, Span, SurRoot, VisaRoot};
 
 use crate::id::NodeId;
 
@@ -20,7 +19,6 @@ impl Deref for LegalActProject {
 
 impl LegalActProject {
     pub fn new() -> Self {
-        use NodeKind::{VisaRoot, ConsiderantRoot, SurRoot, BodyRoot, CommentRoot};
         let value = Self(LoroDoc::new());
         value.arena().insert(Node::new("visas", VisaRoot));
         value.arena().insert(Node::new("considerants", ConsiderantRoot));
@@ -64,28 +62,62 @@ impl LegalActProject {
 
     pub fn kind(&self, id: &NodeId) -> NodeKind {
         let node = self.arena().get(id).unwrap_or_else(|| panic!("nœud inconnu : {id}"));
-        let data = node.data().unwrap_or_else(|| panic!("données invalides pour le nœud {id}"));
-        NodeKind::from(&data)
+        let data = node.data();
+        data.kind()
     }
 
     /// Retourne le texte du nœud, ou `String::default()` si son type n'a pas de champ texte.
     pub fn text(&self, id: &NodeId) -> String {
         self.arena().get(id)
-            .and_then(|node| node.data())
+            .map(|node| node.data())
             .map(|data| data.text())
             .unwrap_or_default()
     }
 
-    pub(crate) fn create_node(&self, data: impl Into<NodeData>) -> NodeId {
+    pub(crate) fn create_node(&self, data: impl Into<NodeDataPrelim>) -> NodeId {
         let id = NodeId::new();
-        let node = Node::new(id, data);
+        let node = Node::new(id.clone(), data);
         self.arena().insert(node);
         id
     }
 
-    pub fn children_of(&self, node: NodeId) -> Vec<NodeId> {
+    /// Supprime récursivement le sous-arbre enraciné à `id`, en le détachant au préalable
+    /// de son parent et de ses soeurs.
+    pub fn delete(&self, id: &NodeId) {
+        self.detach(id);
+        self.delete_subtree(id);
+    }
+
+    /// Supprime `id` et tous ses descendants de l'arène, sans toucher aux liens de
+    /// parenté ou de fraternité (voir [`Self::delete`]).
+    fn delete_subtree(&self, id: &NodeId) {
+        let Some(node) = self.arena().get(id) else { return };
+        node.children().iter().for_each(|child| self.delete_subtree(child));
+        self.arena().delete(id);
+    }
+
+    /// Insère `text` à la position `pos` dans le nœud `id`, via [`LoroText::insert`].
+    /// Ne fait rien si le nœud n'existe pas ou ne porte pas de texte (voir
+    /// [`NodeKind::is_textual`]).
+    pub fn insert_text(&self, id: &NodeId, pos: usize, text: &str) {
+        let Some(node) = self.arena().get(id) else { return };
+        let data = node.data();
+        data.insert_text(text, pos);
+    }
+
+    pub fn r#move(&self, node: &NodeId, to: &NodeId, position: usize) {
+        self.detach(node);
+        self.insert_child(to, node, position);
+    }
+
+    pub fn children_of(&self, node: &NodeId) -> Vec<NodeId> {
         let Some(parent) = self.arena().get(&node) else { return vec![] };
         parent.children()
+    }
+
+    pub fn parent_of(&self, node: &NodeId) -> Option<NodeId> {
+        let Some(child) = self.arena().get(&node) else { return None };
+        child.parent()
     }
 
     /// Retourne la première feuille du sous-arbre à partir de `id`.
@@ -142,7 +174,7 @@ impl LegalActProject {
     pub fn leafs(&self, from: &NodeId) -> Leafs {
         Leafs {
             project: self.clone(),
-            root: *from,
+            root: from.clone(),
             next: self.first_leaf_of(from),
         }
     }
@@ -289,8 +321,8 @@ impl LegalActProject {
         let Some(prev_node) = self.arena().get(prev) else { return };
         let Some(next_node) = self.arena().get(next) else { return };
 
-        prev_node.set_next_sibling(*next);
-        next_node.set_prev_sibling(*prev);
+        prev_node.set_next_sibling(next.clone());
+        next_node.set_prev_sibling(prev.clone());
     }
 
     /// Divise `node_id` en position `pos`, et remonte récursivement dans les ancêtres
@@ -302,18 +334,19 @@ impl LegalActProject {
         let parent_id = node.parent()?;
         let parent = self.arena().get(&parent_id)?;
 
-        let data = node.data()?;
+        let data = node.data();
 
-        let new_id = if let NodeData::Plain(text) = &data {
+        let new_id = if let NodeKind::Plain = data.kind() {
+            let text = data.text();
             let byte_at = text.char_indices().nth(pos).map(|(i, _)| i).unwrap_or(text.len());
-            let head = text[..byte_at].to_string();
+            let head = &text[..byte_at];
             let tail = text[byte_at..].to_string();
 
-            node.set_data(NodeData::Plain(head));
-            self.create_node(NodeData::Plain(tail))
+            data.update_text(head);
+            self.create_node(NodeDataPrelim::Plain(tail))
         } else {
-            let new_id = self.create_node(data);
-
+            let new_id = self.create_node(&data);
+ 
             for child in node.children().into_iter().skip(pos) {
                 self.append_child(&new_id, &child);
             }
@@ -369,35 +402,143 @@ impl Iterator for Siblings {
     }
 }
 
+impl From<NodeDataPrelim> for LoroMap {
+    fn from(value: NodeDataPrelim) -> Self {
+        let map = LoroMap::new();
+        let kind: NodeKind = NodeKind::from(&value);
+
+        map.insert("kind", kind.as_ref());
+
+        match value {
+            NodeDataPrelim::Comment(comment) => {
+                map.insert("user_id", comment.user_id);
+                map.insert("user_name", comment.user_name);
+                map.insert("text", comment.text);
+                if let Some(span) = comment.span {
+                    let span: LoroMap = span.into();
+                    map.insert_container("span", span);
+                }
+            },
+            NodeDataPrelim::Plain(value) => {
+                let text = map.ensure_mergeable_text("text").unwrap();
+                text.insert(0, &value);
+            },
+            NodeDataPrelim::Span(span) => {
+                map.insert("bold", span.bold);
+                map.insert("italic", span.italic);
+                map.insert("underline", span.underline);
+                map.insert("strikeout", span.strikeout);
+            },
+            NodeDataPrelim::List(list) => {
+                map.insert("marker", list.marker.as_ref());
+                map.insert("start", list.start);
+            },
+            _ => {}
+        }
+
+        map
+    }
+}
+
+pub struct NodeData(LoroMap);
+
+impl NodeData {
+    pub fn kind(&self) -> NodeKind {
+        let val = self.0.get("kind").unwrap();
+        val.as_value().unwrap().as_string().unwrap().parse().unwrap()
+    }
+
+    pub fn update_text(&self, value: &str) {
+        let Some(ValueOrContainer::Container(Container::Text(text))) = self.0.get("text") else { return };
+        text.update(value, UpdateOptions::default());
+    }
+
+    pub fn insert_text(&self, value: &str, pos: usize) {
+        let Some(ValueOrContainer::Container(Container::Text(text))) = self.0.get("text") else { return };
+        text.insert(pos, value);
+    }
+
+    pub fn text(&self) -> String {
+        let Some(ValueOrContainer::Container(Container::Text(text))) = self.0.get("text") else { return String::default() };
+        text.to_string()
+    }
+
+    fn bool_field(&self, key: &str) -> bool {
+        matches!(self.0.get(key), Some(ValueOrContainer::Value(LoroValue::Bool(true))))
+    }
+
+    fn u32_field(&self, key: &str) -> u32 {
+        let Some(ValueOrContainer::Value(LoroValue::I64(value))) = self.0.get(key) else { return 0 };
+        value as u32
+    }
+
+    fn string_field(&self, key: &str) -> String {
+        let Some(ValueOrContainer::Value(LoroValue::String(value))) = self.0.get(key) else { return String::default() };
+        value.to_string()
+    }
+
+    fn map_field(&self, key: &str) -> Option<NodeData> {
+        let Some(ValueOrContainer::Container(Container::Map(map))) = self.0.get(key) else { return None };
+        Some(NodeData(map))
+    }
+}
+
+/// Reconstruit la donnée d'un nœud (`data::NodeData`) à partir de son état CRDT
+/// (`model::NodeData`), en conservant les champs propres à chaque variante.
+impl From<&NodeData> for NodeDataPrelim {
+    fn from(value: &NodeData) -> Self {
+        match value.kind() {
+            NodeKind::Plain => NodeDataPrelim::Plain(value.text()),
+            NodeKind::Span => NodeDataPrelim::Span(Span {
+                bold: value.bool_field("bold"),
+                italic: value.bool_field("italic"),
+                underline: value.bool_field("underline"),
+                strikeout: value.bool_field("strikeout"),
+            }),
+            NodeKind::List => NodeDataPrelim::List(List {
+                marker: value.string_field("marker").parse().unwrap_or_default(),
+                start: value.u32_field("start"),
+            }),
+            NodeKind::Comment => NodeDataPrelim::Comment(Comment {
+                user_id: value.string_field("user_id"),
+                user_name: value.string_field("user_name"),
+                text: value.string_field("text"),
+                span: value.map_field("span").map(|span| Span {
+                    bold: span.bool_field("bold"),
+                    italic: span.bool_field("italic"),
+                    underline: span.bool_field("underline"),
+                    strikeout: span.bool_field("strikeout"),
+                }),
+            }),
+            kind => NodeDataPrelim::from(kind),
+        }
+    }
+}
+
 pub struct Node(LoroMap);
 
-impl From<Node> for LoroValue {
+impl From<Node> for LoroMap {
     fn from(value: Node) -> Self {
-        value.0.into()
+        value.0
     }
 }
 
 impl Node {
-    pub(crate) fn new(id: impl Into<NodeId>, data: impl Into<NodeData>) -> Self {
+    pub(crate) fn new(id: impl Into<NodeId>, data: impl Into<NodeDataPrelim>) -> Self {
         let id = id.into();
-        let data = data.into();
-        let data = serde_json::to_value(data).unwrap();
+        let map = LoroMap::new();
 
-        let value: LoroMap = loro_value!({
-            "id": id.as_bytes(),
-            "data": data,
-            "prev_sibling": None,
-            "next_sibling": None,
-            "parent": None,
-            "children": [],
-        }).into();
+        map.insert("id", id.as_ref());
+        map.insert_container("data", LoroMap::from(data.into()));
+        map.ensure_mergeable_list("children");
 
-        Self(value)
+        Self(map)
     }
 
     pub fn id(&self) -> NodeId {
-        let bytes = self.0.get("id").unwrap().as_value().unwrap().as_binary().unwrap();
-        NodeId::try_from(bytes).unwrap()
+        let id = self.0.get("id").unwrap();
+        let value = id.as_value().unwrap().as_string().unwrap();
+        NodeId(value.to_string())
     }
 
     pub fn container_id(&self) -> ContainerID {
@@ -415,7 +556,7 @@ impl Node {
     }
 
     fn remove_next_sibling(&self) {
-        self.0.insert("next_sibling", None);
+        self.0.delete("next_sibling");
     }
 
     fn prev_sibling(&self) -> Option<NodeId> {
@@ -429,7 +570,7 @@ impl Node {
     }
 
     fn remove_prev_sibling(&self) {
-        self.0.insert("prev_sibling", None);
+        self.0.delete("prev_sibling");
     }
 
     fn parent(&self) -> Option<NodeId> {
@@ -439,7 +580,7 @@ impl Node {
     }   
 
     fn remove_parent(&self) {
-        self.0.insert("parent", None);
+        self.0.delete("parent");
     }
 
     fn remove_child(&self, child: &NodeId) {
@@ -456,16 +597,18 @@ impl Node {
         self.0.insert("parent", parent);
     }
 
-    pub fn data(&self) -> Option<NodeData> {
-        let value = self.0.get("data")?.get_deep_value();
-        let json: serde_json::Value = value.into();
-        serde_json::from_value(json).ok()
+    pub fn data(&self) -> NodeData {
+        let Some(ValueOrContainer::Container(Container::Map(map))) = self.0.get("data") else { panic!("should have data field in Node") };
+        NodeData(map)
     }
 
-    fn set_data(&self, data: impl Into<NodeData>) {
-        let data = data.into();
-        let json = serde_json::to_value(data).unwrap();
-        self.0.insert("data", json);
+    fn set_data(&self, data: impl Into<NodeDataPrelim>) {
+        self.0.insert_container("data", LoroMap::from(data.into()));
+    }
+
+    /// Retourne le conteneur CRDT de texte du nœud (clé `"text"`), en le créant s'il n'existe pas.
+    fn text_container(&self) -> Option<LoroText> {
+        self.0.ensure_mergeable_text("text").ok()
     }
 
     fn assert_position(&self, pos: usize) -> usize {
@@ -508,7 +651,7 @@ impl Node {
 
 impl From<NodeId> for LoroValue {
     fn from(value: NodeId) -> Self {
-        LoroValue::Binary(value.as_bytes().into())
+        LoroValue::String(value.0.into())
     }
 }
 
@@ -516,11 +659,11 @@ impl TryFrom<LoroValue> for NodeId {
     type Error = anyhow::Error;
 
     fn try_from(value: LoroValue) -> Result<Self, Self::Error> {
-        if let LoroValue::Binary(bytes) = value {
-            let node_id = NodeId::try_from(&bytes)?;
+        if let LoroValue::String(str) = value {
+            let node_id = NodeId(str.to_string());
             Ok(node_id)
         } else {
-            bail!("expecting LoroValue to be binary for NodeId")
+            bail!("expecting LoroValue to be string for NodeId")
         }
     }
 }
@@ -530,7 +673,7 @@ struct Arena(LoroMap);
 impl Arena {
     fn insert(&self, node: Node) {
         let key = node.id().to_string();
-        self.0.insert(&key, node);
+        self.0.insert_container(&key, LoroMap::from(node));
     }
 
     fn delete(&self, id: &NodeId) {

@@ -1,5 +1,3 @@
-use std::str::FromStr;
-
 use shared::id;
 
 /// Identifiant d'un nœud du corps d'un acte légal.
@@ -7,15 +5,8 @@ use shared::id;
 /// Identique à [`content::ContentId`] dans sa structure : 128 bits,
 /// générable localement sans coordination centrale, utilisable comme
 /// clé dans un `yrs::Doc`.
-#[derive(Debug, Hash, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
 pub struct NodeId(pub(crate) String);
-
-impl From<NodeId> for loro::LoroValue {
-    fn from(value: NodeId) -> Self {
-        let bytes = value.as_bytes();
-        loro::LoroValue::Binary(bytes.into())
-    }
-}
 
 impl From<&str> for NodeId {
     fn from(value: &str) -> Self {
@@ -41,7 +32,7 @@ impl std::fmt::Display for NodeId {
     }
 }
 
-impl AsRef<&str> for NodeId {
+impl AsRef<str> for NodeId {
     fn as_ref(&self) -> &str {
         self.0.as_str()
     }

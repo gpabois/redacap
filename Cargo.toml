@@ -2,7 +2,6 @@
 resolver = "2"
 members = [
     "app", 
-    "content", 
     "frontend", 
     "dsfr", 
     "legal_act", 
@@ -52,7 +51,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 thiserror = "2.0"
 dotenv = "0.15.0"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "macros", "chrono", "json", "migrate"] }
+sqlx = { version = "0.9", default-features = false, features = ["postgres", "macros", "chrono", "json", "migrate"] }
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
 argon2 = "0.5"
 clap = { version = "4", features = ["derive"] }

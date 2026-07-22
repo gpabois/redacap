@@ -1,18 +1,48 @@
 use std::vec;
 
+use loro::LoroMap;
+
 use crate::id::NodeId;
 use crate::model::LegalActProject;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct Cursor {
-    id: NodeId,
-    pos: usize
+    pub id: NodeId,
+    pub pos: usize
 }
 
-#[derive(Clone, Copy)]
+impl Cursor {
+    pub fn into_loro_map(self) -> LoroMap {
+        self.into()
+    }
+
+    pub fn within(&self, id: &NodeId) -> bool {
+        self.id == *id
+    }
+}
+
+impl From<Cursor> for LoroMap {
+    fn from(value: Cursor) -> Self {
+        let map = LoroMap::new();
+        map.insert("id", value.id.to_string());
+        map.insert("position", value.pos as u32);
+        map
+    }
+}
+
+#[derive(Clone)]
 pub struct Span {
-    start: Cursor,
-    end: Cursor
+    pub start: Cursor,
+    pub end: Cursor
+}
+
+impl From<Span> for LoroMap {
+    fn from(value: Span) -> Self {
+        let map = LoroMap::new();
+        map.insert_container("start", value.start.into_loro_map());
+        map.insert_container("end", value.end.into_loro_map());
+        map
+    }
 }
 
 impl Span {
@@ -22,15 +52,15 @@ impl Span {
 
         let leafs = act
             .leafs(&start_id)
-            .take_while(|leaf| leaf != end_id);
+            .take_while(|leaf| *leaf != end_id);
 
         leafs.collect()
     }
 
-}
-
-pub enum CursorMode {
-    Disabled,
-    Cursor(Cursor),
-    Span(Span)
+    /// Indique si `id` est une feuille entièrement couverte par la sélection,
+    /// c'est-à-dire ni la borne de début ni celle de fin (dont seule une
+    /// portion est sélectionnée).
+    pub fn covers(&self, act: LegalActProject, id: &NodeId) -> bool {
+        self.start.id != *id && self.end.id != *id && self.nodes(act).contains(id)
+    }
 }

@@ -5,7 +5,6 @@ edition = "2024"
 
 [dependencies]
 agent = { path = "../agent", default-features = false }
-content = { path = "../content", default-features = false }
 legal_act = { path = "../legal_act", default-features = false }
 dsfr = { path = "../dsfr", default-features = false }
 leptos.workspace = true
@@ -30,5 +29,5 @@ pulldown-cmark.workspace = true
 
 [features]
 default = []
-hydrate = ["leptos/hydrate", "content/hydrate", "legal_act/hydrate", "agent/hydrate", "dsfr/hydrate"]
-ssr = ["leptos/ssr", "leptos_meta/ssr", "leptos_router/ssr", "dep:leptos_axum", "dep:axum", "dep:axum-extra", "dep:storage", "dep:marie", "content/ssr", "legal_act/ssr", "agent/ssr", "leptos_ws/ssr", "dsfr/ssr"]
+hydrate = ["leptos/hydrate", "legal_act/hydrate", "agent/hydrate", "dsfr/hydrate"]
+ssr = ["leptos/ssr", "leptos_meta/ssr", "leptos_router/ssr", "dep:leptos_axum", "dep:axum", "dep:axum-extra", "dep:storage", "dep:marie", "legal_act/ssr", "agent/ssr", "leptos_ws/ssr", "dsfr/ssr"]

@@ -22,10 +22,10 @@ pub async fn create_client(
     Ok(client)
 }
 
-pub type GeorisquesClientFactory = Arc<dyn Fn() -> BoxFuture<'static, anyhow::Result<GeorisquesClient>>>;
+pub type GeorisquesClientFactory = Arc<dyn Fn() -> BoxFuture<'static, anyhow::Result<GeorisquesClient>> + Sync + Send + 'static>;
 
 #[derive(Clone)]
-pub struct GetAiot(GeorisquesClientFactory);
+pub struct GetAiot(pub(crate) GeorisquesClientFactory);
 
 #[async_trait]
 impl Toolable<JobContext> for GetAiot {

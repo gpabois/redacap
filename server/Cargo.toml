@@ -8,7 +8,6 @@ edition = "2024"
 [dependencies]
 app = { path = "../app", default-features = false, features = ["ssr"] }
 legal_act = { path = "../legal_act", default-features = false }
-content = { path = "../content" }
 storage = { path = "../storage" }
 leptos = { workspace = true, features = [ "ssr" ]}
 leptos_axum.workspace = true

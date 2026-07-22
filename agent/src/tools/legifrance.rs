@@ -28,11 +28,11 @@ pub async fn create_client(
     Ok(client)
 }
 
-pub type LegifranceClientFactory = Arc<dyn Fn() -> BoxFuture<'static, anyhow::Result<LegifranceClient>>>;
+pub type LegifranceClientFactory = Arc<dyn Fn() -> BoxFuture<'static, anyhow::Result<LegifranceClient>> + Sync + Send + 'static>;
 
 
 #[derive(Clone)]
-pub struct SearchLegifrance(LegifranceClientFactory);
+pub struct SearchLegifrance(pub(crate) LegifranceClientFactory);
 
 #[async_trait]
 impl Toolable<JobContext> for SearchLegifrance {

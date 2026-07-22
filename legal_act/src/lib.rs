@@ -4,3 +4,4 @@ pub mod id;
 pub mod rules;
 pub mod selection;
 pub mod editor;
+pub mod str_ext;
