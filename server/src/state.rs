@@ -5,12 +5,9 @@ use axum::extract::FromRef;
 use axum_extra::extract::cookie::Key;
 use storage::Pool;
 
-use crate::editor::state::EditorRooms;
-
 /// État partagé de l'application, exposé aux handlers Axum du websocket.
 pub struct AppState {
     pub store: Pool,
-    pub rooms: Arc<EditorRooms>,
     /// Clé de chiffrement/signature des cookies de session, dérivée de
     /// `SESSION_SECRET` (voir `server::auth::session`).
     pub session_key: Key,

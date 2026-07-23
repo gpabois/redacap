@@ -20,6 +20,7 @@ use marie::{
 mod georisques;
 #[cfg(feature = "server")]
 mod legifrance;
+#[cfg(feature = "server")]
 mod secret;
 // mod interaction;
 // mod legifrance;

@@ -7,5 +7,6 @@ pub mod app;
 pub mod auth;
 pub mod component;
 pub mod pages;
+#[allow(dead_code)]
 mod protocol;
-pub mod ws;
+//pub mod ws;

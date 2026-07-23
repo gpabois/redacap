@@ -1,7 +1,7 @@
 #![recursion_limit = "256"]
 
 mod auth;
-mod editor;
+//mod editor;
 mod guard;
 pub mod state;
 
@@ -18,7 +18,6 @@ use app::app::*;
 use log::error;
 use state::AppState;
 
-use crate::editor::state::EditorRooms;
 
 /// Décode la clé de chiffrement/déchiffrement des secrets applicatifs
 /// (`client_secret` OIDC, clé API des modèles IA, clés GéoRisques/Légifrance)
@@ -65,19 +64,6 @@ pub async fn run() -> anyhow::Result<()> {
 
     let database_url = std::env::var("DATABASE_URL")?;
     let store = storage::connect(&database_url).await?;
-    
-
-    // Purge les runs orphelins d'un précédent processus (voir
-    // `Claude.md` § « L'agent IA... » et la doc de
-    // `fail_orphaned_running_runs`) : sans quoi un plantage pendant une tâche
-    // agent bloquerait indéfiniment sa salle, aucun nouveau run ne pouvant
-    // démarrer tant qu'un run `"running"` y reste actif.
-    let orphaned_runs = storage::agent_run::fail_orphaned_running_runs(&store).await?;
-    if orphaned_runs > 0 {
-        log!(
-            "{orphaned_runs} run(s) agent orphelin(s) d'un précédent démarrage marqué(s) en échec"
-        );
-    }
 
     // État bootstrap (voir `Claude.md` § « Ajoute un état bootstrap... ») :
     // évalué une fois au démarrage, puis maintenu en mémoire (voir
@@ -121,9 +107,7 @@ pub async fn run() -> anyhow::Result<()> {
         .redirect(openidconnect::reqwest::redirect::Policy::none())
         .build()?;
 
-    let rooms = Arc::new(EditorRooms::default());
     let app_state = Arc::new(AppState {
-        rooms: rooms.clone(),
         store,
         session_key,
         secret_encryption_key,
@@ -143,20 +127,13 @@ pub async fn run() -> anyhow::Result<()> {
                 let secret_encryption_key = app_state.secret_encryption_key.clone();
                 let secret_manager = app_state.secret_manager.clone();
                 let public_base_url = app_state.public_base_url.clone();
-                // Coercition explicite en `Arc<dyn RoomBroadcaster>` : `app`
-                // (qui consomme ce contexte, voir
-                // `app::pages::project_metadata`) ne peut pas nommer
-                // `EditorRooms` (dépendance circulaire, `server` dépend déjà
-                // de `app`), seulement le trait commun aux deux crates (voir
-                // `shared::broadcast`).
-                let room_broadcaster: shared::broadcast::SharedRoomBroadcaster = rooms.clone();
+
                 move || {
                     provide_context(store.clone());
                     provide_context(session_key.clone());
                     provide_context(secret_encryption_key.clone());
                     provide_context(secret_manager.clone());
                     provide_context(public_base_url.clone());
-                    provide_context(room_broadcaster.clone());
                 }
             },
             {
@@ -169,7 +146,6 @@ pub async fn run() -> anyhow::Result<()> {
 
     let app = leptos_router
         .merge(auth::build(app_state.clone()))
-        .nest("/editor", editor::build(app_state.clone()))
         .layer(axum::middleware::from_fn_with_state(
             app_state.clone(),
             guard::bootstrap_guard,

@@ -91,11 +91,6 @@ pub async fn run_server() -> anyhow::Result<()> {
     server::run().await
 }
 
-/// Lance un worker de traitement asynchrone des tâches longues.
-pub async fn run_worker() -> anyhow::Result<()> {
-    worker::run().await
-}
-
 /// Exécute une sous-commande de gestion des migrations.
 pub async fn run_storage(command: StorageCommand, database_url: &str) -> anyhow::Result<()> {
     let pool = storage::connect(database_url).await?;

@@ -29,6 +29,7 @@ pub mod oidc_provider;
 pub mod permission;
 pub mod user;
 pub mod user_group;
+pub mod session;
 
 pub use db::{Pool, connect, connect_lazy, migrate, revert};
 pub use error::StorageError;

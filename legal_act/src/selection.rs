@@ -24,8 +24,8 @@ impl Cursor {
 impl From<Cursor> for LoroMap {
     fn from(value: Cursor) -> Self {
         let map = LoroMap::new();
-        map.insert("id", value.id.to_string());
-        map.insert("position", value.pos as u32);
+        let _ = map.insert("id", value.id.to_string());
+        let _ = map.insert("position", value.pos as u32);
         map
     }
 }
@@ -39,8 +39,8 @@ pub struct Span {
 impl From<Span> for LoroMap {
     fn from(value: Span) -> Self {
         let map = LoroMap::new();
-        map.insert_container("start", value.start.into_loro_map());
-        map.insert_container("end", value.end.into_loro_map());
+        let _ = map.insert_container("start", value.start.into_loro_map());
+        let _ = map.insert_container("end", value.end.into_loro_map());
         map
     }
 }

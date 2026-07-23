@@ -7,7 +7,6 @@ members = [
     "legal_act", 
     "server", 
     "shared", 
-    "render", 
     "storage", 
     "cli"
 ]

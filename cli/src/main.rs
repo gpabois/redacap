@@ -26,8 +26,6 @@ struct Cli {
 enum Command {
     /// Lance le serveur applicatif (SSR + API).
     Server,
-    /// Lance un worker de traitement asynchrone des tâches longues.
-    Worker,
     /// Gestion des migrations de la base de données.
     Storage {
         #[command(subcommand)]
@@ -47,7 +45,6 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Command::Server => commands::run_server().await,
-        Command::Worker => commands::run_worker().await,
         Command::Storage { command } => {
             let database_url = resolve_database_url(cli.database_url)?;
             commands::run_storage(command, &database_url).await

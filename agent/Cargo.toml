@@ -6,10 +6,10 @@ edition = "2024"
 [dependencies]
 anyhow.workspace = true
 futures-util.workspace = true
-marie = {workspace = true, features = ["catalog"]}
-storage = {path = "../storage"}
-georisques-client.workspace = true
-legifrance-client.workspace = true
+marie = { workspace = true, features = ["catalog"], optional = true }
+storage = { path = "../storage", optional = true }
+georisques-client = { workspace = true, optional = true }
+legifrance-client = { workspace = true, optional = true }
 dsfr = { path = "../dsfr" }
 async-trait = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
@@ -50,6 +50,10 @@ server = [
     "dep:thiserror",
     "dep:tokio",
     "dep:zip",
+    "dep:marie",
+    "dep:storage",
+    "dep:georisques-client",
+    "dep:legifrance-client",
 ]
 ssr = ["leptos/ssr", "server"]
 hydrate = ["leptos/hydrate"]

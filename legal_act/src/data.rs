@@ -169,16 +169,17 @@ pub struct Span {
 impl From<Span> for LoroMap {
     fn from(value: Span) -> Self {
         let map = LoroMap::new();
-        map.insert("bold", value.bold);
-        map.insert("italic", value.italic);
-        map.insert("underline", value.underline);
-        map.insert("strikeout", value.strikeout);
+        let _ = map.insert("bold", value.bold);
+        let _ = map.insert("italic", value.italic);
+        let _ = map.insert("underline", value.underline);
+        let _ = map.insert("strikeout", value.strikeout);
         map
     }
 }
 
 impl NodeData {
     /// Retourne le texte porté par le nœud, ou une chaîne vide si son type n'a pas de champ texte.
+    #[allow(dead_code)]
     pub(crate) fn text(&self) -> String {
         match self {
             NodeData::Plain(v) => v.clone(),

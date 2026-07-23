@@ -1,29 +1,12 @@
-use legal_act::{ConnectedUser, LegalActEditor};
 use leptos::prelude::*;
 use leptos_meta::*;
 use leptos_router::{
-    NavigateOptions, StaticSegment,
     components::{Route, Router, Routes},
-    hooks::{use_navigate, use_params_map},
     path,
 };
 
-use crate::pages::account::PageAccount;
-use crate::pages::admin::{
-    PageAdminAgentProfiles, PageAdminAgentTools, PageAdminAiModels, PageAdminAudit,
-    PageAdminAuthorities, PageAdminDashboard, PageAdminDomains, PageAdminGroups,
-    PageAdminIntegrations, PageAdminIntentions, PageAdminOidc, PageAdminUsers,
-};
-use crate::pages::bootstrap::PageBootstrap;
-use crate::pages::dashboard::PageDashboard;
-use crate::pages::dev::PageDevAgentPanel;
-use crate::pages::editor_new::PageEditorNew;
-use crate::pages::login::PageLogin;
-use crate::pages::project_delete::ProjectDangerZone;
-use crate::pages::project_documents::ProjectFilesPanel;
-use crate::pages::project_intentions::ProjectIntentionsPanel;
-use crate::pages::project_metadata::ProjectMetadataPanel;
-use crate::ws;
+use crate::pages::dev::PageDevLegalActEditor;
+
 
 /// Shell HTML complet pour le rendu SSR (injecté dans leptos_axum).
 pub fn shell(options: LeptosOptions) -> impl IntoView {
@@ -60,25 +43,7 @@ pub fn App() -> impl IntoView {
         <Router>
             <main class="min-h-screen bg-white dark:bg-gray-950 dark:text-gray-100">
                 <Routes fallback=|| view! { <p class="p-8">"Page introuvable."</p> }>
-                    <Route path=StaticSegment("") view=PageDashboard/>
-                    <Route path=path!("/login") view=PageLogin/>
-                    <Route path=path!("/bootstrap") view=PageBootstrap/>
-                    <Route path=path!("/account") view=PageAccount/>
-                    <Route path=path!("/editor/new") view=PageEditorNew/>
-                    <Route path=path!("/editor/:id") view=PageEditorProjet/>
-                    <Route path=path!("/dev/agent") view=PageDevAgentPanel/>
-                    <Route path=path!("/admin") view=PageAdminDashboard/>
-                    <Route path=path!("/admin/users") view=PageAdminUsers/>
-                    <Route path=path!("/admin/groups") view=PageAdminGroups/>
-                    <Route path=path!("/admin/authorities") view=PageAdminAuthorities/>
-                    <Route path=path!("/admin/domains") view=PageAdminDomains/>
-                    <Route path=path!("/admin/intentions") view=PageAdminIntentions/>
-                    <Route path=path!("/admin/agent-tools") view=PageAdminAgentTools/>
-                    <Route path=path!("/admin/agent-profiles") view=PageAdminAgentProfiles/>
-                    <Route path=path!("/admin/ai-models") view=PageAdminAiModels/>
-                    <Route path=path!("/admin/oidc") view=PageAdminOidc/>
-                    <Route path=path!("/admin/integrations") view=PageAdminIntegrations/>
-                    <Route path=path!("/admin/audit") view=PageAdminAudit/>
+                    <Route path=path!("/dev/editor") view=PageDevLegalActEditor/>
                 </Routes>
             </main>
         </Router>
@@ -101,128 +66,3 @@ async fn editor_header_identity() -> Result<crate::auth::HeaderIdentity, ServerF
     crate::auth::header_identity(&pool, &user_id).await
 }
 
-/// Page `/editor/:id` : édition collaborative du projet d'acte légal `id`
-/// (créé via `/editor/new`, voir [`crate::pages::editor_new::PageEditorNew`]).
-///
-/// L'identifiant de la route sert directement d'identifiant de salle de
-/// collaboration WebRTC/WebSocket.
-#[component]
-fn PageEditorProjet() -> impl IntoView {
-    let params = use_params_map();
-    let room_id = params.get_untracked().get("id").unwrap_or_default();
-    let legal_act_id = room_id.clone();
-    let room = ws::connect_room(room_id);
-    let identity = Resource::new(|| (), |_| editor_header_identity());
-    // `StoredValue` (Copy) pour la même raison que `legal_act_id` ci-dessous :
-    // capturée depuis la fermeture `Fn` imbriquée du bouton de suppression,
-    // dans l'onglet « Paramètres ».
-    let navigate = StoredValue::new(use_navigate());
-
-    view! {
-        <Suspense fallback=|| view! { <p class="p-8 text-gray-500 dark:text-gray-400">"Connexion à la salle de collaboration…"</p> }>
-            {move || {
-                // `StoredValue` (Copy) plutôt qu'un `String` capturé
-                // directement : `legal_act_id` est utilisé depuis la
-                // fermeture `Fn` imbriquée des enfants de `<LegalActEditor>`
-                // (onglet « Paramètres »), elle-même imbriquée dans celle de
-                // `<Show>`.
-                let legal_act_id = StoredValue::new(legal_act_id.clone());
-                Suspend::new(async move {
-                let identity = identity.await.ok();
-                let user_initial = identity.as_ref().map(|identity| identity.initial.clone());
-                let is_admin = identity.as_ref().is_some_and(|identity| identity.is_admin);
-                let current_user_id = identity.as_ref().map(|identity| identity.user_id.clone());
-                // `StoredValue` (Copy) pour la même raison que `legal_act_id`
-                // ci-dessus : `current_user_id` est utilisé à la fois dans les
-                // props de `<LegalActEditor>` et dans celles de ses enfants
-                // (`<ProjectMetadataPanel>`), donc depuis deux fermetures
-                // `Fn` imbriquées (celle de `<Show>` et celle, imbriquée,
-                // des enfants de `<LegalActEditor>`) : un simple `.clone()`
-                // ferait de la fermeture englobante une `FnOnce` (elle devrait
-                // déplacer sa copie dans la fermeture imbriquée).
-                let current_user_id = StoredValue::new(current_user_id);
-                // Exclut l'utilisateur courant de la liste (sa propre bulle
-                // d'avatar est déjà affichée séparément, voir `user_initial`).
-                let connected_users_current_user_id = current_user_id.get_value();
-                let connected_users = Signal::derive(move || {
-                    room.connected_users
-                        .get()
-                        .into_iter()
-                        .filter(|user| Some(&user.user_id) != connected_users_current_user_id.as_ref())
-                        .map(|user| ConnectedUser {
-                            user_id: user.user_id,
-                            initial: user.initial,
-                            color: user.color,
-                        })
-                        .collect::<Vec<_>>()
-                });
-
-                view! {
-                    <Show
-                        when=move || room.ready.get()
-                        fallback=|| view! { <p class="p-8 text-gray-500 dark:text-gray-400">"Connexion à la salle de collaboration…"</p> }
-                    >
-                        <LegalActEditor
-                            autorite="Préfet\nDe Normandie"
-                            body=room.body
-                            reviews=room.reviews
-                            current_user=current_user_id.get_value()
-                            // TODO(permissions) : tant que le modèle de
-                            // permissions par projet n'est pas branché
-                            // jusqu'ici, tout utilisateur pouvant atteindre
-                            // cette page (déjà authentifié, voir
-                            // `editor_header_identity`) est considéré comme
-                            // rédacteur, au même niveau de confiance que le
-                            // reste de l'éditeur (aucun mode lecture seule
-                            // n'y est encore appliqué non plus).
-                            can_edit=true
-                            agent_messages=room.agent_messages
-                            agent_pending=room.agent_pending
-                            on_agent_send=Callback::new(move |task| room.run_agent(task))
-                            agent_interaction=room.interaction
-                            on_agent_respond=Callback::new(move |resp| room.respond(resp))
-                            agent_auto_accept=room.auto_accept
-                            on_agent_toggle_auto_accept=Callback::new(move |enabled| room.set_auto_accept(enabled))
-                            on_agent_clear_history=Callback::new(move |()| room.clear_history())
-                            on_agent_stop=Callback::new(move |()| room.stop_agent())
-                            on_agent_restart=Callback::new(move |()| room.restart_agent())
-                            on_agent_target=Callback::new(move |node_id| room.set_selection(node_id))
-                            agent_document_request=room.document_request
-                            on_agent_document_response=Callback::new(move |upload| room.respond_document(upload))
-                            agent_sessions=room.agent_sessions
-                            on_list_agent_sessions=Callback::new(move |()| room.list_agent_sessions())
-                            on_open_agent_session=Callback::new(move |session_id| room.open_agent_session(session_id))
-                            agent_session_history=room.agent_session_history
-                            on_close_agent_session_history=Callback::new(move |()| room.close_agent_session_history())
-                            agent_supervisor_context=room.supervisor_context
-                            on_view_agent_supervisor_context=Callback::new(move |()| room.view_supervisor_context())
-                            on_close_agent_supervisor_context=Callback::new(move |()| room.close_supervisor_context())
-                            user_initial=user_initial.clone()
-                            is_admin=is_admin
-                            connected_users=connected_users
-                        >
-                            <ProjectIntentionsPanel legal_act_id=legal_act_id.get_value()/>
-                            <ProjectMetadataPanel
-                                legal_act_id=legal_act_id.get_value()
-                                metadata_version=room.metadata_version
-                                metadata_last_change=room.metadata_last_change
-                                current_user_id=current_user_id.get_value()
-                            />
-                            <ProjectFilesPanel
-                                legal_act_id=legal_act_id.get_value()
-                                files_version=room.files_version
-                                files_last_change=room.files_last_change
-                                current_user_id=current_user_id.get_value()
-                            />
-                            <ProjectDangerZone
-                                legal_act_id=legal_act_id.get_value()
-                                on_deleted=Callback::new(move |()| navigate.with_value(|navigate| navigate("/", NavigateOptions::default())))
-                            />
-                        </LegalActEditor>
-                    </Show>
-                }
-                })
-            }}
-        </Suspense>
-    }
-}

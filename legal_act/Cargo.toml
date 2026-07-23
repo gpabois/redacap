@@ -7,14 +7,12 @@ edition = "2024"
 agent = {path = "../agent", default-features = false}
 shared = {path = "../shared" }
 dsfr = {path = "../dsfr" }
-yrs.workspace = true
 strum.workspace = true
 strum_macros.workspace = true
 anyhow.workspace = true
-indextree.workspace = true
-bimap.workspace = true
 leptos.workspace = true
 web-sys.workspace = true
+js-sys.workspace = true
 loro.workspace = true
 serde.workspace = true
 serde_json.workspace = true
